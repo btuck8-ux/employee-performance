@@ -3,27 +3,174 @@ import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatTenure } from "@/lib/format";
 
-export default async function EmployeesPage() {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+function pickStr(v: string | string[] | undefined): string {
+  if (Array.isArray(v)) return v[0] ?? "";
+  return v ?? "";
+}
+
+export default async function EmployeesPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const search = await searchParams;
+  const filterLocation = pickStr(search.location);
+  const filterClient = pickStr(search.client);
+  const filterStatus = pickStr(search.status); // "" | "active" | "inactive" | "all"
+  const status = filterStatus || "active"; // default
+
   const supabase = await createClient();
-  const { data: employees } = await supabase
+
+  // Locations + clients lists (for the dropdowns).
+  const { data: locationsData } = await supabase
+    .from("locations")
+    .select("id, name, client_id, clients(id, name)")
+    .order("name");
+  type LocationRow = {
+    id: string;
+    name: string;
+    client_id: string;
+    clients: { id: string; name: string } | null;
+  };
+  const allLocations = ((locationsData ?? []) as unknown as LocationRow[]).map((l) => ({
+    id: l.id,
+    name: l.name,
+    client_id: l.client_id,
+    client_name: l.clients?.name ?? null,
+  }));
+  const allClients = Array.from(
+    new Map(
+      allLocations
+        .filter((l) => l.client_name)
+        .map((l) => [l.client_id, { id: l.client_id, name: l.client_name as string }])
+    ).values()
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
+  // If a client is selected (but not a location), narrow the location list shown
+  // in the dropdown to that client's locations.
+  const visibleLocations = filterClient
+    ? allLocations.filter((l) => l.client_id === filterClient)
+    : allLocations;
+
+  // ---- Employee query with the selected filters applied ----
+  let q = supabase
     .from("employees")
-    .select("id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, locations(id, name)")
-    .eq("active", true)
+    .select(
+      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, locations!inner(id, name, client_id)"
+    )
     .order("employee_name");
+
+  if (status === "active") q = q.eq("active", true);
+  else if (status === "inactive") q = q.eq("active", false);
+  // status === "all" → no filter
+
+  if (filterLocation) {
+    q = q.eq("location_id", filterLocation);
+  } else if (filterClient) {
+    // Filter on the joined location's client_id
+    q = q.eq("locations.client_id", filterClient);
+  }
+
+  const { data: employees } = await q;
+
+  // Build the description line.
+  let scopeDesc: string;
+  if (filterLocation) {
+    const l = allLocations.find((x) => x.id === filterLocation);
+    scopeDesc = l ? l.name : "Unknown location";
+  } else if (filterClient) {
+    const c = allClients.find((x) => x.id === filterClient);
+    scopeDesc = c ? `All locations under ${c.name}` : "Unknown client";
+  } else {
+    scopeDesc = "All locations across all clients";
+  }
+  const statusDesc =
+    status === "active" ? "active employees" : status === "inactive" ? "inactive employees" : "all employees";
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
-        <p className="text-sm text-slate-500 mt-1">All active employees across all locations.</p>
+        <p className="text-sm text-slate-500 mt-1">
+          {scopeDesc} · {statusDesc} · {employees?.length ?? 0} shown
+        </p>
       </div>
+
       <Card>
         <CardHeader>
-          <CardTitle>All employees</CardTitle>
+          <CardTitle>Filters</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="get" className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Client</label>
+              <select
+                name="client"
+                defaultValue={filterClient}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[200px]"
+              >
+                <option value="">All clients</option>
+                {allClients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Location</label>
+              <select
+                name="location"
+                defaultValue={filterLocation}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[220px]"
+              >
+                <option value="">All locations</option>
+                {visibleLocations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Status</label>
+              <select
+                name="status"
+                defaultValue={status}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              >
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            <button
+              type="submit"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
+            >
+              Apply
+            </button>
+            {(filterLocation || filterClient || status !== "active") && (
+              <Link
+                href="/dashboard/employees"
+                className="text-xs text-slate-600 underline self-center"
+              >
+                Clear all
+              </Link>
+            )}
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Employees</CardTitle>
         </CardHeader>
         <CardContent>
           {!employees || employees.length === 0 ? (
-            <p className="text-sm text-slate-500">No employees yet.</p>
+            <p className="text-sm text-slate-500">No employees match these filters.</p>
           ) : (
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-slate-500 uppercase border-b border-slate-200">
@@ -34,6 +181,7 @@ export default async function EmployeesPage() {
                   <th className="py-2 pr-4">Hire date</th>
                   <th className="py-2 pr-4">Tenure</th>
                   <th className="py-2 pr-4">Wage</th>
+                  <th className="py-2 pr-4">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -76,6 +224,13 @@ export default async function EmployeesPage() {
                               emp.wage_pay_type ? ` ${emp.wage_pay_type.toLowerCase()}` : ""
                             }`
                           : "—"}
+                      </td>
+                      <td className="py-2 pr-4 text-xs">
+                        {emp.active ? (
+                          <span className="text-emerald-700">Active</span>
+                        ) : (
+                          <span className="text-slate-500">Inactive</span>
+                        )}
                       </td>
                     </tr>
                   );
