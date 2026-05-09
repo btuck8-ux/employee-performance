@@ -63,6 +63,8 @@ export default async function ClientDetailPage({
     typeof search.bulk_unknown === "string" ? search.bulk_unknown : null;
   const bulkTimeBreakdown =
     typeof search.bulk_time_breakdown === "string" ? search.bulk_time_breakdown : null;
+  const bulkDerivedCreated = Number(search.bulk_derived_created ?? 0);
+  const bulkDerivedFailed = Number(search.bulk_derived_failed ?? 0);
   const showBulkTime =
     bulkSchedIn + bulkSchedUp + bulkWorkIn + bulkWorkUp + bulkTimeLocations > 0;
 
@@ -203,6 +205,15 @@ export default async function ClientDetailPage({
               Scheduled: {bulkSchedIn} new, {bulkSchedUp} updated · Worked: {bulkWorkIn} new, {bulkWorkUp} updated.
               {" "}
               Recomputed performance for {bulkRecomputed} {bulkRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+              {bulkDerivedCreated > 0 && (
+                <p className="mt-1 text-xs text-emerald-800/80">
+                  Auto-created {bulkDerivedCreated} employee{bulkDerivedCreated === 1 ? "" : "s"} from time data
+                  {bulkDerivedFailed > 0 && (
+                    <> ({bulkDerivedFailed} failed)</>
+                  )}
+                  .
+                </p>
+              )}
               {bulkUnknown && (
                 <p className="mt-1 text-xs text-amber-800">
                   Unknown employees (not in any of this client&apos;s rosters): {bulkUnknown}
@@ -247,6 +258,21 @@ export default async function ClientDetailPage({
                   to the matching location. Recompute fires per (employee, quarter)
                   in each location after ingest.
                 </p>
+                <label className="flex items-start gap-2 text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    name="derive_employees"
+                    value="1"
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span>
+                    <strong>Auto-create employees from this time data.</strong> For any
+                    name in the CSV that doesn&apos;t exist at the routed location, create
+                    one (active = true, hire date = earliest worked entry, wage from the
+                    CSV if present). Use this when you don&apos;t have an employee roster
+                    CSV for the locations under this client.
+                  </span>
+                </label>
                 <SubmitButton pendingLabel="Importing & recomputing…">
                   Upload time data to all {locCount} location{locCount === 1 ? "" : "s"}
                 </SubmitButton>

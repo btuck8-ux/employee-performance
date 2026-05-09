@@ -15,6 +15,15 @@ interface ImportSummary {
   unknown_employees: Set<string>;
   inactive_skipped: Set<string>;
   skipped_other_location: number;
+  /**
+   * When the user checks "Auto-create employees from this time data"
+   * (`derive_employees`), employees who appear in the time CSV but don't
+   * exist in our DB get created on the fly so their entries can ingest.
+   * Useful when the user can't get an explicit roster CSV (e.g., Tucker's
+   * Colorado client where he has time data but no employee permissions).
+   */
+  derived_employees_created: number;
+  derived_employees_failed: number;
   failures: string[];
   warnings: string[];
 }
@@ -22,6 +31,78 @@ interface ImportSummary {
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
 const UPSERT_BATCH_SIZE = 500;
+
+/**
+ * Auto-create employees from time-data records that don't match any existing
+ * (active OR inactive) employee at this location. Updates `activeEmployees`
+ * in place so subsequent processFile calls find the new IDs.
+ *
+ * Hire date is set to the earliest worked/scheduled date for that name in
+ * the CSV — an approximation since we don't have the real roster. If a real
+ * roster is ever uploaded, the employee-import action's "earliest hire date
+ * wins" rule handles either direction cleanly.
+ */
+async function autoDeriveEmployees(
+  supabase: SupabaseServer,
+  records: ParsedTimeEntry[],
+  locationId: string,
+  targetLocationName: string,
+  activeEmployees: Map<string, string>,
+  inactiveEmployees: Set<string>,
+  summary: ImportSummary
+): Promise<void> {
+  type Derived = {
+    display: string;
+    earliestDate: string;
+    wage: number | null;
+  };
+  const derived = new Map<string, Derived>();
+
+  for (const rec of records) {
+    // Only consider rows that belong to this location (or have no location label).
+    if (!rowMatchesLocation(rec.location_label, targetLocationName)) continue;
+    const key = rec.employee_name_key;
+    if (!key) continue;
+    if (activeEmployees.has(key) || inactiveEmployees.has(key)) continue;
+
+    const existing = derived.get(key);
+    if (!existing) {
+      derived.set(key, {
+        display: rec.employee_name_display,
+        earliestDate: rec.entry_date,
+        wage: rec.wage,
+      });
+    } else {
+      if (rec.entry_date < existing.earliestDate) existing.earliestDate = rec.entry_date;
+      // Keep first non-null wage seen.
+      if (existing.wage === null && rec.wage !== null) existing.wage = rec.wage;
+    }
+  }
+
+  if (derived.size === 0) return;
+
+  // Insert one-by-one so we can capture each new employee's id.
+  for (const [key, d] of derived) {
+    const { data: inserted, error } = await supabase
+      .from("employees")
+      .insert({
+        location_id: locationId,
+        employee_name: d.display,
+        hire_date: d.earliestDate,
+        wage: d.wage,
+        active: true,
+      })
+      .select("id")
+      .single();
+    if (error || !inserted) {
+      summary.derived_employees_failed += 1;
+      summary.failures.push(`auto-create ${d.display}: ${error?.message ?? "unknown"}`);
+      continue;
+    }
+    activeEmployees.set(key, inserted.id as string);
+    summary.derived_employees_created += 1;
+  }
+}
 
 function buildEntryPayload(
   rec: ParsedTimeEntry,
@@ -156,6 +237,7 @@ export async function uploadTimeDataAction(formData: FormData) {
   const location_id = String(formData.get("location_id") ?? "");
   const scheduledFile = formData.get("scheduled_file") as File | null;
   const workedFile = formData.get("worked_file") as File | null;
+  const deriveEmployees = formData.get("derive_employees") === "1";
 
   console.log(
     `[time-import] location_id=${location_id} scheduled=${
@@ -235,9 +317,42 @@ export async function uploadTimeDataAction(formData: FormData) {
     unknown_employees: new Set(),
     inactive_skipped: new Set(),
     skipped_other_location: 0,
+    derived_employees_created: 0,
+    derived_employees_failed: 0,
     failures: [],
     warnings: [],
   };
+
+  // If the user opted into auto-creating employees from this time data,
+  // pre-parse both files, collect unique unknown names, and insert them as
+  // active employees BEFORE the regular ingest. This unblocks Colorado-style
+  // cases where the user can't get an explicit roster CSV.
+  if (deriveEmployees) {
+    const seedRecords: ParsedTimeEntry[] = [];
+    if (scheduledFile && scheduledFile.size > 0) {
+      const t = await scheduledFile.text();
+      seedRecords.push(...parseTimeEntriesCsv(t).records);
+    }
+    if (workedFile && workedFile.size > 0) {
+      const t = await workedFile.text();
+      seedRecords.push(...parseTimeEntriesCsv(t).records);
+    }
+    if (seedRecords.length > 0) {
+      await autoDeriveEmployees(
+        supabase,
+        seedRecords,
+        location_id,
+        targetLocationName,
+        activeEmployees,
+        inactiveEmployees,
+        summary
+      );
+    }
+    console.log(
+      `[time-import] auto-create seeded ${summary.derived_employees_created} employees ` +
+        `(${summary.derived_employees_failed} failed)`
+    );
+  }
 
   const affectedKeys = new Set<string>();
   if (scheduledFile && scheduledFile.size > 0) {
@@ -329,6 +444,10 @@ export async function uploadTimeDataAction(formData: FormData) {
     );
   if (summary.skipped_other_location > 0)
     params.set("time_skipped_other_location", String(summary.skipped_other_location));
+  if (summary.derived_employees_created > 0)
+    params.set("time_derived_created", String(summary.derived_employees_created));
+  if (summary.derived_employees_failed > 0)
+    params.set("time_derived_failed", String(summary.derived_employees_failed));
   if (summary.warnings.length > 0)
     params.set("warnings", summary.warnings.slice(0, 3).join(" | "));
   if (summary.failures.length > 0)
@@ -350,6 +469,7 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
   const client_id = scope === "client" ? String(formData.get("client_id") ?? "") : null;
   const scheduledFile = formData.get("scheduled_file") as File | null;
   const workedFile = formData.get("worked_file") as File | null;
+  const deriveEmployees = formData.get("derive_employees") === "1";
 
   const redirectBase =
     scope === "client" && client_id
@@ -398,9 +518,24 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
     unknown_employees: new Set(),
     inactive_skipped: new Set(),
     skipped_other_location: 0,
+    derived_employees_created: 0,
+    derived_employees_failed: 0,
     failures: [],
     warnings: [],
   };
+
+  // Pre-parse for the auto-derive pass (used inside the per-location loop below).
+  // We parse the texts ONCE here; processFile re-parses inside on each call but
+  // that's negligible at our row counts.
+  let seedRecords: ParsedTimeEntry[] = [];
+  if (deriveEmployees) {
+    if (scheduledText) {
+      seedRecords = seedRecords.concat(parseTimeEntriesCsv(scheduledText).records);
+    }
+    if (workedText) {
+      seedRecords = seedRecords.concat(parseTimeEntriesCsv(workedText).records);
+    }
+  }
   let totalRecomputed = 0;
   const perLocation: Array<{
     name: string;
@@ -444,9 +579,24 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       unknown_employees: new Set(),
       inactive_skipped: new Set(),
       skipped_other_location: 0,
+      derived_employees_created: 0,
+      derived_employees_failed: 0,
       failures: [],
       warnings: [],
     };
+
+    // Auto-create employees for THIS location from the seed records (if enabled).
+    if (deriveEmployees && seedRecords.length > 0) {
+      await autoDeriveEmployees(
+        supabase,
+        seedRecords,
+        loc.id,
+        loc.name,
+        activeEmployees,
+        inactiveEmployees,
+        locSummary
+      );
+    }
 
     const affectedKeys = new Set<string>();
     if (scheduledText) {
@@ -511,6 +661,8 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
     for (const n of locSummary.unknown_employees) aggregated.unknown_employees.add(n);
     for (const n of locSummary.inactive_skipped) aggregated.inactive_skipped.add(n);
     aggregated.skipped_other_location += locSummary.skipped_other_location;
+    aggregated.derived_employees_created += locSummary.derived_employees_created;
+    aggregated.derived_employees_failed += locSummary.derived_employees_failed;
     aggregated.failures.push(...locSummary.failures);
     aggregated.warnings.push(...locSummary.warnings);
 
@@ -554,6 +706,10 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       "bulk_inactive",
       Array.from(aggregated.inactive_skipped).slice(0, 5).join(", ")
     );
+  if (aggregated.derived_employees_created > 0)
+    params.set("bulk_derived_created", String(aggregated.derived_employees_created));
+  if (aggregated.derived_employees_failed > 0)
+    params.set("bulk_derived_failed", String(aggregated.derived_employees_failed));
   // Compact per-location breakdown for the success banner.
   const breakdown = perLocation
     .filter(

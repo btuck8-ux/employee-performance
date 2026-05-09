@@ -102,6 +102,8 @@ export default async function LocationDetailPage({
   const showImportSummary = inserted > 0 || updated > 0 || failed > 0 || inactiveSkipped > 0 || skippedOtherLocation > 0;
   const timeSkippedOtherLocation = Number(search.time_skipped_other_location ?? 0);
   const tattleSkippedOtherLocation = Number(search.tattle_skipped_other_location ?? 0);
+  const timeDerivedCreated = Number(search.time_derived_created ?? 0);
+  const timeDerivedFailed = Number(search.time_derived_failed ?? 0);
   const reviewSkippedOtherLocation = Number(search.review_skipped_other_location ?? 0);
   const taskSkippedOtherLocation = Number(search.task_skipped_other_location ?? 0);
 
@@ -322,6 +324,15 @@ export default async function LocationDetailPage({
               Skipped {timeSkippedOtherLocation} row{timeSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
             </p>
           )}
+          {timeDerivedCreated > 0 && (
+            <p className="mt-1 text-xs text-emerald-800/80">
+              Auto-created {timeDerivedCreated} employee{timeDerivedCreated === 1 ? "" : "s"} from time data
+              {timeDerivedFailed > 0 && (
+                <> ({timeDerivedFailed} failed)</>
+              )}
+              .
+            </p>
+          )}
           {timeFailures && (
             <p className="mt-1 text-xs text-red-700">Failures: {timeFailures}</p>
           )}
@@ -368,6 +379,23 @@ export default async function LocationDetailPage({
               shifts on the same day collapse to one (earliest in, latest out). Inactive
               employees in the data are skipped.
             </p>
+            <label className="flex items-start gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                name="derive_employees"
+                value="1"
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                <strong>Auto-create employees from this time data.</strong> Any
+                employee name in the CSV that doesn&apos;t already exist at this
+                location is created on the fly with hire date set to their
+                earliest worked entry, active = true, wage from the CSV if
+                present. Use this when you don&apos;t have a separate employee
+                roster CSV available. Leave unchecked if you&apos;ve already
+                imported a canonical roster.
+              </span>
+            </label>
             <SubmitButton pendingLabel="Importing & recomputing…">
               Upload time data
             </SubmitButton>
