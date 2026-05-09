@@ -6,7 +6,12 @@ export type ExpectationLabel =
 export type FixedMetricKey =
   | "on_time_pct"
   | "attendance_pct"
-  | "survey_engagement_pct";
+  | "survey_engagement_pct"
+  | "tattle_rating"
+  | "tattle_score_food_quality"
+  | "tattle_score_accuracy"
+  | "tattle_score_speed_of_service"
+  | "customer_service_rating";
 
 export type ThresholdedMetricKey =
   | "customer_service_rating"
@@ -44,8 +49,13 @@ export interface Employee {
   id: string;
   location_id: string;
   external_id: string | null;
+  employee_code: string;          // app-generated, e.g. "EMP-100001"
   employee_name: string;
+  email: string | null;
+  phone: string | null;
   hire_date: string | null;
+  wage: number | null;
+  wage_pay_type: string | null;   // e.g. "Hourly", "Salary"
   active: boolean;
   archived_at: string | null;
   created_at: string;
