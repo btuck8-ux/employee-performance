@@ -113,14 +113,15 @@ async function chunkUpsert<T>(
 async function ingestTattlesForLocation(
   supabase: SupabaseServer,
   parsed: TattleImportResult,
-  location: { id: string; name: string }
+  location: { id: string; name: string; csv_aliases: string[] | null }
 ): Promise<IngestStats> {
   const stats = newStats();
 
-  // Filter to surveys tagged for THIS location (or untagged).
+  // Filter to surveys tagged for THIS location (or untagged), checking the
+  // canonical name AND every csv_aliases entry for vendor naming variants.
   const beforeFilter = parsed.surveys.length;
   const locationSurveys = parsed.surveys.filter((s) =>
-    rowMatchesLocation(s.location_label, location.name)
+    rowMatchesLocation(s.location_label, location.name, location.csv_aliases)
   );
   stats.skipped_other_location = beforeFilter - locationSurveys.length;
   if (locationSurveys.length === 0) {
@@ -352,12 +353,13 @@ export async function uploadTattleCsvAction(formData: FormData) {
 
   const { data: locRow } = await supabase
     .from("locations")
-    .select("id, name")
+    .select("id, name, csv_aliases")
     .eq("id", location_id)
     .single();
-  const location = (locRow as { id: string; name: string } | null) ?? {
+  const location = (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
     id: location_id,
     name: "",
+    csv_aliases: null,
   };
 
   const stats = await ingestTattlesForLocation(supabase, parsed, location);
@@ -423,11 +425,15 @@ export async function uploadTattleCsvBulkAction(formData: FormData) {
     );
   }
 
-  // Resolve target locations.
-  let q = supabase.from("locations").select("id, name").order("name");
+  // Resolve target locations (with their csv_aliases for matching).
+  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
   if (scope === "client" && client_id) q = q.eq("client_id", client_id);
   const { data: targetsRaw } = await q;
-  const targets = (targetsRaw ?? []) as Array<{ id: string; name: string }>;
+  const targets = (targetsRaw ?? []) as Array<{
+    id: string;
+    name: string;
+    csv_aliases: string[] | null;
+  }>;
   if (targets.length === 0) {
     redirect(
       `${redirectBase}?bulk_tattle_error=${encodeURIComponent(
@@ -469,8 +475,17 @@ export async function uploadTattleCsvBulkAction(formData: FormData) {
     });
   }
 
-  // Compute true unmatched count: rows whose location_label doesn't match ANY target.
-  const targetNames = new Set(targets.map((l) => l.name.toLowerCase()));
+  // Compute true unmatched count: rows whose location_label matches NO target
+  // name AND no target alias.
+  const targetNames = new Set<string>();
+  for (const l of targets) {
+    targetNames.add(l.name.toLowerCase());
+    if (l.csv_aliases) {
+      for (const a of l.csv_aliases) {
+        if (a) targetNames.add(a.trim().toLowerCase());
+      }
+    }
+  }
   let trulyUnmatched = 0;
   for (const s of parsed.surveys) {
     const lbl = (s.location_label ?? "").trim().toLowerCase();

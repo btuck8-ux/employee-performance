@@ -114,13 +114,14 @@ export async function uploadCustomerReviewsCsvAction(formData: FormData) {
   // Filter out rows tagged for other locations (using external_location_label).
   const { data: locRow } = await supabase
     .from("locations")
-    .select("name")
+    .select("name, csv_aliases")
     .eq("id", location_id)
     .single();
   const targetLocationName = (locRow?.name as string | undefined) ?? "";
+  const targetAliases = (locRow?.csv_aliases as string[] | null | undefined) ?? null;
   const beforeFilter = parsed.reviews.length;
   parsed.reviews = parsed.reviews.filter((r) =>
-    rowMatchesLocation(r.external_location_label, targetLocationName)
+    rowMatchesLocation(r.external_location_label, targetLocationName, targetAliases)
   );
   const reviewSkippedOtherLocation = beforeFilter - parsed.reviews.length;
   if (reviewSkippedOtherLocation > 0) {

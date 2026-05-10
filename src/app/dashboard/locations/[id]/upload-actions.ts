@@ -23,7 +23,7 @@ interface IngestStats {
 async function ingestEmployeesForLocation(
   supabase: SupabaseClient,
   parsed: ImportResult,
-  location: { id: string; name: string }
+  location: { id: string; name: string; csv_aliases: string[] | null }
 ): Promise<IngestStats> {
   const stats: IngestStats = {
     inserted: 0,
@@ -44,7 +44,7 @@ async function ingestEmployeesForLocation(
   }
 
   for (const rec of parsed.records) {
-    if (!rowMatchesLocation(rec.location_label, location.name)) {
+    if (!rowMatchesLocation(rec.location_label, location.name, location.csv_aliases)) {
       stats.skipped_other_location += 1;
       continue;
     }
@@ -103,11 +103,11 @@ async function resolveBulkTargetLocations(
   supabase: SupabaseClient,
   scope: "client" | "all",
   client_id: string | null
-): Promise<{ id: string; name: string }[]> {
-  let q = supabase.from("locations").select("id, name").order("name");
+): Promise<Array<{ id: string; name: string; csv_aliases: string[] | null }>> {
+  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
   if (scope === "client" && client_id) q = q.eq("client_id", client_id);
   const { data } = await q;
-  return ((data ?? []) as Array<{ id: string; name: string }>);
+  return ((data ?? []) as Array<{ id: string; name: string; csv_aliases: string[] | null }>);
 }
 
 export async function uploadEmployeesCsvAction(formData: FormData) {
@@ -137,12 +137,13 @@ export async function uploadEmployeesCsvAction(formData: FormData) {
   const supabase = await createClient();
   const { data: locRow } = await supabase
     .from("locations")
-    .select("id, name")
+    .select("id, name, csv_aliases")
     .eq("id", location_id)
     .single();
-  const location = (locRow as { id: string; name: string } | null) ?? {
+  const location = (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
     id: location_id,
     name: "",
+    csv_aliases: null,
   };
 
   const stats = await ingestEmployeesForLocation(supabase, parsed, location);
@@ -237,8 +238,16 @@ export async function uploadEmployeesCsvBulkAction(formData: FormData) {
   // The "skipped_other_location" aggregate is misleading when each row gets
   // checked against N locations (a row matching loc[0] is "skipped" by locs
   // [1..N-1]). Compute the true unmatched count instead: rows in the CSV
-  // whose location_label doesn't match ANY target.
-  const targetNames = new Set(targets.map((l) => l.name.toLowerCase()));
+  // whose location_label matches no target name AND no target alias.
+  const targetNames = new Set<string>();
+  for (const l of targets) {
+    targetNames.add(l.name.toLowerCase());
+    if (l.csv_aliases) {
+      for (const a of l.csv_aliases) {
+        if (a) targetNames.add(a.trim().toLowerCase());
+      }
+    }
+  }
   let trulyUnmatched = 0;
   for (const rec of parsed.records) {
     const lbl = (rec.location_label ?? "").trim().toLowerCase();

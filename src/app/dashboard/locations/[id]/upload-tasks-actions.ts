@@ -81,13 +81,14 @@ export async function uploadTasksCsvAction(formData: FormData) {
   // Filter out tasks tagged for other locations.
   const { data: locRow } = await supabase
     .from("locations")
-    .select("name")
+    .select("name, csv_aliases")
     .eq("id", location_id)
     .single();
   const targetLocationName = (locRow?.name as string | undefined) ?? "";
+  const targetAliases = (locRow?.csv_aliases as string[] | null | undefined) ?? null;
   const beforeFilter = parsed.tasks.length;
   parsed.tasks = parsed.tasks.filter((t) =>
-    rowMatchesLocation(t.location_label, targetLocationName)
+    rowMatchesLocation(t.location_label, targetLocationName, targetAliases)
   );
   const taskSkippedOtherLocation = beforeFilter - parsed.tasks.length;
   if (taskSkippedOtherLocation > 0) {

@@ -47,6 +47,7 @@ async function autoDeriveEmployees(
   records: ParsedTimeEntry[],
   locationId: string,
   targetLocationName: string,
+  targetAliases: string[] | null,
   activeEmployees: Map<string, string>,
   inactiveEmployees: Set<string>,
   summary: ImportSummary
@@ -60,7 +61,7 @@ async function autoDeriveEmployees(
 
   for (const rec of records) {
     // Only consider rows that belong to this location (or have no location label).
-    if (!rowMatchesLocation(rec.location_label, targetLocationName)) continue;
+    if (!rowMatchesLocation(rec.location_label, targetLocationName, targetAliases)) continue;
     const key = rec.employee_name_key;
     if (!key) continue;
     if (activeEmployees.has(key) || inactiveEmployees.has(key)) continue;
@@ -137,6 +138,7 @@ async function processFile(
   fileLabel: string,
   locationId: string,
   targetLocationName: string,
+  targetAliases: string[] | null,
   entryType: "scheduled" | "worked",
   activeEmployees: Map<string, string>,
   inactiveEmployees: Set<string>,
@@ -166,7 +168,7 @@ async function processFile(
   // exports).
   const beforeFilter = parsed.records.length;
   parsed.records = parsed.records.filter((rec) =>
-    rowMatchesLocation(rec.location_label, targetLocationName)
+    rowMatchesLocation(rec.location_label, targetLocationName, targetAliases)
   );
   const skippedThisFile = beforeFilter - parsed.records.length;
   summary.skipped_other_location += skippedThisFile;
@@ -300,14 +302,15 @@ export async function uploadTimeDataAction(formData: FormData) {
   }
   console.log(`[time-import] existing time_entries at this location: ${existingKeys.size}`);
 
-  // Look up the target location's display name so we can filter all-locations
-  // CSV exports down to rows for THIS location.
+  // Look up the target location's display name + alias list so we can filter
+  // all-locations CSV exports down to rows for THIS location.
   const { data: locRow } = await supabase
     .from("locations")
-    .select("name")
+    .select("name, csv_aliases")
     .eq("id", location_id)
     .single();
   const targetLocationName = (locRow?.name as string | undefined) ?? "";
+  const targetAliases = (locRow?.csv_aliases as string[] | null | undefined) ?? null;
 
   const summary: ImportSummary = {
     scheduled_inserted: 0,
@@ -343,6 +346,7 @@ export async function uploadTimeDataAction(formData: FormData) {
         seedRecords,
         location_id,
         targetLocationName,
+        targetAliases,
         activeEmployees,
         inactiveEmployees,
         summary
@@ -363,6 +367,7 @@ export async function uploadTimeDataAction(formData: FormData) {
       scheduledFile.name,
       location_id,
       targetLocationName,
+      targetAliases,
       "scheduled",
       activeEmployees,
       inactiveEmployees,
@@ -379,6 +384,7 @@ export async function uploadTimeDataAction(formData: FormData) {
       workedFile.name,
       location_id,
       targetLocationName,
+      targetAliases,
       "worked",
       activeEmployees,
       inactiveEmployees,
@@ -489,11 +495,15 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
 
   const supabase = await createClient();
 
-  // Resolve target locations
-  let q = supabase.from("locations").select("id, name").order("name");
+  // Resolve target locations (including their csv_aliases for matching).
+  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
   if (scope === "client" && client_id) q = q.eq("client_id", client_id);
   const { data: targetsRaw } = await q;
-  const targets = (targetsRaw ?? []) as Array<{ id: string; name: string }>;
+  const targets = (targetsRaw ?? []) as Array<{
+    id: string;
+    name: string;
+    csv_aliases: string[] | null;
+  }>;
   if (targets.length === 0) {
     redirect(
       `${redirectBase}?bulk_time_error=${encodeURIComponent(
@@ -592,6 +602,7 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
         seedRecords,
         loc.id,
         loc.name,
+        loc.csv_aliases,
         activeEmployees,
         inactiveEmployees,
         locSummary
@@ -606,6 +617,7 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
         scheduledFile?.name ?? "scheduled.csv",
         loc.id,
         loc.name,
+        loc.csv_aliases,
         "scheduled",
         activeEmployees,
         inactiveEmployees,
@@ -621,6 +633,7 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
         workedFile?.name ?? "worked.csv",
         loc.id,
         loc.name,
+        loc.csv_aliases,
         "worked",
         activeEmployees,
         inactiveEmployees,
