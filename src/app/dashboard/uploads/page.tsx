@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { uploadEmployeesCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-actions";
 import { uploadTimeDataBulkAction } from "@/app/dashboard/locations/[id]/upload-time-actions";
+import { uploadTattleCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-tattle-actions";
 
 // Bulk upload paths fan out across every location across every client; recompute
 // runs per (employee, quarter, location). Bumped to Vercel Pro's 300s cap.
@@ -51,6 +52,25 @@ export default async function UploadsPage({
   const bulkDerivedFailed = Number(search.bulk_derived_failed ?? 0);
   const showBulkTime =
     bulkSchedIn + bulkSchedUp + bulkWorkIn + bulkWorkUp + bulkTimeLocations > 0;
+
+  // Tattle bulk banners
+  const bulkTattleError =
+    typeof search.bulk_tattle_error === "string" ? search.bulk_tattle_error : null;
+  const bulkTattleLocations = Number(search.bulk_tattle_locations ?? 0);
+  const bulkTattleIn = Number(search.bulk_tattle_in ?? 0);
+  const bulkTattleUp = Number(search.bulk_tattle_up ?? 0);
+  const bulkTattleAtt = Number(search.bulk_tattle_att ?? 0);
+  const bulkTattleOnshift = Number(search.bulk_tattle_onshift ?? 0);
+  const bulkTattleWorkday = Number(search.bulk_tattle_workday ?? 0);
+  const bulkTattleUnatt = Number(search.bulk_tattle_unatt ?? 0);
+  const bulkTattleRecomputed = Number(search.bulk_tattle_recomputed ?? 0);
+  const bulkTattleUnmatched = Number(search.bulk_tattle_unmatched ?? 0);
+  const bulkTattleBreakdown =
+    typeof search.bulk_tattle_breakdown === "string" ? search.bulk_tattle_breakdown : null;
+  const bulkTattleFailures =
+    typeof search.bulk_tattle_failures === "string" ? search.bulk_tattle_failures : null;
+  const showBulkTattle =
+    bulkTattleIn + bulkTattleUp + bulkTattleAtt + bulkTattleLocations > 0;
 
   return (
     <div className="space-y-6">
@@ -202,9 +222,67 @@ export default async function UploadsPage({
         </CardContent>
       </Card>
 
+      {/* ---- Tattle bulk ---- */}
+      {bulkTattleError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <strong>Tattle bulk upload failed:</strong> {bulkTattleError}
+        </div>
+      )}
+      {showBulkTattle && !bulkTattleError && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <strong>Tattle data imported across {bulkTattleLocations} location{bulkTattleLocations === 1 ? "" : "s"}.</strong>{" "}
+          Surveys: {bulkTattleIn} new, {bulkTattleUp} updated · Attributions: {bulkTattleAtt} ({bulkTattleOnshift} on shift, {bulkTattleWorkday} worked-that-day, {bulkTattleUnatt} unattributed).
+          {" "}
+          Recomputed performance for {bulkTattleRecomputed} {bulkTattleRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+          {bulkTattleUnmatched > 0 && (
+            <p className="mt-1 text-xs text-amber-800">
+              Skipped {bulkTattleUnmatched} survey{bulkTattleUnmatched === 1 ? "" : "s"} tagged for locations not in the system.
+            </p>
+          )}
+          {bulkTattleBreakdown && (
+            <p className="mt-1 text-xs text-emerald-800/80">
+              Breakdown: {bulkTattleBreakdown}
+            </p>
+          )}
+          {bulkTattleFailures && (
+            <p className="mt-1 text-xs text-red-700">Failures: {bulkTattleFailures}</p>
+          )}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
-          <CardTitle>Tattles · Reviews · Surveys · Tasks</CardTitle>
+          <CardTitle>Tattle survey data</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form action={uploadTattleCsvBulkAction} className="space-y-3">
+            <input type="hidden" name="scope" value="all" />
+            <div className="space-y-1.5">
+              <Label htmlFor="bulk_tattle_file_all">Tattle responses CSV (all locations)</Label>
+              <Input
+                id="bulk_tattle_file_all"
+                name="file"
+                type="file"
+                accept=".csv,text/csv"
+                required
+              />
+              <p className="text-xs text-slate-500">
+                Each survey&apos;s Location column routes it to the matching
+                location across all clients. Attribution runs per location
+                against that location&apos;s worked time entries. Time data must
+                be uploaded first so attribution can resolve correctly.
+              </p>
+            </div>
+            <SubmitButton pendingLabel="Importing & attributing…">
+              Upload tattles to all {locCount} location{locCount === 1 ? "" : "s"}
+            </SubmitButton>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Reviews · Surveys · Tasks</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-slate-500">
