@@ -10,6 +10,9 @@ import { createLocationAction } from "./actions";
 import { uploadEmployeesCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-actions";
 import { uploadTimeDataBulkAction } from "@/app/dashboard/locations/[id]/upload-time-actions";
 import { uploadTattleCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-tattle-actions";
+import { uploadCustomerReviewsCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-review-actions";
+import { uploadSurveyCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-survey-actions";
+import { uploadTasksCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-tasks-actions";
 
 // Bulk upload paths fan out across all of this client's locations and run
 // recompute per (employee, quarter, location); 300s gives them headroom on
@@ -87,6 +90,49 @@ export default async function ClientDetailPage({
     typeof search.bulk_tattle_failures === "string" ? search.bulk_tattle_failures : null;
   const showBulkTattle =
     bulkTattleIn + bulkTattleUp + bulkTattleAtt + bulkTattleLocations > 0;
+
+  // ---- Reviews bulk banners ----
+  const bulkReviewError =
+    typeof search.bulk_review_error === "string" ? search.bulk_review_error : null;
+  const bulkReviewLocations = Number(search.bulk_review_locations ?? 0);
+  const bulkReviewIn = Number(search.bulk_review_in ?? 0);
+  const bulkReviewUp = Number(search.bulk_review_up ?? 0);
+  const bulkReviewAtt = Number(search.bulk_review_att ?? 0);
+  const bulkReviewRecomputed = Number(search.bulk_review_recomputed ?? 0);
+  const bulkReviewBreakdown =
+    typeof search.bulk_review_breakdown === "string" ? search.bulk_review_breakdown : null;
+  const showBulkReview =
+    bulkReviewIn + bulkReviewUp + bulkReviewAtt + bulkReviewLocations > 0;
+
+  // ---- Surveys bulk banners ----
+  const bulkSurveyError =
+    typeof search.bulk_survey_error === "string" ? search.bulk_survey_error : null;
+  const bulkSurveyLocations = Number(search.bulk_survey_locations ?? 0);
+  const bulkSurveyIn = Number(search.bulk_survey_in ?? 0);
+  const bulkSurveyUp = Number(search.bulk_survey_up ?? 0);
+  const bulkAssnIn = Number(search.bulk_assn_in ?? 0);
+  const bulkAssnUp = Number(search.bulk_assn_up ?? 0);
+  const bulkSurveyMatches = Number(search.bulk_survey_matches ?? 0);
+  const bulkSurveyRecomputed = Number(search.bulk_survey_recomputed ?? 0);
+  const bulkSurveyBreakdown =
+    typeof search.bulk_survey_breakdown === "string" ? search.bulk_survey_breakdown : null;
+  const showBulkSurvey =
+    bulkSurveyIn + bulkSurveyUp + bulkAssnIn + bulkAssnUp + bulkSurveyLocations > 0;
+
+  // ---- Tasks bulk banners ----
+  const bulkTaskError =
+    typeof search.bulk_task_error === "string" ? search.bulk_task_error : null;
+  const bulkTaskLocations = Number(search.bulk_task_locations ?? 0);
+  const bulkTaskIn = Number(search.bulk_task_in ?? 0);
+  const bulkTaskUp = Number(search.bulk_task_up ?? 0);
+  const bulkTaskAcct = Number(search.bulk_task_acct ?? 0);
+  const bulkTaskOwners = Number(search.bulk_task_owners ?? 0);
+  const bulkTaskRecomputed = Number(search.bulk_task_recomputed ?? 0);
+  const bulkTaskUnmatched = Number(search.bulk_task_unmatched ?? 0);
+  const bulkTaskBreakdown =
+    typeof search.bulk_task_breakdown === "string" ? search.bulk_task_breakdown : null;
+  const showBulkTask =
+    bulkTaskIn + bulkTaskUp + bulkTaskAcct + bulkTaskLocations > 0;
 
   const locCount = locations?.length ?? 0;
 
@@ -361,11 +407,153 @@ export default async function ClientDetailPage({
             </CardContent>
           </Card>
 
-          <p className="text-xs text-slate-500">
-            <strong>Note:</strong> Customer reviews, surveys, and tasks still
-            use the per-location upload on each location&apos;s page. Bulk
-            paths for those data types coming next.
-          </p>
+          {/* ---- Customer reviews bulk upload ---- */}
+          {bulkReviewError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <strong>Reviews bulk upload failed:</strong> {bulkReviewError}
+            </div>
+          )}
+          {showBulkReview && !bulkReviewError && (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <strong>Customer reviews imported across {bulkReviewLocations} location{bulkReviewLocations === 1 ? "" : "s"}.</strong>{" "}
+              Reviews: {bulkReviewIn} new, {bulkReviewUp} updated · Attributions: {bulkReviewAtt}. Recomputed performance for {bulkReviewRecomputed} {bulkReviewRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+              {bulkReviewBreakdown && (
+                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkReviewBreakdown}</p>
+              )}
+            </div>
+          )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Bulk upload — customer reviews</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form action={uploadCustomerReviewsCsvBulkAction} className="space-y-3">
+                <input type="hidden" name="scope" value="client" />
+                <input type="hidden" name="client_id" value={client.id} />
+                <div className="space-y-1.5">
+                  <Label htmlFor="bulk_review_file">Customer reviews CSV (Google/Yelp, all locations)</Label>
+                  <Input
+                    id="bulk_review_file"
+                    name="file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    required
+                  />
+                  <p className="text-xs text-slate-500">
+                    Each review&apos;s location label routes it to the matching
+                    location under {client.name}. Attribution runs per location
+                    against worked time entries (on-shift at review time, falling
+                    back to anyone who worked that day). Time data must be
+                    uploaded first.
+                  </p>
+                </div>
+                <SubmitButton pendingLabel="Importing & attributing…">
+                  Upload reviews to all {locCount} location{locCount === 1 ? "" : "s"}
+                </SubmitButton>
+              </form>
+            </CardContent>
+          </Card>
+
+          {/* ---- Surveys bulk upload ---- */}
+          {bulkSurveyError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <strong>Survey bulk upload failed:</strong> {bulkSurveyError}
+            </div>
+          )}
+          {showBulkSurvey && !bulkSurveyError && (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <strong>Survey data imported across {bulkSurveyLocations} location{bulkSurveyLocations === 1 ? "" : "s"}.</strong>{" "}
+              Surveys: {bulkSurveyIn} new, {bulkSurveyUp} updated · Assignments: {bulkAssnIn} new, {bulkAssnUp} updated · Matched completions: {bulkSurveyMatches}. Recomputed performance for {bulkSurveyRecomputed} {bulkSurveyRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+              {bulkSurveyBreakdown && (
+                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkSurveyBreakdown}</p>
+              )}
+            </div>
+          )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Bulk upload — survey responses</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form action={uploadSurveyCsvBulkAction} className="space-y-3">
+                <input type="hidden" name="scope" value="client" />
+                <input type="hidden" name="client_id" value={client.id} />
+                <div className="space-y-1.5">
+                  <Label htmlFor="bulk_survey_file">Survey responses master CSV</Label>
+                  <Input
+                    id="bulk_survey_file"
+                    name="file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    required
+                  />
+                  <p className="text-xs text-slate-500">
+                    The master CSV is location-agnostic — each location&apos;s
+                    fuzzy matcher only matches its own active roster, so names
+                    that don&apos;t resolve at a given location are skipped
+                    there. Same CSV ingested independently into every location
+                    under {client.name}.
+                  </p>
+                </div>
+                <SubmitButton pendingLabel="Matching & assigning…">
+                  Upload surveys to all {locCount} location{locCount === 1 ? "" : "s"}
+                </SubmitButton>
+              </form>
+            </CardContent>
+          </Card>
+
+          {/* ---- Tasks bulk upload ---- */}
+          {bulkTaskError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <strong>Task bulk upload failed:</strong> {bulkTaskError}
+            </div>
+          )}
+          {showBulkTask && !bulkTaskError && (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <strong>Task data imported across {bulkTaskLocations} location{bulkTaskLocations === 1 ? "" : "s"}.</strong>{" "}
+              Tasks: {bulkTaskIn} new, {bulkTaskUp} updated · Accountability rows: {bulkTaskAcct} · Owner rows: {bulkTaskOwners}. Recomputed performance for {bulkTaskRecomputed} {bulkTaskRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+              {bulkTaskUnmatched > 0 && (
+                <p className="mt-1 text-xs text-amber-800">
+                  Skipped {bulkTaskUnmatched} task row{bulkTaskUnmatched === 1 ? "" : "s"} tagged for other clients.
+                </p>
+              )}
+              {bulkTaskBreakdown && (
+                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkTaskBreakdown}</p>
+              )}
+            </div>
+          )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Bulk upload — tasks (7tasks)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form action={uploadTasksCsvBulkAction} className="space-y-3">
+                <input type="hidden" name="scope" value="client" />
+                <input type="hidden" name="client_id" value={client.id} />
+                <div className="space-y-1.5">
+                  <Label htmlFor="bulk_task_file">Tasks CSV (all locations)</Label>
+                  <Input
+                    id="bulk_task_file"
+                    name="file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    required
+                  />
+                  <p className="text-xs text-slate-500">
+                    Each task&apos;s Location column routes it to the matching
+                    location under {client.name}. Accountability is computed
+                    from the overlap of worked shifts against each task&apos;s
+                    window (≥1h overlap = accountable). Ownership is derived
+                    from the &quot;Completed By&quot; column via fuzzy name
+                    matching against the location&apos;s roster. Time data must
+                    be uploaded first.
+                  </p>
+                </div>
+                <SubmitButton pendingLabel="Importing & computing accountability…">
+                  Upload tasks to all {locCount} location{locCount === 1 ? "" : "s"}
+                </SubmitButton>
+              </form>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
