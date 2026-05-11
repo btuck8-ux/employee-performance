@@ -132,22 +132,53 @@ async function ingestTattlesForLocation(
   }
 
   // Build attribution context from this location's worked time entries.
-  const { data: workedEntries } = await supabase
-    .from("time_entries")
-    .select("employee_id, entry_date, in_time, out_time")
-    .eq("location_id", location.id)
-    .eq("entry_type", "worked")
-    .range(0, 99999);
+  // Two key behaviors here:
+  //   1. Only fetch entries on dates that surveys actually reference. For
+  //      a 2,000-row CSV that lands ~200 unique survey dates, we pull
+  //      maybe 5-10 worked entries per date = under 2k rows total, well
+  //      below the PostgREST max-rows cap. Without this filter, large
+  //      locations (1,500+ worked entries) hit the cap and lose entries
+  //      silently — that was the original cause of the 558 unattributed
+  //      surveys at Highlands Ranch / Central Park / etc.
+  //   2. Paginate defensively in case a single location's worked entries
+  //      on the relevant dates still exceed 1000 (shouldn't, but safe).
+  const surveyDates = Array.from(
+    new Set(
+      locationSurveys
+        .map((s) => s.date_experienced)
+        .filter((d): d is string => Boolean(d))
+    )
+  );
   const ctx: AttributionContext = { workedByDate: new Map() };
-  for (const e of workedEntries ?? []) {
-    const list = ctx.workedByDate.get(e.entry_date as string);
-    const item = {
-      employee_id: e.employee_id as string,
-      in_time: e.in_time as string | null,
-      out_time: e.out_time as string | null,
-    };
-    if (list) list.push(item);
-    else ctx.workedByDate.set(e.entry_date as string, [item]);
+  if (surveyDates.length > 0) {
+    const PAGE = 1000;
+    let from = 0;
+    while (true) {
+      const { data: pageRows, error: pageErr } = await supabase
+        .from("time_entries")
+        .select("employee_id, entry_date, in_time, out_time")
+        .eq("location_id", location.id)
+        .eq("entry_type", "worked")
+        .in("entry_date", surveyDates)
+        .range(from, from + PAGE - 1);
+      if (pageErr) {
+        stats.failures.push(`fetch worked entries: ${pageErr.message}`);
+        break;
+      }
+      if (!pageRows || pageRows.length === 0) break;
+      for (const e of pageRows) {
+        const list = ctx.workedByDate.get(e.entry_date as string);
+        const item = {
+          employee_id: e.employee_id as string,
+          in_time: e.in_time as string | null,
+          out_time: e.out_time as string | null,
+        };
+        if (list) list.push(item);
+        else ctx.workedByDate.set(e.entry_date as string, [item]);
+      }
+      if (pageRows.length < PAGE) break;
+      from += PAGE;
+    }
   }
 
   // Pre-fetch existing surveys at this location for insert/update counts.

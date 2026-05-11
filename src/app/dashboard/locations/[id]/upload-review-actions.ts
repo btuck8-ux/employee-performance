@@ -130,27 +130,49 @@ export async function uploadCustomerReviewsCsvAction(formData: FormData) {
     );
   }
 
-  // Build attribution context
-  const { data: workedEntries } = await supabase
-    .from("time_entries")
-    .select("employee_id, entry_date, in_time, out_time")
-    .eq("location_id", location_id)
-    .eq("entry_type", "worked")
-    .range(0, 99999);
-
+  // Build attribution context — fetch only worked entries on dates that
+  // actually have reviews to attribute, paginated, to dodge PostgREST's
+  // 1000-row max-rows cap. (See upload-tattle-actions for the full story.)
+  const reviewDates = Array.from(
+    new Set(
+      parsed.reviews.map((r) => r.review_date).filter((d): d is string => Boolean(d))
+    )
+  );
   const ctx: AttributionContext = { workedByDate: new Map() };
-  for (const e of workedEntries ?? []) {
-    const list = ctx.workedByDate.get(e.entry_date);
-    const item = {
-      employee_id: e.employee_id,
-      in_time: e.in_time as string | null,
-      out_time: e.out_time as string | null,
-    };
-    if (list) list.push(item);
-    else ctx.workedByDate.set(e.entry_date, [item]);
+  let workedFetched = 0;
+  if (reviewDates.length > 0) {
+    const PAGE = 1000;
+    let from = 0;
+    while (true) {
+      const { data: pageRows, error: pageErr } = await supabase
+        .from("time_entries")
+        .select("employee_id, entry_date, in_time, out_time")
+        .eq("location_id", location_id)
+        .eq("entry_type", "worked")
+        .in("entry_date", reviewDates)
+        .range(from, from + PAGE - 1);
+      if (pageErr) {
+        console.error("[review-import] worked-entries fetch error:", pageErr);
+        break;
+      }
+      if (!pageRows || pageRows.length === 0) break;
+      for (const e of pageRows) {
+        const list = ctx.workedByDate.get(e.entry_date);
+        const item = {
+          employee_id: e.employee_id,
+          in_time: e.in_time as string | null,
+          out_time: e.out_time as string | null,
+        };
+        if (list) list.push(item);
+        else ctx.workedByDate.set(e.entry_date, [item]);
+        workedFetched += 1;
+      }
+      if (pageRows.length < PAGE) break;
+      from += PAGE;
+    }
   }
   console.log(
-    `[review-import] attribution context: ${workedEntries?.length ?? 0} worked entries across ${ctx.workedByDate.size} days`
+    `[review-import] attribution context: ${workedFetched} worked entries across ${ctx.workedByDate.size} days`
   );
 
   // Pre-fetch existing reviews for this location
