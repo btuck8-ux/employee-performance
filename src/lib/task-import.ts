@@ -135,7 +135,15 @@ export function parseTasksCsv(csvText: string): TaskImportResult {
       continue;
     }
 
-    const key = `${taskList.toLowerCase()}|${taskName.toLowerCase()}|${startDate}|${startTime ?? ""}`;
+    // Include Location in the dedupe key. Without it, a multi-location master
+    // CSV (e.g., 6 Colorado locations exported in one file) collapses identical
+    // task instances across locations into a single ParsedTask record stamped
+    // with whichever Location appeared first in the file — then only THAT
+    // location ingests, and its task gets contaminated with completers from
+    // all the other locations. Single-location CSVs (no Location column at
+    // all) get `""|...` here, which is identical to the old behavior.
+    const locKey = (clean(row.Location) ?? "").toLowerCase();
+    const key = `${locKey}|${taskList.toLowerCase()}|${taskName.toLowerCase()}|${startDate}|${startTime ?? ""}`;
     const completion = (clean(row.Completion) ?? "").toLowerCase();
     const isCompleteRow = completion === "complete";
     const completedAt = isoDatetime(row["Time Completed"]);
