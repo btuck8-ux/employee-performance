@@ -10,6 +10,7 @@ import {
   type EmployeeCandidate,
   type MatchConfidence,
 } from "@/lib/fuzzy-match-employee";
+import { rowMatchesLocation } from "@/lib/location-match";
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
@@ -27,6 +28,7 @@ interface IngestStats {
   completions_unmatched: Set<string>;
   match_confidence_counts: Record<MatchConfidence, number>;
   inactive_pool_skipped: number;
+  skipped_other_location: number;
   recomputed: number;
   warnings: string[];
   failures: string[];
@@ -50,6 +52,7 @@ function newStats(warnings: string[] = []): IngestStats {
       none: 0,
     },
     inactive_pool_skipped: 0,
+    skipped_other_location: 0,
     recomputed: 0,
     warnings,
     failures: [],
@@ -87,9 +90,29 @@ async function chunkOp<T>(
 async function ingestSurveysForLocation(
   supabase: SupabaseServer,
   parsed: SurveyImportResult,
-  location: { id: string; name: string }
+  location: { id: string; name: string; csv_aliases: string[] | null }
 ): Promise<IngestStats> {
   const stats = newStats();
+
+  // Filter parsed.assignments to those tagged for THIS location (or untagged).
+  // Untagged rows (no Location column at all) fall through to the existing
+  // "fuzzy match against this location's roster" behavior — same as before.
+  // Tagged rows that target a different location get skipped here, which
+  // prevents cross-location false matches when a multi-location master CSV
+  // is bulk-uploaded.
+  const beforeFilter = parsed.assignments.length;
+  const locationAssignments = parsed.assignments.filter((a) =>
+    rowMatchesLocation(a.location_label, location.name, location.csv_aliases)
+  );
+  stats.skipped_other_location = beforeFilter - locationAssignments.length;
+  if (locationAssignments.length === 0) return stats;
+
+  // Build a thin parsed-shaped wrapper for the rest of the pipeline.
+  const filteredParsed: SurveyImportResult = {
+    ...parsed,
+    assignments: locationAssignments,
+    unique_assignments: locationAssignments.length,
+  };
 
   // Active employees at this location — candidate pool for fuzzy matching.
   const { data: locEmployees } = await supabase
@@ -110,7 +133,7 @@ async function ingestSurveysForLocation(
     SurveyKey,
     { title: string; sent_date: string | null; external_survey_id: string | null }
   >();
-  for (const a of parsed.assignments) {
+  for (const a of filteredParsed.assignments) {
     const key = `${a.survey_title.toLowerCase()}|${a.sent_date ?? ""}`;
     const existing = surveyMap.get(key);
     if (!existing) {
@@ -190,7 +213,7 @@ async function ingestSurveysForLocation(
     Map<string, { completion_date: string | null; response_data: unknown }>
   >();
 
-  for (const a of parsed.assignments) {
+  for (const a of filteredParsed.assignments) {
     if (!a.completed) continue;
     const surveyKey = `${a.survey_title.toLowerCase()}|${a.sent_date ?? ""}`;
     const result = fuzzyMatchEmployee(a.employee_name_display, candidates);
@@ -396,12 +419,13 @@ export async function uploadSurveyCsvAction(formData: FormData) {
 
   const { data: locRow } = await supabase
     .from("locations")
-    .select("id, name")
+    .select("id, name, csv_aliases")
     .eq("id", location_id)
     .single();
-  const location = (locRow as { id: string; name: string } | null) ?? {
+  const location = (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
     id: location_id,
     name: "",
+    csv_aliases: null,
   };
 
   const stats = await ingestSurveysForLocation(supabase, parsed, location);
@@ -468,10 +492,14 @@ export async function uploadSurveyCsvBulkAction(formData: FormData) {
     );
   }
 
-  let q = supabase.from("locations").select("id, name").order("name");
+  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
   if (scope === "client" && client_id) q = q.eq("client_id", client_id);
   const { data: targetsRaw } = await q;
-  const targets = (targetsRaw ?? []) as Array<{ id: string; name: string }>;
+  const targets = (targetsRaw ?? []) as Array<{
+    id: string;
+    name: string;
+    csv_aliases: string[] | null;
+  }>;
   if (targets.length === 0) {
     redirect(
       `${redirectBase}?bulk_survey_error=${encodeURIComponent(

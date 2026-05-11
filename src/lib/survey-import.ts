@@ -19,6 +19,10 @@ export interface ParsedAssignment {
   completed: boolean;
   completion_date: string | null;
   response_data: unknown;
+  /** Captured Location/Store/Site value from the row, used by the upload
+   *  action to filter multi-location master CSVs down to one location at a
+   *  time. Null if the CSV had no location column or the value was empty. */
+  location_label: string | null;
 }
 
 export interface SurveyImportResult {
@@ -69,13 +73,17 @@ const HEADER_ALIASES: Record<string, string> = {
   responses: "response_data",
   answers: "response_data",
   responsejson: "response_data",
+
+  // location label — captured per row so multi-location master CSVs can
+  // be filtered per location at ingest time.
+  location: "location_label",
+  store: "location_label",
+  storename: "location_label",
+  site: "location_label",
+  sitename: "location_label",
 };
 
-const SILENTLY_IGNORED_HEADERS = new Set([
-  "location",
-  "store",
-  "site",
-]);
+const SILENTLY_IGNORED_HEADERS = new Set<string>([]);
 
 function normalizeHeader(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -193,9 +201,13 @@ export function parseSurveyCsv(csvText: string): SurveyImportResult {
     const externalSurveyId = getField(row, "external_survey_id", headerMap) ?? null;
     const responseData = tryParseJson(getField(row, "response_data", headerMap));
 
+    const locationLabel = getField(row, "location_label", headerMap) ?? null;
+
     const empKey = empName.toLowerCase();
     const titleKey = surveyTitle.toLowerCase();
-    const dedupeKey = `${empKey}|${titleKey}|${sentDate ?? ""}`;
+    // Dedupe key now includes location so the same (name, title, date) at two
+    // different locations (e.g. multi-location master CSV) doesn't collapse.
+    const dedupeKey = `${(locationLabel ?? "").toLowerCase()}|${empKey}|${titleKey}|${sentDate ?? ""}`;
     surveyKeys.add(`${titleKey}|${sentDate ?? ""}`);
 
     const existing = groups.get(dedupeKey);
@@ -209,6 +221,7 @@ export function parseSurveyCsv(csvText: string): SurveyImportResult {
         completed,
         completion_date: completionDate,
         response_data: responseData,
+        location_label: locationLabel,
       });
     } else {
       // Merge: any "completed" wins, earliest completion date wins, prefer non-null values.
@@ -224,6 +237,9 @@ export function parseSurveyCsv(csvText: string): SurveyImportResult {
       }
       if (existing.response_data === null && responseData !== null) {
         existing.response_data = responseData;
+      }
+      if (!existing.location_label && locationLabel) {
+        existing.location_label = locationLabel;
       }
     }
   }
