@@ -11,10 +11,17 @@ import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
 
+// POS ingest is heavy: an N-row upsert plus a cross-product recompute over
+// every active employee × every affected quarter. The largest store
+// (Downtown Denver, ~49K rows × 4 quarters × ~25 employees) needs the
+// extended Vercel Pro limit to finish in one server action.
+export const maxDuration = 300;
+
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
 const UPSERT_BATCH_SIZE = 500;
 const FETCH_PAGE = 1000; // PostgREST max-rows is 1000 by default
+const RECOMPUTE_CONCURRENCY = 6; // parallelism for the (employee × quarter) recompute loop
 
 interface IngestStats {
   sales_inserted: number;
@@ -193,22 +200,38 @@ async function ingestPOSForLocation(
 
   // Recompute: cartesian (employee × affected quarter). recomputePerformance
   // is idempotent and will also refresh the OTHER metrics, which is fine.
+  // Parallelized with a small worker pool — at DT scale (25 emps × 4 quarters
+  // = 100 jobs, each ~5 queries) serial = ~150s = hits Vercel's max. Pool of
+  // 6 keeps total time well under the function limit without overwhelming
+  // Postgres.
+  const jobs: Array<{ employee_id: string; year: number; quarter: Quarter }> = [];
   for (const { year, quarter } of affectedQuarters.values()) {
     for (const employee_id of employeeIds) {
+      jobs.push({ employee_id, year, quarter });
+    }
+  }
+
+  async function recomputeWorker() {
+    while (true) {
+      const job = jobs.shift();
+      if (!job) return;
       const result = await recomputePerformanceForQuarter(
         supabase,
-        employee_id,
+        job.employee_id,
         location.id,
-        year,
-        quarter
+        job.year,
+        job.quarter
       );
       if (result.ok) stats.recomputed += 1;
       else
         stats.failures.push(
-          `Recompute ${employee_id} ${year}-Q${quarter} @ ${location.name}: ${result.error}`
+          `Recompute ${job.employee_id} ${job.year}-Q${job.quarter} @ ${location.name}: ${result.error}`
         );
     }
   }
+  await Promise.all(
+    Array.from({ length: RECOMPUTE_CONCURRENCY }, recomputeWorker)
+  );
 
   await supabase
     .from("locations")
