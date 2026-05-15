@@ -190,7 +190,13 @@ export default async function LocationDetailPage({
   const posError = typeof search.pos_error === "string" ? search.pos_error : null;
   const posWarnings = typeof search.pos_warnings === "string" ? search.pos_warnings : null;
   const posFailures = typeof search.pos_failures === "string" ? search.pos_failures : null;
-  const showPosSummary = posIn + posUp > 0 || posError !== null;
+  // Also surface a banner when the action ran cleanly but ingested 0 rows AND
+  // emitted warnings — the previous behavior was silent, which made it look
+  // like nothing happened.
+  const showPosSummary =
+    posIn + posUp > 0 ||
+    posError !== null ||
+    (search.pos_in !== undefined && (posWarnings !== null || posFailures !== null));
 
   return (
     <div className="space-y-6">

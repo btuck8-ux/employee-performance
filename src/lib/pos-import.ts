@@ -178,7 +178,35 @@ export function parseSalesCsv(csvText: string): PosImportResult {
     records: [],
   };
 
-  const parsed = Papa.parse<RawRow>(csvText, {
+  // Some POS exports prepend a junk row or metadata rows before the real
+  // header (e.g., "DTSales&Refunds 07-01-2025_11-30_2025.csv" arrived with a
+  // row of bare commas on line 1). Scan the first 10 lines for a row that
+  // looks like the real header — must contain "Date" and "Receipt" and
+  // either "Transaction Type" or "TXN". If we find it past line 1, drop
+  // everything above it before handing to Papa.
+  const lines = csvText.split(/\r?\n/);
+  let headerLineIdx = 0;
+  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+    const cells = lines[i].split(",").map((c) => c.trim());
+    const hasDate = cells.some((c) => c.toLowerCase() === "date");
+    const hasReceipt = cells.some((c) => c.toLowerCase() === "receipt");
+    const hasTxType = cells.some(
+      (c) =>
+        c.toLowerCase() === "transaction type" || c.toLowerCase() === "txn"
+    );
+    if (hasDate && hasReceipt && hasTxType) {
+      headerLineIdx = i;
+      break;
+    }
+  }
+  if (headerLineIdx > 0) {
+    result.warnings.push(
+      `Skipped ${headerLineIdx} junk row(s) before the real header.`
+    );
+  }
+  const cleanedCsv = lines.slice(headerLineIdx).join("\n");
+
+  const parsed = Papa.parse<RawRow>(cleanedCsv, {
     header: true,
     skipEmptyLines: true,
     // Trim trailing spaces on Colorado Springs headers ("Date " → "Date", etc.)
