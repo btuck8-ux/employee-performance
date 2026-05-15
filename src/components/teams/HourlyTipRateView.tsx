@@ -224,7 +224,11 @@ export function HourlyTipRateView({
         </div>
       )}
 
-      <LineChart points={points} loading={loading} />
+      {view === "hourly" ? (
+        <LineChart points={points} loading={loading} />
+      ) : (
+        <PeriodBars points={points} loading={loading} />
+      )}
     </div>
   );
 }
@@ -483,65 +487,352 @@ function LineChart({ points, loading }: LineChartProps) {
         </text>
       </svg>
 
-      {/* Detail box */}
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 min-h-[68px]">
-        {hovered ? (
-          <div className="flex flex-wrap gap-x-6 gap-y-1">
-            <span className="font-semibold text-slate-900">
-              {hovered.label} <span className="text-slate-500">· {hovered.span}</span>
-            </span>
-            <span>
-              <span className="text-slate-500">Employee rate: </span>
-              <span style={{ color: COLORS.employee, fontWeight: 600 }}>
-                {formatPercent(hovered.employee_tip_rate_pct)}
-              </span>
-            </span>
-            <span>
-              <span className="text-slate-500">Location rate: </span>
-              <span style={{ color: COLORS.location, fontWeight: 600 }}>
-                {formatPercent(hovered.location_tip_rate_pct)}
-              </span>
-            </span>
-            <span>
-              <span className="text-slate-500">Hours worked: </span>
-              {hovered.employee_hours_worked.toFixed(1)}
-            </span>
-            <span>
-              <span className="text-slate-500">Sales: </span>
-              {formatMoney(hovered.employee_sales)}
-            </span>
-            <span>
-              <span className="text-slate-500">Tips: </span>
-              {formatMoney(hovered.employee_tips)}
-            </span>
-          </div>
-        ) : (
-          <span className="text-slate-500">
-            Hover the chart to see hour-level numbers (employee tip rate vs
-            location average, hours worked, and sales rung).
-          </span>
-        )}
-      </div>
+      <DetailCard hovered={hovered} hint="Hover the chart to see hour-level numbers (employee tip rate vs location average, hours worked, and sales rung)." />
+      <Legend variant="line" />
+    </div>
+  );
+}
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-xs text-slate-600">
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-0.5 w-6"
-            style={{ background: COLORS.employee }}
-          />
-          {`Employee tip rate`}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-0.5 w-6"
-            style={{
-              background: `repeating-linear-gradient(to right, ${COLORS.location}, ${COLORS.location} 4px, transparent 4px, transparent 8px)`,
-            }}
-          />
-          Location avg
-        </span>
-      </div>
+// ----------------------------------------------------------------------------
+// PeriodBars — grouped-bar variant for the 3 service periods.
+// Two bars per period (employee + store), Y-axis = tip rate %. Hover a bar
+// (or the surrounding hit area) to highlight the period and surface details.
+// ----------------------------------------------------------------------------
+
+interface PeriodBarsProps {
+  points: ChartPoint[];
+  loading: boolean;
+}
+
+function PeriodBars({ points, loading }: PeriodBarsProps) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  const W = 880;
+  const H = 360;
+  const M = { top: 20, right: 24, bottom: 50, left: 48 };
+  const innerW = W - M.left - M.right;
+  const innerH = H - M.top - M.bottom;
+
+  // Y axis: include both series, 10% headroom.
+  const yMaxRaw = Math.max(
+    1,
+    ...points.flatMap((p) => [
+      p.employee_tip_rate_pct ?? 0,
+      p.location_tip_rate_pct ?? 0,
+    ])
+  );
+  const yMax = Math.ceil(yMaxRaw * 1.1 * 4) / 4;
+
+  const yToPx = (y: number) => M.top + innerH - (y / yMax) * innerH;
+
+  const tickStep = yMax > 10 ? 2 : yMax > 4 ? 1 : 0.5;
+  const yTicks: number[] = [];
+  for (let v = 0; v <= yMax + 1e-9; v += tickStep) {
+    yTicks.push(Math.round(v * 100) / 100);
+  }
+
+  // Group geometry
+  const N = points.length;
+  const slotW = N > 0 ? innerW / N : innerW;
+  const barW = Math.min(72, slotW * 0.32);
+  const barGap = Math.min(10, slotW * 0.04);
+  const pairW = barW * 2 + barGap;
+
+  const noData =
+    N === 0 ||
+    points.every(
+      (p) =>
+        p.employee_tip_rate_pct === null && p.location_tip_rate_pct === null
+    );
+
+  const hovered = hoverIdx !== null ? points[hoverIdx] : null;
+
+  return (
+    <div className="space-y-3 relative">
+      {loading && (
+        <div className="absolute right-2 top-2 z-10 text-xs text-slate-500 bg-white/90 px-2 py-1 rounded border border-slate-200">
+          Loading…
+        </div>
+      )}
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-auto"
+        role="img"
+        aria-label="Service-period tip-rate bar chart"
+      >
+        {/* Hatched fill pattern for the location series so it reads as the
+            'secondary / baseline' next to the employee's solid color. */}
+        <defs>
+          <pattern
+            id="loc-hatch"
+            patternUnits="userSpaceOnUse"
+            width="6"
+            height="6"
+            patternTransform="rotate(45)"
+          >
+            <rect width="6" height="6" fill={COLORS.location} opacity={0.35} />
+            <line
+              x1={0}
+              y1={0}
+              x2={0}
+              y2={6}
+              stroke={COLORS.location}
+              strokeWidth={3}
+            />
+          </pattern>
+        </defs>
+
+        {/* Plot area */}
+        <rect
+          x={M.left}
+          y={M.top}
+          width={innerW}
+          height={innerH}
+          fill="#FAFAFB"
+          stroke="#E2E8F0"
+        />
+
+        {/* Y grid + labels */}
+        {yTicks.map((t) => (
+          <g key={`y-${t}`}>
+            <line
+              x1={M.left}
+              x2={M.left + innerW}
+              y1={yToPx(t)}
+              y2={yToPx(t)}
+              stroke="#E2E8F0"
+              strokeWidth={0.5}
+            />
+            <text
+              x={M.left - 6}
+              y={yToPx(t)}
+              textAnchor="end"
+              dominantBaseline="central"
+              fontSize={10}
+              fill="#64748B"
+            >
+              {t.toFixed(yMax > 4 ? 0 : 1)}%
+            </text>
+          </g>
+        ))}
+
+        {/* X labels + bars */}
+        {points.map((p, i) => {
+          const slotCenter = M.left + slotW * (i + 0.5);
+          const empX = slotCenter - pairW / 2;
+          const locX = empX + barW + barGap;
+          const baseY = M.top + innerH;
+          const empH =
+            p.employee_tip_rate_pct === null
+              ? 0
+              : baseY - yToPx(p.employee_tip_rate_pct);
+          const locH =
+            p.location_tip_rate_pct === null
+              ? 0
+              : baseY - yToPx(p.location_tip_rate_pct);
+          const isHovered = hoverIdx === i;
+          return (
+            <g
+              key={`bg-${i}`}
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx(null)}
+              style={{ cursor: "pointer" }}
+            >
+              {/* Hit area (full slot) */}
+              <rect
+                x={M.left + slotW * i}
+                y={M.top}
+                width={slotW}
+                height={innerH}
+                fill={isHovered ? "#0F172A0A" : "transparent"}
+              />
+              {/* Employee bar */}
+              {p.employee_tip_rate_pct !== null && (
+                <rect
+                  x={empX}
+                  y={baseY - empH}
+                  width={barW}
+                  height={empH}
+                  fill={COLORS.employee}
+                  opacity={hoverIdx === null || isHovered ? 1 : 0.45}
+                />
+              )}
+              {p.employee_tip_rate_pct !== null && (
+                <text
+                  x={empX + barW / 2}
+                  y={baseY - empH - 4}
+                  textAnchor="middle"
+                  fontSize={10}
+                  fill={COLORS.employee}
+                  fontWeight={isHovered ? 700 : 500}
+                >
+                  {p.employee_tip_rate_pct.toFixed(2)}%
+                </text>
+              )}
+              {/* Location bar (patterned + outlined for contrast vs solid emp) */}
+              {p.location_tip_rate_pct !== null && (
+                <rect
+                  x={locX}
+                  y={baseY - locH}
+                  width={barW}
+                  height={locH}
+                  fill="url(#loc-hatch)"
+                  stroke={COLORS.location}
+                  strokeWidth={1}
+                  opacity={hoverIdx === null || isHovered ? 1 : 0.45}
+                />
+              )}
+              {p.location_tip_rate_pct !== null && (
+                <text
+                  x={locX + barW / 2}
+                  y={baseY - locH - 4}
+                  textAnchor="middle"
+                  fontSize={10}
+                  fill={COLORS.location}
+                  fontWeight={isHovered ? 700 : 500}
+                >
+                  {p.location_tip_rate_pct.toFixed(2)}%
+                </text>
+              )}
+              {/* X labels under each slot */}
+              <text
+                x={slotCenter}
+                y={baseY + 18}
+                textAnchor="middle"
+                fontSize={12}
+                fill="#0F172A"
+                fontWeight={isHovered ? 700 : 600}
+              >
+                {p.label}
+              </text>
+              <text
+                x={slotCenter}
+                y={baseY + 32}
+                textAnchor="middle"
+                fontSize={10}
+                fill="#64748B"
+              >
+                {p.span}
+              </text>
+            </g>
+          );
+        })}
+
+        {noData && (
+          <text
+            x={M.left + innerW / 2}
+            y={M.top + innerH / 2}
+            textAnchor="middle"
+            fontSize={13}
+            fill="#94A3B8"
+          >
+            No sales / shift overlap in this window.
+          </text>
+        )}
+
+        <text
+          x={14}
+          y={M.top + innerH / 2}
+          textAnchor="middle"
+          fontSize={11}
+          fill="#0F172A"
+          transform={`rotate(-90 14 ${M.top + innerH / 2})`}
+        >
+          Tip rate %
+        </text>
+      </svg>
+
+      <DetailCard
+        hovered={hovered}
+        hint="Hover a period to see employee tip rate vs location average, hours worked, and sales for that window."
+      />
+      <Legend variant="bar" />
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Shared presentational helpers
+// ----------------------------------------------------------------------------
+
+function DetailCard({
+  hovered,
+  hint,
+}: {
+  hovered: ChartPoint | null;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 min-h-[68px]">
+      {hovered ? (
+        <div className="flex flex-wrap gap-x-6 gap-y-1">
+          <span className="font-semibold text-slate-900">
+            {hovered.label}{" "}
+            <span className="text-slate-500">· {hovered.span}</span>
+          </span>
+          <span>
+            <span className="text-slate-500">Employee rate: </span>
+            <span style={{ color: COLORS.employee, fontWeight: 600 }}>
+              {formatPercent(hovered.employee_tip_rate_pct)}
+            </span>
+          </span>
+          <span>
+            <span className="text-slate-500">Location rate: </span>
+            <span style={{ color: COLORS.location, fontWeight: 600 }}>
+              {formatPercent(hovered.location_tip_rate_pct)}
+            </span>
+          </span>
+          <span>
+            <span className="text-slate-500">Hours worked: </span>
+            {hovered.employee_hours_worked.toFixed(1)}
+          </span>
+          <span>
+            <span className="text-slate-500">Sales: </span>
+            {formatMoney(hovered.employee_sales)}
+          </span>
+          <span>
+            <span className="text-slate-500">Tips: </span>
+            {formatMoney(hovered.employee_tips)}
+          </span>
+        </div>
+      ) : (
+        <span className="text-slate-500">{hint}</span>
+      )}
+    </div>
+  );
+}
+
+function Legend({ variant }: { variant: "line" | "bar" }) {
+  return (
+    <div className="flex items-center gap-4 text-xs text-slate-600">
+      <span className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-3 w-6 rounded-sm"
+          style={
+            variant === "line"
+              ? { background: COLORS.employee, height: 2 }
+              : { background: COLORS.employee }
+          }
+        />
+        Employee tip rate
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-3 w-6 rounded-sm"
+          style={
+            variant === "line"
+              ? {
+                  background: `repeating-linear-gradient(to right, ${COLORS.location}, ${COLORS.location} 4px, transparent 4px, transparent 8px)`,
+                  height: 2,
+                }
+              : {
+                  background: `repeating-linear-gradient(45deg, ${COLORS.location}88, ${COLORS.location}88 2px, ${COLORS.location}33 2px, ${COLORS.location}33 5px)`,
+                  border: `1px solid ${COLORS.location}`,
+                }
+          }
+        />
+        Location avg
+      </span>
     </div>
   );
 }
