@@ -11,11 +11,12 @@ import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
 
-// POS ingest is heavy: an N-row upsert plus a cross-product recompute over
-// every active employee × every affected quarter. The largest store
-// (Downtown Denver, ~49K rows × 4 quarters × ~25 employees) needs the
-// extended Vercel Pro limit to finish in one server action.
-export const maxDuration = 300;
+// NOTE on timeouts: in a "use server" file only async functions can be
+// exported, so `maxDuration` must live on the calling pages, not here. All
+// three callers — locations/[id]/page.tsx, clients/[id]/page.tsx, and
+// uploads/page.tsx — already export `maxDuration = 300`, which gives this
+// action the headroom it needs even for the largest store (Downtown Denver,
+// ~49K rows × 4 quarters × ~25 employees).
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
