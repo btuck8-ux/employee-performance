@@ -1,14 +1,18 @@
 "use client";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmployeeScatter, type ScatterRow } from "./EmployeeScatter";
 import { TeamLeaderboard, type TeamRow } from "./TeamLeaderboard";
 import { PairHeatmap } from "./PairHeatmap";
+import { HourlyTipRateView } from "./HourlyTipRateView";
+import { resolveQuarterWindow, resolveAllTimeWindow } from "./TimeWindowPicker";
 
 export interface Quarter {
   id: string;
   label: string;
   period_start: string;
+  period_end: string;
 }
 
 interface TeamsDashboardProps {
@@ -18,6 +22,8 @@ interface TeamsDashboardProps {
   employees: Array<{ id: string; employee_name: string }>;
   scatterRows: ScatterRow[];
   teams: TeamRow[];
+  earliestSalesDate: string | null;
+  latestSalesDate: string | null;
 }
 
 export function TeamsDashboard({
@@ -27,8 +33,23 @@ export function TeamsDashboard({
   employees,
   scatterRows,
   teams,
+  earliestSalesDate,
+  latestSalesDate,
 }: TeamsDashboardProps) {
   const router = useRouter();
+
+  // Hourly tab state: selected employee. Empty string = nobody selected yet
+  // (default state, user prompted to pick one).
+  const [hourlyEmployeeId, setHourlyEmployeeId] = useState<string>("");
+  const hourlyEmployee = employees.find((e) => e.id === hourlyEmployeeId) ?? null;
+  const selectedQuarter = quarters.find((q) => q.id === selectedQuarterId) ?? null;
+  // Default the Hourly tab's time window to the currently-selected quarter
+  // for context consistency with the rest of the dashboard.
+  const hourlyInitialWindow = selectedQuarter
+    ? resolveQuarterWindow(selectedQuarter)
+    : earliestSalesDate
+      ? resolveAllTimeWindow(earliestSalesDate, latestSalesDate)
+      : null;
 
   const lifters = teams.filter(
     (t) => t.deltaVsLocPp !== null && t.deltaVsLocPp > 0.25
@@ -87,6 +108,7 @@ export function TeamsDashboard({
           <TabsTrigger value="scatter">Employee scatter</TabsTrigger>
           <TabsTrigger value="leaderboard">Team leaderboard</TabsTrigger>
           <TabsTrigger value="heatmap">Pair heatmap</TabsTrigger>
+          <TabsTrigger value="hourly">Hourly tip rate</TabsTrigger>
         </TabsList>
 
         <TabsContent value="scatter">
@@ -99,6 +121,55 @@ export function TeamsDashboard({
 
         <TabsContent value="heatmap">
           <PairHeatmap teams={teams} employees={employees} />
+        </TabsContent>
+
+        <TabsContent value="hourly">
+          <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-xs uppercase tracking-wide text-slate-500">
+                  Employee
+                </span>
+                <select
+                  value={hourlyEmployeeId}
+                  onChange={(e) => setHourlyEmployeeId(e.target.value)}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[200px]"
+                >
+                  <option value="">— Select an employee —</option>
+                  {employees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.employee_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {employees.length === 0 && (
+                <span className="text-xs text-slate-500">
+                  No active employees at this location.
+                </span>
+              )}
+            </div>
+            {hourlyEmployee && hourlyInitialWindow ? (
+              <HourlyTipRateView
+                // Forcing remount on employee change keeps the loaded-key
+                // ref/state cleanly scoped per employee.
+                key={hourlyEmployee.id}
+                employeeId={hourlyEmployee.id}
+                employeeName={hourlyEmployee.employee_name}
+                locationId={locationId}
+                initialRows={[]}
+                initialWindow={hourlyInitialWindow}
+                quarters={quarters}
+                earliestDate={earliestSalesDate}
+                latestDate={latestSalesDate}
+              />
+            ) : (
+              <p className="text-sm text-slate-500">
+                Pick an employee above to see their per-hour tip rate compared
+                to the location average over the same window.
+              </p>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
     </div>

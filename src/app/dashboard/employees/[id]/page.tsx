@@ -15,6 +15,14 @@ import { generatePerformanceReportAction } from "./generate-report-actions";
 import { generateTaskDetailReportAction } from "./generate-task-detail-actions";
 import { generateCustomRangePerformanceReportAction } from "./generate-custom-range-actions";
 import { updateManagerFeedbackAction } from "./manager-feedback-actions";
+import { HourlyTipRateView } from "@/components/teams/HourlyTipRateView";
+import type { HourlyTipRateRow } from "@/app/dashboard/locations/[id]/teams/fetch-hourly-tip-rate-actions";
+import {
+  resolveAllTimeWindow,
+  resolveQuarterWindow,
+  type QuarterOption,
+  type TimeWindow,
+} from "@/components/teams/TimeWindowPicker";
 
 export default async function EmployeeDetailPage({
   params,
@@ -235,6 +243,100 @@ export default async function EmployeeDetailPage({
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
   const thirtyDaysAgoIso = thirtyDaysAgo.toISOString().slice(0, 10);
 
+  // ---- Hourly tip rate card: initial data ----
+  // Pull available quarters at the employee's location, earliest sales date,
+  // and the SSR-prefetched hourly rows for the most-recent quarter so the
+  // chart paints without a loading flash.
+  let hourlyInitialRows: HourlyTipRateRow[] = [];
+  let hourlyInitialWindow: TimeWindow | null = null;
+  let hourlyQuarters: QuarterOption[] = [];
+  let hourlyEarliest: string | null = null;
+  let hourlyLatest: string | null = null;
+  if (loc?.id) {
+    const [{ data: teamPeriodsRes }, { data: perfPeriodsRes }, { data: salesRange }] =
+      await Promise.all([
+        supabase
+          .from("team_tip_impact")
+          .select("report_periods!inner(id, label, period_start, period_end)")
+          .eq("location_id", loc.id),
+        supabase
+          .from("performance_records")
+          .select("report_periods!inner(id, label, period_start, period_end)")
+          .eq("location_id", loc.id),
+        supabase
+          .from("sales_records")
+          .select("transaction_at")
+          .eq("location_id", loc.id)
+          .order("transaction_at", { ascending: true })
+          .limit(1),
+      ]);
+    type QuarterRowShape = {
+      report_periods: QuarterOption | null;
+    };
+    const seen = new Map<string, QuarterOption>();
+    for (const row of (teamPeriodsRes ?? []) as unknown as QuarterRowShape[]) {
+      if (row.report_periods) seen.set(row.report_periods.id, row.report_periods);
+    }
+    for (const row of (perfPeriodsRes ?? []) as unknown as QuarterRowShape[]) {
+      if (row.report_periods) seen.set(row.report_periods.id, row.report_periods);
+    }
+    hourlyQuarters = Array.from(seen.values()).sort((a, b) =>
+      b.period_start.localeCompare(a.period_start)
+    );
+    hourlyEarliest =
+      ((salesRange?.[0] as { transaction_at: string } | undefined)?.transaction_at?.slice(0, 10)) ??
+      null;
+    hourlyLatest = todayDate;
+
+    if (hourlyQuarters.length > 0) {
+      hourlyInitialWindow = resolveQuarterWindow(hourlyQuarters[0]);
+    } else if (hourlyEarliest) {
+      hourlyInitialWindow = resolveAllTimeWindow(hourlyEarliest, hourlyLatest);
+    }
+
+    if (hourlyInitialWindow) {
+      const { data: rpcData } = await supabase.rpc(
+        "compute_employee_hourly_tip_rate",
+        {
+          p_employee_id: emp.id,
+          p_location_id: loc.id,
+          p_start_date: hourlyInitialWindow.startDate,
+          p_end_date: hourlyInitialWindow.endDate,
+        }
+      );
+      const toNum = (v: number | string | null | undefined): number => {
+        if (v === null || v === undefined) return 0;
+        const n = typeof v === "string" ? Number(v) : v;
+        return Number.isNaN(n) ? 0 : n;
+      };
+      const toNumOrNull = (v: number | string | null | undefined): number | null => {
+        if (v === null || v === undefined) return null;
+        const n = typeof v === "string" ? Number(v) : v;
+        return Number.isNaN(n) ? null : n;
+      };
+      type RpcRow = {
+        hour_of_day: number | string;
+        employee_hours_worked: number | string | null;
+        employee_sales: number | string | null;
+        employee_tips: number | string | null;
+        employee_tip_rate_pct: number | string | null;
+        location_sales: number | string | null;
+        location_tips: number | string | null;
+        location_tip_rate_pct: number | string | null;
+      };
+      hourlyInitialRows = ((rpcData ?? []) as RpcRow[]).map((r) => ({
+        hour_of_day: Number(r.hour_of_day),
+        employee_hours_worked: toNum(r.employee_hours_worked),
+        employee_sales: toNum(r.employee_sales),
+        employee_tips: toNum(r.employee_tips),
+        employee_tip_rate_pct: toNumOrNull(r.employee_tip_rate_pct),
+        location_sales: toNum(r.location_sales),
+        location_tips: toNum(r.location_tips),
+        location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
+      }));
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -339,6 +441,26 @@ export default async function EmployeeDetailPage({
           />
         </CardContent>
       </Card>
+
+      {loc?.id && hourlyInitialWindow && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Hourly tip rate</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <HourlyTipRateView
+              employeeId={emp.id}
+              employeeName={emp.employee_name as string}
+              locationId={loc.id}
+              initialRows={hourlyInitialRows}
+              initialWindow={hourlyInitialWindow}
+              quarters={hourlyQuarters}
+              earliestDate={hourlyEarliest}
+              latestDate={hourlyLatest}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

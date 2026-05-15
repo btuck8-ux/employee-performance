@@ -14,6 +14,7 @@ interface RawQuarter {
   id: string;
   label: string;
   period_start: string;
+  period_end: string;
 }
 
 interface RawTeamRow {
@@ -80,16 +81,26 @@ export default async function TeamsPage({
   // so the dropdown shows every quarter we *could* render — even ones where
   // POS data hasn't been ingested yet, so the operator gets the scatter view
   // even before tip data exists.
-  const [teamPeriodsRes, perfPeriodsRes] = await Promise.all([
+  const [teamPeriodsRes, perfPeriodsRes, salesRangeRes] = await Promise.all([
     supabase
       .from("team_tip_impact")
-      .select("report_periods!inner(id, label, period_start)")
+      .select("report_periods!inner(id, label, period_start, period_end)")
       .eq("location_id", id),
     supabase
       .from("performance_records")
-      .select("report_periods!inner(id, label, period_start)")
+      .select("report_periods!inner(id, label, period_start, period_end)")
       .eq("location_id", id),
+    supabase
+      .from("sales_records")
+      .select("transaction_at")
+      .eq("location_id", id)
+      .order("transaction_at", { ascending: true })
+      .limit(1),
   ]);
+  const earliestSalesDate =
+    ((salesRangeRes.data?.[0] as { transaction_at: string } | undefined)
+      ?.transaction_at?.slice(0, 10)) ?? null;
+  const todayIso = new Date().toISOString().slice(0, 10);
   const seenPeriods = new Map<string, RawQuarter>();
   for (const row of (teamPeriodsRes.data ?? []) as unknown as Array<{
     report_periods: RawQuarter | null;
@@ -223,6 +234,8 @@ export default async function TeamsPage({
           employees={employees}
           scatterRows={scatterRows}
           teams={teams}
+          earliestSalesDate={earliestSalesDate}
+          latestSalesDate={todayIso}
         />
       )}
     </div>
