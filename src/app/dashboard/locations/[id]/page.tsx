@@ -20,6 +20,7 @@ import { uploadTattleCsvAction } from "./upload-tattle-actions";
 import { uploadCustomerReviewsCsvAction } from "./upload-review-actions";
 import { uploadSurveyCsvAction } from "./upload-survey-actions";
 import { uploadTasksCsvAction } from "./upload-tasks-actions";
+import { uploadPOSCsvAction } from "./upload-pos-actions";
 import { generateBulkLocationReportsAction } from "./generate-bulk-reports-actions";
 
 export default async function LocationDetailPage({
@@ -177,6 +178,19 @@ export default async function LocationDetailPage({
   const taskWarnings = typeof search.task_warnings === "string" ? search.task_warnings : null;
   const taskFailures = typeof search.task_failures === "string" ? search.task_failures : null;
   const showTaskSummary = taskIn + taskUp + taskAcct > 0 || taskError !== null;
+
+  // Surface feedback from the most recent POS sales import
+  const posIn = Number(search.pos_in ?? 0);
+  const posUp = Number(search.pos_up ?? 0);
+  const posSplit = Number(search.pos_split ?? 0);
+  const posRefunds = Number(search.pos_refunds ?? 0);
+  const posQuarters = Number(search.pos_quarters ?? 0);
+  const posRecomputed = Number(search.pos_recomputed ?? 0);
+  const posSkippedOtherLocation = Number(search.pos_skipped_other_location ?? 0);
+  const posError = typeof search.pos_error === "string" ? search.pos_error : null;
+  const posWarnings = typeof search.pos_warnings === "string" ? search.pos_warnings : null;
+  const posFailures = typeof search.pos_failures === "string" ? search.pos_failures : null;
+  const showPosSummary = posIn + posUp > 0 || posError !== null;
 
   return (
     <div className="space-y-6">
@@ -650,6 +664,70 @@ export default async function LocationDetailPage({
             </div>
             <SubmitButton pendingLabel="Importing & computing accountability…">
               Upload tasks
+            </SubmitButton>
+          </form>
+        </CardContent>
+      </Card>
+
+      {posError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <strong>POS sales import failed:</strong> {posError}
+        </div>
+      )}
+
+      {showPosSummary && !posError && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <strong>POS sales imported.</strong>{" "}
+          Receipts: {posIn} new, {posUp} updated · Split-tender: {posSplit} · Refunds: {posRefunds} ·
+          Recomputed performance for {posRecomputed} {posRecomputed === 1 ? "employee-quarter" : "employee-quarters"}
+          {posQuarters > 0 && ` across ${posQuarters} ${posQuarters === 1 ? "quarter" : "quarters"}`}.
+          {posSkippedOtherLocation > 0 && (
+            <p className="mt-1 text-xs text-emerald-800/80">
+              Skipped {posSkippedOtherLocation} row{posSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
+            </p>
+          )}
+          {posFailures && (
+            <p className="mt-1 text-xs text-red-700">Failures: {posFailures}</p>
+          )}
+          {posWarnings && (
+            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {posWarnings}</p>
+          )}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Upload POS sales CSV</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            action={uploadPOSCsvAction}
+            className="space-y-3"
+          >
+            <input type="hidden" name="location_id" value={location.id} />
+            <div className="space-y-1.5">
+              <Label htmlFor="pos_file">POS sales &amp; refunds CSV</Label>
+              <Input
+                id="pos_file"
+                name="file"
+                type="file"
+                accept=".csv,text/csv"
+                required
+              />
+              <p className="text-xs text-slate-500">
+                One row per transaction (Ike&apos;s POS export). Split-tender legs
+                collapse to one receipt; refunds carry signed values. Tip
+                attribution is presence-based — the POS&apos;s &ldquo;Employee&rdquo;
+                field is stored for audit but never used for tip math (Ike&apos;s
+                pools tips). The $175 cap excludes catering and large group
+                orders from the tip-rate baseline. Re-uploading is idempotent —
+                same receipt + timestamp upserts in place. Every active employee
+                at this location gets their performance row recomputed for every
+                quarter the import touches.
+              </p>
+            </div>
+            <SubmitButton pendingLabel="Importing sales & recomputing tips…">
+              Upload POS sales
             </SubmitButton>
           </form>
         </CardContent>

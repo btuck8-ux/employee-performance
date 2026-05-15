@@ -146,6 +146,104 @@ export interface RangeMetrics {
   // customer reviews
   customer_review_quantity: number;
   customer_service_rating: number | null;
+  // POS tips (presence-based; null when no sales data exists for the window)
+  hours_worked: number | null;
+  sales_during_presence: number | null;
+  tips_during_presence: number | null;
+  tip_rate_pct: number | null;
+  tip_per_hour: number | null;
+  location_tip_rate_pct: number | null;
+  location_tip_per_hour: number | null;
+  tip_rate_delta_pp: number | null;
+}
+
+/**
+ * Per-employee tip metrics over a date window, computed by the
+ * `compute_employee_tip_metrics` SQL function. Returns the canonical
+ * presence-based numbers: employee tip rate, employee tip/hour, the
+ * matching location baselines, and the tip_rate_delta_pp that drives
+ * the badge on the dashboard.
+ *
+ * Returns null fields when no sales data is present for the (employee,
+ * location, window) — keeps the PDF renderer free to hide the section.
+ *
+ * The SQL function returns numeric columns, which the postgres driver
+ * serializes as strings; this helper normalizes them to number|null.
+ */
+async function fetchTipMetrics(
+  supabase: SupabaseClient,
+  employeeId: string,
+  locationId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<{
+  hours_worked: number | null;
+  sales_during_presence: number | null;
+  tips_during_presence: number | null;
+  tip_rate_pct: number | null;
+  tip_per_hour: number | null;
+  location_tip_rate_pct: number | null;
+  location_tip_per_hour: number | null;
+  tip_rate_delta_pp: number | null;
+}> {
+  const nullTips = {
+    hours_worked: null,
+    sales_during_presence: null,
+    tips_during_presence: null,
+    tip_rate_pct: null,
+    tip_per_hour: null,
+    location_tip_rate_pct: null,
+    location_tip_per_hour: null,
+    tip_rate_delta_pp: null,
+  };
+  const { data, error } = await supabase.rpc("compute_employee_tip_metrics", {
+    p_employee_id: employeeId,
+    p_location_id: locationId,
+    p_period_start: periodStart,
+    p_period_end: periodEnd,
+  });
+  if (error) {
+    console.error("[performance-recompute] tip metrics error:", error.message);
+    return nullTips;
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | {
+        sales_under_cap: number | string | null;
+        tips_under_cap: number | string | null;
+        hours_worked: number | string | null;
+        employee_tip_rate_pct: number | string | null;
+        employee_tip_per_hour: number | string | null;
+        location_avg_tip_rate_pct: number | string | null;
+        location_avg_tip_per_hour: number | string | null;
+        tip_rate_delta_pp: number | string | null;
+      }
+    | null
+    | undefined;
+  if (!row) return nullTips;
+
+  const toNum = (v: number | string | null | undefined): number | null => {
+    if (v === null || v === undefined) return null;
+    const n = typeof v === "string" ? Number(v) : v;
+    return Number.isNaN(n) ? null : n;
+  };
+
+  // If both employee and location have zero qualifying sales, treat tips as
+  // unavailable for the window — the function still returns 0 totals but
+  // there's no meaningful metric to display.
+  const employeeSales = toNum(row.sales_under_cap) ?? 0;
+  const locationRate = toNum(row.location_avg_tip_rate_pct);
+  if (employeeSales === 0 && locationRate === null) return nullTips;
+
+  return {
+    hours_worked: toNum(row.hours_worked),
+    sales_during_presence: toNum(row.sales_under_cap),
+    tips_during_presence: toNum(row.tips_under_cap),
+    tip_rate_pct: toNum(row.employee_tip_rate_pct),
+    tip_per_hour: toNum(row.employee_tip_per_hour),
+    location_tip_rate_pct: toNum(row.location_avg_tip_rate_pct),
+    location_tip_per_hour: toNum(row.location_avg_tip_per_hour),
+    tip_rate_delta_pp: toNum(row.tip_rate_delta_pp),
+  };
 }
 
 /**
@@ -369,6 +467,15 @@ export async function computeMetricsForRange(
     }
   }
 
+  // ---- POS tip metrics (presence-based; SQL function handles overlap math) ----
+  const tip = await fetchTipMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   return {
     ok: true,
     metrics: {
@@ -397,6 +504,7 @@ export async function computeMetricsForRange(
       tattle_score_speed_of_service,
       customer_review_quantity,
       customer_service_rating,
+      ...tip,
     },
   };
 }
@@ -644,6 +752,15 @@ export async function recomputePerformanceForQuarter(
     }
   }
 
+  // ---- POS tip metrics ----
+  const tip = await fetchTipMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   const { error: upsertError } = await supabase
     .from("performance_records")
     .upsert(
@@ -672,6 +789,14 @@ export async function recomputePerformanceForQuarter(
         customer_review_quantity:
           customer_review_quantity > 0 ? customer_review_quantity : null,
         customer_service_rating,
+        hours_worked: tip.hours_worked,
+        sales_during_presence: tip.sales_during_presence,
+        tips_during_presence: tip.tips_during_presence,
+        tip_rate_pct: tip.tip_rate_pct,
+        tip_per_hour: tip.tip_per_hour,
+        location_tip_rate_pct: tip.location_tip_rate_pct,
+        location_tip_per_hour: tip.location_tip_per_hour,
+        tip_rate_delta_pp: tip.tip_rate_delta_pp,
       },
       { onConflict: "employee_id,report_period_id" }
     );

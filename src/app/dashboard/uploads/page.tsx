@@ -9,6 +9,7 @@ import { uploadTattleCsvBulkAction } from "@/app/dashboard/locations/[id]/upload
 import { uploadCustomerReviewsCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-review-actions";
 import { uploadSurveyCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-survey-actions";
 import { uploadTasksCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-tasks-actions";
+import { uploadPOSCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-pos-actions";
 
 // Bulk upload paths fan out across every location across every client; recompute
 // runs per (employee, quarter, location). Bumped to Vercel Pro's 300s cap.
@@ -117,6 +118,21 @@ export default async function UploadsPage({
     typeof search.bulk_task_breakdown === "string" ? search.bulk_task_breakdown : null;
   const showBulkTask =
     bulkTaskIn + bulkTaskUp + bulkTaskAcct + bulkTaskLocations > 0;
+
+  // POS bulk
+  const bulkPosError =
+    typeof search.bulk_pos_error === "string" ? search.bulk_pos_error : null;
+  const bulkPosLocations = Number(search.bulk_pos_locations ?? 0);
+  const bulkPosIn = Number(search.bulk_pos_in ?? 0);
+  const bulkPosUp = Number(search.bulk_pos_up ?? 0);
+  const bulkPosSplit = Number(search.bulk_pos_split ?? 0);
+  const bulkPosRefunds = Number(search.bulk_pos_refunds ?? 0);
+  const bulkPosRecomputed = Number(search.bulk_pos_recomputed ?? 0);
+  const bulkPosUnmatched = Number(search.bulk_pos_unmatched ?? 0);
+  const bulkPosBreakdown =
+    typeof search.bulk_pos_breakdown === "string" ? search.bulk_pos_breakdown : null;
+  const showBulkPos =
+    bulkPosIn + bulkPosUp + bulkPosLocations > 0;
 
   return (
     <div className="space-y-6">
@@ -460,6 +476,59 @@ export default async function UploadsPage({
             </div>
             <SubmitButton pendingLabel="Importing & computing accountability…">
               Upload tasks to all {locCount} location{locCount === 1 ? "" : "s"}
+            </SubmitButton>
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* ---- POS sales ---- */}
+      {bulkPosError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <strong>POS bulk upload failed:</strong> {bulkPosError}
+        </div>
+      )}
+      {showBulkPos && !bulkPosError && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <strong>POS sales imported across {bulkPosLocations} location{bulkPosLocations === 1 ? "" : "s"}.</strong>{" "}
+          Receipts: {bulkPosIn} new, {bulkPosUp} updated · Split-tender: {bulkPosSplit} · Refunds: {bulkPosRefunds}. Recomputed performance for {bulkPosRecomputed} {bulkPosRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+          {bulkPosUnmatched > 0 && (
+            <p className="mt-1 text-xs text-amber-800">
+              Skipped {bulkPosUnmatched} row{bulkPosUnmatched === 1 ? "" : "s"} tagged for locations not in the system.
+            </p>
+          )}
+          {bulkPosBreakdown && (
+            <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkPosBreakdown}</p>
+          )}
+        </div>
+      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>POS sales</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form action={uploadPOSCsvBulkAction} className="space-y-3">
+            <input type="hidden" name="scope" value="all" />
+            <div className="space-y-1.5">
+              <Label htmlFor="bulk_pos_file_all">POS sales CSV (all locations)</Label>
+              <Input
+                id="bulk_pos_file_all"
+                name="file"
+                type="file"
+                accept=".csv,text/csv"
+                required
+              />
+              <p className="text-xs text-slate-500">
+                <strong>Requires a Location column</strong> so each receipt routes to the
+                right store. Today&apos;s Ike&apos;s POS exports are
+                single-location (one file per store) — those must use the
+                per-location upload card on each location&apos;s page. Bulk
+                refuses a CSV with no Location column rather than duplicate it
+                across every store. Tip attribution is presence-based; the
+                $175 cap excludes catering from the baseline.
+              </p>
+            </div>
+            <SubmitButton pendingLabel="Importing sales & recomputing tips…">
+              Upload POS sales to all {locCount} location{locCount === 1 ? "" : "s"}
             </SubmitButton>
           </form>
         </CardContent>

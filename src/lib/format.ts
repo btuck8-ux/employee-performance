@@ -63,6 +63,22 @@ export function formatQuantity(value: number | string | null | undefined): strin
   return n === null ? "—" : Math.round(n).toString();
 }
 
+/** Format a dollar amount with two decimals, e.g. "$14.17". */
+export function formatMoney(value: number | string | null | undefined): string {
+  const n = toNum(value);
+  if (n === null) return "—";
+  const sign = n < 0 ? "-" : "";
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+
+/** Signed percentage-points, e.g. "+0.13pp" or "-0.42pp". */
+export function formatDeltaPP(value: number | string | null | undefined): string {
+  const n = toNum(value);
+  if (n === null) return "—";
+  const sign = n > 0 ? "+" : n < 0 ? "−" : "";
+  return `${sign}${Math.abs(n).toFixed(2)}pp`;
+}
+
 /**
  * "X years, Y months" with zero suppression on either component.
  * Examples: "1 year, 3 months"; "0 years, 4 months"; "2 years, 0 months".

@@ -55,7 +55,7 @@ export default async function EmployeeDetailPage({
   const { data: records } = await supabase
     .from("performance_records")
     .select(
-      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(label, period_start, period_end)"
+      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(label, period_start, period_end)"
     )
     .eq("employee_id", id);
 
@@ -81,6 +81,11 @@ export default async function EmployeeDetailPage({
     tattle_score_speed_of_service: number | string | null;
     customer_review_quantity: number | null;
     customer_service_rating: number | string | null;
+    tip_rate_pct: number | string | null;
+    tip_per_hour: number | string | null;
+    location_tip_rate_pct: number | string | null;
+    location_tip_per_hour: number | string | null;
+    tip_rate_delta_pp: number | string | null;
     tattle_summary: string | null;
     tattle_summary_generated_at: string | null;
     manager_feedback: string | null;
@@ -152,6 +157,11 @@ export default async function EmployeeDetailPage({
       tattle_score_speed_of_service: toNumOrNull(r.tattle_score_speed_of_service),
       customer_review_quantity: r.customer_review_quantity,
       customer_service_rating: toNumOrNull(r.customer_service_rating),
+      tip_rate_pct: toNumOrNull(r.tip_rate_pct),
+      tip_per_hour: toNumOrNull(r.tip_per_hour),
+      location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
+      location_tip_per_hour: toNumOrNull(r.location_tip_per_hour),
+      tip_rate_delta_pp: toNumOrNull(r.tip_rate_delta_pp),
       current_report_id: cur?.id ?? null,
       feedback_updated_after_generation: cur?.flag ?? false,
     };

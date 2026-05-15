@@ -1,9 +1,18 @@
 "use client";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ExpectationBadge } from "@/components/ui/badge";
+import { Badge, ExpectationBadge } from "@/components/ui/badge";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { classifyFixed } from "@/lib/classify";
-import { formatPercent, formatQuantity, formatRating } from "@/lib/format";
+import {
+  formatDeltaPP,
+  formatMoney,
+  formatPercent,
+  formatQuantity,
+  formatRating,
+} from "@/lib/format";
+
+/** Neutral band around the location tip-rate average (percentage points). */
+const TIP_DELTA_NEUTRAL_PP = 0.25;
 
 export interface MetricsSummary {
   attendance_pct: number | null;
@@ -38,6 +47,12 @@ export interface QuarterRow {
   tattle_score_speed_of_service: number | null;
   customer_review_quantity: number | null;
   customer_service_rating: number | null;
+  // POS tip metrics — null if no sales data for this period
+  tip_rate_pct: number | null;
+  tip_per_hour: number | null;
+  location_tip_rate_pct: number | null;
+  location_tip_per_hour: number | null;
+  tip_rate_delta_pp: number | null;
   current_report_id: string | null;
   feedback_updated_after_generation: boolean;
 }
@@ -99,6 +114,9 @@ export function PerformanceHistoryTabs({
                   <th className="py-2 pr-4">Speed</th>
                   <th className="py-2 pr-4">Reviews</th>
                   <th className="py-2 pr-4">Cust. service rating</th>
+                  <th className="py-2 pr-4">Tip rate</th>
+                  <th className="py-2 pr-4">Tip / hr</th>
+                  <th className="py-2 pr-4">vs Loc avg</th>
                   <th className="py-2 pr-4">Report</th>
                 </tr>
               </thead>
@@ -125,6 +143,15 @@ export function PerformanceHistoryTabs({
                     <MetricCell value={r.tattle_score_speed_of_service} metric="tattle_score_speed_of_service" kind="rating" />
                     <td className="py-2 pr-4">{formatQuantity(r.customer_review_quantity)}</td>
                     <MetricCell value={r.customer_service_rating} metric="customer_service_rating" kind="rating" />
+                    <td className="py-2 pr-4">{formatPercent(r.tip_rate_pct)}</td>
+                    <td className="py-2 pr-4">{formatMoney(r.tip_per_hour)}</td>
+                    <td className="py-2 pr-4">
+                      <TipBadge
+                        deltaPp={r.tip_rate_delta_pp}
+                        locationRatePct={r.location_tip_rate_pct}
+                        employeeRatePct={r.tip_rate_pct}
+                      />
+                    </td>
                     <td className="py-2 pr-4">
                       <ReportCell
                         row={r}
@@ -181,6 +208,46 @@ function MetricCell({
         <ExpectationBadge label={label} />
       </div>
     </td>
+  );
+}
+
+/**
+ * Tip-rate delta badge.
+ *
+ *   delta_pp > +0.25  →  green up arrow   (employee lifts the location tip rate)
+ *   delta_pp < -0.25  →  red down arrow   (employee drags the location tip rate)
+ *   otherwise         →  yellow flat      (within the noise band)
+ *   delta_pp is null  →  em dash          (no sales data for this period)
+ *
+ * Tooltip shows the underlying numbers so a manager can sanity-check.
+ */
+function TipBadge({
+  deltaPp,
+  locationRatePct,
+  employeeRatePct,
+}: {
+  deltaPp: number | null;
+  locationRatePct: number | null;
+  employeeRatePct: number | null;
+}) {
+  if (deltaPp === null) return <span className="text-slate-400">—</span>;
+  const tone =
+    deltaPp > TIP_DELTA_NEUTRAL_PP
+      ? "exceeds"
+      : deltaPp < -TIP_DELTA_NEUTRAL_PP
+        ? "below"
+        : "meets";
+  const arrow =
+    tone === "exceeds" ? "↑" : tone === "below" ? "↓" : "→";
+  const title =
+    `Employee: ${formatPercent(employeeRatePct)}  ·  ` +
+    `Location: ${formatPercent(locationRatePct)}  ·  ` +
+    `Δ ${formatDeltaPP(deltaPp)}`;
+  return (
+    <Badge tone={tone} title={title}>
+      <span aria-hidden>{arrow}</span>
+      <span className="ml-1 tabular-nums">{formatDeltaPP(deltaPp)}</span>
+    </Badge>
   );
 }
 
