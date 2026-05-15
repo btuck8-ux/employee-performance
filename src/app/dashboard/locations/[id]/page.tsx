@@ -186,6 +186,7 @@ export default async function LocationDetailPage({
   const posRefunds = Number(search.pos_refunds ?? 0);
   const posQuarters = Number(search.pos_quarters ?? 0);
   const posRecomputed = Number(search.pos_recomputed ?? 0);
+  const posTeams = Number(search.pos_teams ?? 0);
   const posSkippedOtherLocation = Number(search.pos_skipped_other_location ?? 0);
   const posError = typeof search.pos_error === "string" ? search.pos_error : null;
   const posWarnings = typeof search.pos_warnings === "string" ? search.pos_warnings : null;
@@ -220,6 +221,14 @@ export default async function LocationDetailPage({
             ? new Date(location.last_report_generated_at).toLocaleString()
             : "—"}
         </p>
+        <div className="mt-3 flex gap-2">
+          <Link
+            href={`/dashboard/locations/${id}/teams`}
+            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+          >
+            Teams analytics →
+          </Link>
+        </div>
       </div>
 
       {importError && (
@@ -687,6 +696,9 @@ export default async function LocationDetailPage({
           Receipts: {posIn} new, {posUp} updated · Split-tender: {posSplit} · Refunds: {posRefunds} ·
           Recomputed performance for {posRecomputed} {posRecomputed === 1 ? "employee-quarter" : "employee-quarters"}
           {posQuarters > 0 && ` across ${posQuarters} ${posQuarters === 1 ? "quarter" : "quarters"}`}.
+          {posTeams > 0 && (
+            <> Refreshed {posTeams} co-presence team{posTeams === 1 ? "" : "s"} for the Teams view.</>
+          )}
           {posSkippedOtherLocation > 0 && (
             <p className="mt-1 text-xs text-emerald-800/80">
               Skipped {posSkippedOtherLocation} row{posSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.

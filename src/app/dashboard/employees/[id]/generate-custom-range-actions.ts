@@ -143,6 +143,15 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
       tattle_score_food_quality: m.tattle_score_food_quality,
       tattle_score_accuracy: m.tattle_score_accuracy,
       tattle_score_speed_of_service: m.tattle_score_speed_of_service,
+      // Phase 7b: presence-based tip metrics, freshly computed over the
+      // custom range by compute_employee_tip_metrics. Math is sum(tips) /
+      // sum(sales) over the whole range — the mathematically correct
+      // aggregation (NOT an unweighted average of quarter rates).
+      tip_rate_pct: m.tip_rate_pct,
+      tip_per_hour: m.tip_per_hour,
+      location_tip_rate_pct: m.location_tip_rate_pct,
+      location_tip_per_hour: m.location_tip_per_hour,
+      tip_rate_delta_pp: m.tip_rate_delta_pp,
     },
     manager_feedback,
     generated_at,

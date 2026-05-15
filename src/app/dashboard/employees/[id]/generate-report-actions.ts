@@ -72,6 +72,7 @@ export async function renderAndStorePerformanceReport(
        customer_service_rating, customer_review_quantity,
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
+       tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
        employees(employee_name, employee_code, hire_date),
        locations(name),
        report_periods(label, period_start, period_end)`
@@ -109,6 +110,7 @@ export async function renderAndStorePerformanceReport(
        customer_service_rating, customer_review_quantity,
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
+       tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
        report_periods!inner(label, period_start)`
     )
     .eq("employee_id", pr.employee_id)
@@ -132,6 +134,11 @@ export async function renderAndStorePerformanceReport(
     tattle_score_food_quality: number | string | null;
     tattle_score_accuracy: number | string | null;
     tattle_score_speed_of_service: number | string | null;
+    tip_rate_pct: number | string | null;
+    tip_per_hour: number | string | null;
+    location_tip_rate_pct: number | string | null;
+    location_tip_per_hour: number | string | null;
+    tip_rate_delta_pp: number | string | null;
     report_periods: { label: string; period_start: string } | null;
   };
   const rowsAsc = ((trailingRows ?? []) as unknown as TrailingDbRow[])
@@ -160,6 +167,11 @@ export async function renderAndStorePerformanceReport(
       tattle_score_food_quality: num(r.tattle_score_food_quality),
       tattle_score_accuracy: num(r.tattle_score_accuracy),
       tattle_score_speed_of_service: num(r.tattle_score_speed_of_service),
+      tip_rate_pct: num(r.tip_rate_pct),
+      tip_per_hour: num(r.tip_per_hour),
+      location_tip_rate_pct: num(r.location_tip_rate_pct),
+      location_tip_per_hour: num(r.location_tip_per_hour),
+      tip_rate_delta_pp: num(r.tip_rate_delta_pp),
     };
     return {
       label: r.report_periods!.label,
@@ -192,6 +204,11 @@ export async function renderAndStorePerformanceReport(
       tattle_score_food_quality: num(pr.tattle_score_food_quality),
       tattle_score_accuracy: num(pr.tattle_score_accuracy),
       tattle_score_speed_of_service: num(pr.tattle_score_speed_of_service),
+      tip_rate_pct: num(pr.tip_rate_pct),
+      tip_per_hour: num(pr.tip_per_hour),
+      location_tip_rate_pct: num(pr.location_tip_rate_pct),
+      location_tip_per_hour: num(pr.location_tip_per_hour),
+      tip_rate_delta_pp: num(pr.tip_rate_delta_pp),
     },
     manager_feedback: pr.manager_feedback as string | null,
     generated_at,

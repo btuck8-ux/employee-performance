@@ -31,6 +31,7 @@ interface IngestStats {
   refund_rows: number;
   affected_quarters: number;
   recomputed: number;
+  teams_recomputed: number;
   skipped_other_location: number;
   warnings: string[];
   failures: string[];
@@ -44,6 +45,7 @@ function newStats(warnings: string[] = []): IngestStats {
     refund_rows: 0,
     affected_quarters: 0,
     recomputed: 0,
+    teams_recomputed: 0,
     skipped_other_location: 0,
     warnings,
     failures: [],
@@ -234,6 +236,39 @@ async function ingestPOSForLocation(
     Array.from({ length: RECOMPUTE_CONCURRENCY }, recomputeWorker)
   );
 
+  // Co-presence team aggregation (Phase 7). One SQL function call per touched
+  // quarter does the full sweep — adding sales shifts the location baseline,
+  // which propagates to every team's delta_vs_loc_pp, so we have to rebuild
+  // each affected (location, quarter) slice from scratch. The function is
+  // idempotent: DELETEs the slice and re-INSERTs in one transaction.
+  //
+  // Run serially after the per-employee recompute completes — much cheaper
+  // than the per-employee loop (single SQL call per quarter, not per
+  // employee), so no need for a worker pool.
+  for (const { year, quarter } of affectedQuarters.values()) {
+    const { data: period } = await supabase
+      .from("report_periods")
+      .select("id")
+      .eq("year", year)
+      .eq("quarter", quarter)
+      .maybeSingle();
+    if (!period?.id) continue;
+    const { data: teamCount, error: teamErr } = await supabase.rpc(
+      "recompute_team_tip_impact",
+      {
+        p_location_id: location.id,
+        p_report_period_id: period.id as string,
+      }
+    );
+    if (teamErr) {
+      stats.failures.push(
+        `Team aggregation ${year}-Q${quarter} @ ${location.name}: ${teamErr.message}`
+      );
+    } else if (typeof teamCount === "number") {
+      stats.teams_recomputed += teamCount;
+    }
+  }
+
   await supabase
     .from("locations")
     .update({ last_data_uploaded_at: new Date().toISOString() })
@@ -295,10 +330,11 @@ export async function uploadPOSCsvAction(formData: FormData) {
     `[pos-import] ${location.name}: sales ${stats.sales_inserted}+${stats.sales_updated}u, ` +
       `split=${stats.split_tender_receipts}, refunds=${stats.refund_rows}, ` +
       `quarters=${stats.affected_quarters}, recomputed=${stats.recomputed}, ` +
-      `skipped_other=${stats.skipped_other_location}`
+      `teams=${stats.teams_recomputed}, skipped_other=${stats.skipped_other_location}`
   );
 
   revalidatePath(`/dashboard/locations/${location_id}`);
+  revalidatePath(`/dashboard/locations/${location_id}/teams`);
   revalidatePath("/dashboard/employees");
 
   const params = new URLSearchParams();
@@ -308,6 +344,7 @@ export async function uploadPOSCsvAction(formData: FormData) {
   params.set("pos_refunds", String(stats.refund_rows));
   params.set("pos_quarters", String(stats.affected_quarters));
   params.set("pos_recomputed", String(stats.recomputed));
+  params.set("pos_teams", String(stats.teams_recomputed));
   if (stats.skipped_other_location > 0)
     params.set("pos_skipped_other_location", String(stats.skipped_other_location));
   if (stats.warnings.length > 0)
@@ -414,6 +451,7 @@ export async function uploadPOSCsvBulkAction(formData: FormData) {
       stats.affected_quarters
     );
     aggregated.recomputed += stats.recomputed;
+    aggregated.teams_recomputed += stats.teams_recomputed;
     aggregated.skipped_other_location += stats.skipped_other_location;
     aggregated.failures.push(...stats.failures);
     perLocation.push({
@@ -452,8 +490,8 @@ export async function uploadPOSCsvBulkAction(formData: FormData) {
     `[pos-import] BULK DONE across ${targets.length} locations: ` +
       `sales=${aggregated.sales_inserted}+${aggregated.sales_updated}u, ` +
       `split=${aggregated.split_tender_receipts}, refunds=${aggregated.refund_rows}, ` +
-      `recomputed=${aggregated.recomputed}, unmatched=${trulyUnmatched}, ` +
-      `failures=${aggregated.failures.length}`
+      `recomputed=${aggregated.recomputed}, teams=${aggregated.teams_recomputed}, ` +
+      `unmatched=${trulyUnmatched}, failures=${aggregated.failures.length}`
   );
 
   const params = new URLSearchParams();
@@ -463,6 +501,7 @@ export async function uploadPOSCsvBulkAction(formData: FormData) {
   params.set("bulk_pos_split", String(aggregated.split_tender_receipts));
   params.set("bulk_pos_refunds", String(aggregated.refund_rows));
   params.set("bulk_pos_recomputed", String(aggregated.recomputed));
+  params.set("bulk_pos_teams", String(aggregated.teams_recomputed));
   params.set("bulk_pos_unmatched", String(trulyUnmatched));
   const breakdown = perLocation
     .filter((p) => p.in + p.up > 0)

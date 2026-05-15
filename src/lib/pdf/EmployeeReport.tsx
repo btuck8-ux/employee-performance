@@ -9,6 +9,7 @@ import {
 import { classifyFixed } from "@/lib/classify";
 import {
   formatHireDate,
+  formatMoney,
   formatPercent,
   formatQuantity,
   formatRating,
@@ -16,12 +17,12 @@ import {
 } from "@/lib/format";
 import type { ExpectationLabel, FixedMetricKey } from "@/lib/types";
 
-// 1.1.0 added Δ + sparkline + trend page. 1.2.0 keeps Δ but drops the
-// sparkline/trend page (Helvetica's glyph set doesn't include the arrow
-// characters and the bar-chart density wasn't carrying its weight on the
-// page) and switches Δ formatting to ASCII +/- only — color carries the
-// direction signal cleanly without needing arrow glyphs.
-export const TEMPLATE_VERSION = "1.2.0";
+// 1.1.0 added Δ + sparkline + trend page. 1.2.0 dropped the sparkline/trend
+// page. 1.3.0 (Phase 7b) adds presence-based tip metrics — tip rate, tip per
+// hour, and tip-rate-vs-location-average — driven by 2025 POS sales ingest.
+// Tip rows render only when the underlying data is present; locations without
+// POS data still produce a clean report without empty tip rows.
+export const TEMPLATE_VERSION = "1.3.0";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -136,6 +137,13 @@ export interface MetricSnapshot {
   tattle_score_food_quality: number | null;
   tattle_score_accuracy: number | null;
   tattle_score_speed_of_service: number | null;
+  // Phase 7b: presence-based tip metrics. All five null when no POS data
+  // covered this period at the employee's location.
+  tip_rate_pct: number | null;
+  tip_per_hour: number | null;
+  location_tip_rate_pct: number | null;
+  location_tip_per_hour: number | null;
+  tip_rate_delta_pp: number | null;
 }
 
 export interface TrailingQuarter {
@@ -167,14 +175,36 @@ export interface ReportData {
 
 // ---- Metric kind table ----
 
-type MetricKind = "pct" | "rating" | "count";
+type MetricKind = "pct" | "rating" | "count" | "money" | "delta_pp";
 
 interface MetricDef {
   key: keyof MetricSnapshot;
   name: string;
   kind: MetricKind;
+  /** Use one of the legacy fixed-threshold buckets for the Notes column. */
   classify?: FixedMetricKey;
+  /**
+   * Callback-driven classifier for metrics whose "expectation" isn't a fixed
+   * threshold (e.g., tip-rate delta vs the location average). Returning null
+   * leaves the Notes column blank.
+   */
+  classifyValue?: (
+    value: number | null,
+    snapshot: MetricSnapshot
+  ) => ExpectationLabel | null;
+  /**
+   * Hide this row entirely if the predicate returns false. Used to suppress
+   * tip metrics for periods with no POS data so the PDF doesn't render empty
+   * "—" rows for locations that haven't ingested sales yet.
+   */
+  showIf?: (snapshot: MetricSnapshot) => boolean;
 }
+
+/** Neutral band for the tip-rate vs location-average classifier. */
+const TIP_DELTA_NEUTRAL_PP = 0.25;
+
+const hasTipData = (s: MetricSnapshot) =>
+  s.tip_rate_pct !== null || s.tip_per_hour !== null;
 
 // Order matches the existing on-page table.
 const METRIC_DEFS: MetricDef[] = [
@@ -189,6 +219,31 @@ const METRIC_DEFS: MetricDef[] = [
   { key: "tattle_score_food_quality", name: "Tattle — Food Quality", kind: "rating", classify: "tattle_score_food_quality" },
   { key: "tattle_score_accuracy", name: "Tattle — Accuracy", kind: "rating", classify: "tattle_score_accuracy" },
   { key: "tattle_score_speed_of_service", name: "Tattle — Speed Of Service", kind: "rating", classify: "tattle_score_speed_of_service" },
+  // ---- Phase 7b: tip metrics, suppressed when POS data is absent ----
+  {
+    key: "tip_rate_pct",
+    name: "Tip Rate %",
+    kind: "pct",
+    showIf: hasTipData,
+  },
+  {
+    key: "tip_per_hour",
+    name: "Tip / Hour",
+    kind: "money",
+    showIf: hasTipData,
+  },
+  {
+    key: "tip_rate_delta_pp",
+    name: "Tip Rate vs Location Avg",
+    kind: "delta_pp",
+    showIf: hasTipData,
+    classifyValue: (value) => {
+      if (value === null) return null;
+      if (value >  TIP_DELTA_NEUTRAL_PP) return "Exceeds Expectations";
+      if (value < -TIP_DELTA_NEUTRAL_PP) return "Below Expectations";
+      return "Meets Expectations";
+    },
+  },
 ];
 
 // ---- Helpers ----
@@ -235,8 +290,9 @@ function formatDelta(
   const color = diff > 0 ? COLORS.positive : COLORS.negative;
   const abs = Math.abs(diff);
   let body: string;
-  if (kind === "pct") body = `${abs.toFixed(2)}pp`;
+  if (kind === "pct" || kind === "delta_pp") body = `${abs.toFixed(2)}pp`;
   else if (kind === "rating") body = abs.toFixed(2);
+  else if (kind === "money") body = `$${abs.toFixed(2)}`;
   else body = Math.round(abs).toString();
   return { text: `${sign}${body}`, color };
 }
@@ -337,37 +393,56 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
             <Text style={[styles.tableHeaderCell, styles.notesCol]}>Notes</Text>
           </View>
 
-          {METRIC_DEFS.map((def, i) => {
-            const current = num(m[def.key]);
-            const prior = priorValue(trailing, def.key);
-            const delta = formatDelta(current, prior, def.kind);
-            // Special display for survey engagement (combines pct + counts)
-            let display: string;
-            if (def.key === "survey_engagement_pct") {
-              display =
-                m.survey_engagement_pct !== null
-                  ? `${formatPercent(m.survey_engagement_pct)}  (${formatQuantity(m.surveys_completed)} of ${formatQuantity(m.surveys_assigned)})`
-                  : "—";
-            } else if (def.kind === "pct") {
-              display = formatPercent(current);
-            } else if (def.kind === "rating") {
-              display = formatRating(current);
-            } else {
-              display = formatQuantity(current);
-            }
-            return (
-              <MetricRow
-                key={def.key}
-                name={def.name}
-                display={display}
-                classification={
-                  def.classify ? classifyOrNull(def.classify, current) : null
-                }
-                delta={delta}
-                isLast={i === METRIC_DEFS.length - 1}
-              />
+          {(() => {
+            const visible = METRIC_DEFS.filter(
+              (def) => !def.showIf || def.showIf(m)
             );
-          })}
+            return visible.map((def, i) => {
+              const current = num(m[def.key]);
+              const prior = priorValue(trailing, def.key);
+              const delta = formatDelta(current, prior, def.kind);
+              // Special display for survey engagement (combines pct + counts)
+              let display: string;
+              if (def.key === "survey_engagement_pct") {
+                display =
+                  m.survey_engagement_pct !== null
+                    ? `${formatPercent(m.survey_engagement_pct)}  (${formatQuantity(m.surveys_completed)} of ${formatQuantity(m.surveys_assigned)})`
+                    : "—";
+              } else if (def.kind === "pct") {
+                display = formatPercent(current);
+              } else if (def.kind === "rating") {
+                display = formatRating(current);
+              } else if (def.kind === "money") {
+                display = formatMoney(current);
+              } else if (def.kind === "delta_pp") {
+                // ASCII +/- only — Helvetica has no unicode-minus glyph.
+                display =
+                  current === null
+                    ? "—"
+                    : `${current > 0 ? "+" : current < 0 ? "-" : ""}${Math.abs(
+                        current
+                      ).toFixed(2)}pp`;
+              } else {
+                display = formatQuantity(current);
+              }
+              let classification: ExpectationLabel | null = null;
+              if (def.classifyValue) {
+                classification = def.classifyValue(current, m);
+              } else if (def.classify) {
+                classification = classifyOrNull(def.classify, current);
+              }
+              return (
+                <MetricRow
+                  key={def.key}
+                  name={def.name}
+                  display={display}
+                  classification={classification}
+                  delta={delta}
+                  isLast={i === visible.length - 1}
+                />
+              );
+            });
+          })()}
         </View>
 
         <Text style={styles.sectionTitle}>Manager Feedback</Text>
