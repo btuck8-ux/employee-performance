@@ -6,6 +6,7 @@ import {
   formatMoney,
   formatPercent,
 } from "@/lib/format";
+import { CohortTimelineModal } from "./CohortTimelineModal";
 
 export interface TeamRow {
   memberIds: string[];
@@ -20,6 +21,10 @@ export interface TeamRow {
 
 interface TeamLeaderboardProps {
   teams: TeamRow[];
+  locationId: string;
+  windowStart: string | null;
+  windowEnd: string | null;
+  windowLabel: string;
 }
 
 /** Default ranking: hours_together × |delta_pp|. Teams without delta sink. */
@@ -30,9 +35,17 @@ function impactScore(t: TeamRow): number {
 
 type SortKey = "impact" | "hours" | "delta_desc" | "delta_asc" | "rate";
 
-export function TeamLeaderboard({ teams }: TeamLeaderboardProps) {
+export function TeamLeaderboard({
+  teams,
+  locationId,
+  windowStart,
+  windowEnd,
+  windowLabel,
+}: TeamLeaderboardProps) {
   const [sort, setSort] = useState<SortKey>("impact");
   const [sizeFilter, setSizeFilter] = useState<number | "all">("all");
+  const [selectedTeam, setSelectedTeam] = useState<TeamRow | null>(null);
+  const drilldownAvailable = Boolean(windowStart && windowEnd);
 
   const filtered = useMemo(() => {
     const list =
@@ -124,6 +137,7 @@ export function TeamLeaderboard({ teams }: TeamLeaderboardProps) {
               <th className="py-2 pr-4 text-right">Tip rate</th>
               <th className="py-2 pr-4 text-right">Δ vs loc</th>
               <th className="py-2 pr-4 text-right">Impact</th>
+              {drilldownAvailable && <th className="py-2 pl-2 w-20" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -138,8 +152,15 @@ export function TeamLeaderboard({ teams }: TeamLeaderboardProps) {
                       : "meets";
               const arrow =
                 tone === "exceeds" ? "↑" : tone === "below" ? "↓" : tone === "meets" ? "→" : "—";
+              const clickable = drilldownAvailable;
               return (
-                <tr key={t.memberIds.join("|")}>
+                <tr
+                  key={t.memberIds.join("|")}
+                  className={
+                    clickable ? "cursor-pointer hover:bg-slate-50/80 transition-colors" : undefined
+                  }
+                  onClick={() => clickable && setSelectedTeam(t)}
+                >
                   <td className="py-2 pr-3 text-xs text-slate-500 tabular-nums">
                     {idx + 1}
                   </td>
@@ -182,6 +203,16 @@ export function TeamLeaderboard({ teams }: TeamLeaderboardProps) {
                   <td className="py-2 pr-4 text-right tabular-nums text-xs text-slate-600">
                     {impactScore(t).toFixed(1)}
                   </td>
+                  {drilldownAvailable && (
+                    <td className="py-2 pl-2 text-right">
+                      <span
+                        className="text-xs text-slate-500 group-hover:text-slate-900"
+                        aria-label="View timeline"
+                      >
+                        Timeline →
+                      </span>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -193,6 +224,25 @@ export function TeamLeaderboard({ teams }: TeamLeaderboardProps) {
         <p className="text-sm text-slate-500">
           No cohorts match the current filter. Try widening the size filter.
         </p>
+      )}
+
+      {drilldownAvailable && selectedTeam && windowStart && windowEnd && (
+        <CohortTimelineModal
+          open
+          onClose={() => setSelectedTeam(null)}
+          memberIds={selectedTeam.memberIds}
+          memberNames={selectedTeam.memberNames}
+          locationId={locationId}
+          startDate={windowStart}
+          endDate={windowEnd}
+          windowLabel={windowLabel}
+          summary={{
+            hoursTogether: selectedTeam.hoursTogether,
+            salesDuring: selectedTeam.salesDuring,
+            tipRatePct: selectedTeam.tipRatePct,
+            deltaVsLocPp: selectedTeam.deltaVsLocPp,
+          }}
+        />
       )}
     </div>
   );

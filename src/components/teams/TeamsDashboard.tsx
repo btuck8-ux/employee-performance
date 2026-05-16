@@ -6,6 +6,7 @@ import { EmployeeScatter, type ScatterRow } from "./EmployeeScatter";
 import { TeamLeaderboard, type TeamRow } from "./TeamLeaderboard";
 import { PairHeatmap } from "./PairHeatmap";
 import { HourlyTipRateView } from "./HourlyTipRateView";
+import { EmployeeDeltaBar } from "./EmployeeDeltaBar";
 import { resolveQuarterWindow, resolveAllTimeWindow } from "./TimeWindowPicker";
 
 export interface Quarter {
@@ -106,6 +107,7 @@ export function TeamsDashboard({
       <Tabs defaultValue="scatter" className="w-full">
         <TabsList>
           <TabsTrigger value="scatter">Employee scatter</TabsTrigger>
+          <TabsTrigger value="ranking">Delta ranking</TabsTrigger>
           <TabsTrigger value="leaderboard">Team leaderboard</TabsTrigger>
           <TabsTrigger value="heatmap">Pair heatmap</TabsTrigger>
           <TabsTrigger value="hourly">Hourly tip rate</TabsTrigger>
@@ -115,8 +117,18 @@ export function TeamsDashboard({
           <EmployeeScatter rows={scatterRows} />
         </TabsContent>
 
+        <TabsContent value="ranking">
+          <EmployeeDeltaBar rows={scatterRows} />
+        </TabsContent>
+
         <TabsContent value="leaderboard">
-          <TeamLeaderboard teams={teams} />
+          <TeamLeaderboard
+            teams={teams}
+            locationId={locationId}
+            windowStart={selectedQuarter?.period_start ?? null}
+            windowEnd={selectedQuarter?.period_end ?? null}
+            windowLabel={selectedQuarter?.label ?? "—"}
+          />
         </TabsContent>
 
         <TabsContent value="heatmap">
