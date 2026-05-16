@@ -10,6 +10,11 @@ import {
   PerformanceHistoryTabs,
   type QuarterRow,
 } from "@/components/employee/PerformanceHistoryTabs";
+import {
+  CustomerServiceScoreCard,
+  type CustomerServiceScoreQuarterRow,
+} from "@/components/employee/CustomerServiceScoreCard";
+import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { generateTattleSummaryAction } from "./tattle-summary-actions";
 import { generatePerformanceReportAction } from "./generate-report-actions";
 import { generateTaskDetailReportAction } from "./generate-task-detail-actions";
@@ -63,7 +68,7 @@ export default async function EmployeeDetailPage({
   const { data: records } = await supabase
     .from("performance_records")
     .select(
-      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(label, period_start, period_end)"
+      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp, customer_service_score, customer_service_score_components_count, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(label, period_start, period_end)"
     )
     .eq("employee_id", id);
 
@@ -94,6 +99,8 @@ export default async function EmployeeDetailPage({
     location_tip_rate_pct: number | string | null;
     location_tip_per_hour: number | string | null;
     tip_rate_delta_pp: number | string | null;
+    customer_service_score: number | string | null;
+    customer_service_score_components_count: number | null;
     tattle_summary: string | null;
     tattle_summary_generated_at: string | null;
     manager_feedback: string | null;
@@ -174,6 +181,24 @@ export default async function EmployeeDetailPage({
       feedback_updated_after_generation: cur?.flag ?? false,
     };
   });
+
+  // ---- Phase 9: CS Score quarter rows + weights for the tile ----
+  const csScoreRows: CustomerServiceScoreQuarterRow[] = rawRows
+    .filter((r) => r.report_periods !== null)
+    .map((r) => ({
+      performance_record_id: r.id,
+      label: r.report_periods?.label ?? "—",
+      period_start: r.report_periods?.period_start ?? "",
+      customer_service_score: toNumOrNull(r.customer_service_score),
+      customer_service_score_components_count:
+        r.customer_service_score_components_count ?? null,
+      tattle_rating: toNumOrNull(r.tattle_rating),
+      tattle_quantity: r.tattle_quantity,
+      customer_service_rating: toNumOrNull(r.customer_service_rating),
+      customer_review_quantity: r.customer_review_quantity,
+      tip_rate_delta_pp: toNumOrNull(r.tip_rate_delta_pp),
+    }));
+  const csWeights = await fetchCustomerServiceWeights(supabase);
 
   const tattleSummaryRows = rawRows
     .filter((r) => (r.tattle_quantity ?? 0) > 0)
@@ -439,6 +464,22 @@ export default async function EmployeeDetailPage({
             generateTaskDetailAction={generateTaskDetailReportAction}
             taskDetailReportIdByRecord={taskDetailReportIdByRecord}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Customer service score</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {csScoreRows.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No performance records yet. The composite tile will appear once
+              underlying data (Tattle, reviews, POS) is ingested.
+            </p>
+          ) : (
+            <CustomerServiceScoreCard quarters={csScoreRows} weights={csWeights} />
+          )}
         </CardContent>
       </Card>
 

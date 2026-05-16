@@ -8,6 +8,7 @@ import {
   type ReviewImportResult,
 } from "@/lib/customer-review-import";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
+import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
 import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
@@ -288,6 +289,7 @@ async function ingestReviewsForLocation(
   stats.attributions_inserted = attributionPayloads.length;
 
   // ---- Phase 3: recompute performance ----
+  const csWeights = await fetchCustomerServiceWeights(supabase);
   for (const key of affectedKeys) {
     const [employee_id, yearStr, quarterStr] = key.split("|");
     const year = parseInt(yearStr, 10);
@@ -297,7 +299,8 @@ async function ingestReviewsForLocation(
       employee_id,
       location.id,
       year,
-      quarter
+      quarter,
+      { csWeights }
     );
     if (result.ok) stats.recomputed += 1;
     else stats.failures.push(`Recompute ${employee_id} ${year}-Q${quarter} @ ${location.name}: ${result.error}`);

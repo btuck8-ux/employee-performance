@@ -8,6 +8,7 @@ import {
   type TattleImportResult,
 } from "@/lib/tattle-import";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
+import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
 import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
@@ -332,6 +333,7 @@ async function ingestTattlesForLocation(
   stats.attributions_inserted = attributionPayloads.length;
 
   // ---- Phase 4: recompute performance for affected (employee, quarter) ----
+  const csWeights = await fetchCustomerServiceWeights(supabase);
   for (const key of affectedKeys) {
     const [employee_id, yearStr, quarterStr] = key.split("|");
     const year = parseInt(yearStr, 10);
@@ -341,7 +343,8 @@ async function ingestTattlesForLocation(
       employee_id,
       location.id,
       year,
-      quarter
+      quarter,
+      { csWeights }
     );
     if (result.ok) stats.recomputed += 1;
     else stats.failures.push(`Recompute ${employee_id} ${year}-Q${quarter} @ ${location.name}: ${result.error}`);

@@ -9,6 +9,7 @@ import {
   TEMPLATE_VERSION,
   type ReportData,
 } from "@/lib/pdf/EmployeeReport";
+import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
 
 /**
@@ -103,12 +104,14 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     );
   const manager_feedback = fb.length > 0 ? fb[0].manager_feedback : null;
 
+  const csWeights = await fetchCustomerServiceWeights(supabase);
   const computed = await computeMetricsForRange(
     supabase,
     employee_id,
     location_id,
     range_start,
-    range_end
+    range_end,
+    { csWeights }
   );
   if (!computed.ok) {
     console.error("[custom-range] compute failed:", computed.error);
@@ -152,9 +155,12 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
       location_tip_rate_pct: m.location_tip_rate_pct,
       location_tip_per_hour: m.location_tip_per_hour,
       tip_rate_delta_pp: m.tip_rate_delta_pp,
+      customer_service_score: m.customer_service_score,
+      customer_service_score_components_count: m.customer_service_score_components_count,
     },
     manager_feedback,
     generated_at,
+    customer_service_weights: csWeights,
   };
 
   const docElement = React.createElement(EmployeeReportDocument, { data: reportData });
@@ -186,6 +192,7 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     tattle_score_accuracy: { meets: 90 },
     tattle_score_speed_of_service: { meets: 90 },
     customer_service_rating: { meets: 4.25 },
+    customer_service_score: { yellow: 70, green: 85 },
   };
 
   const { data: { user } = { user: null } } = await supabase.auth.getUser();

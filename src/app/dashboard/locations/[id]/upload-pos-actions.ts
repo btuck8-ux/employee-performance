@@ -8,6 +8,7 @@ import {
   type PosImportResult,
 } from "@/lib/pos-import";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
+import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
 import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
@@ -215,6 +216,10 @@ async function ingestPOSForLocation(
     }
   }
 
+  // Fetch weights once before the recompute pool; pass through to every job so
+  // we don't round-trip the singleton config row N times.
+  const csWeights = await fetchCustomerServiceWeights(supabase);
+
   async function recomputeWorker() {
     while (true) {
       const job = jobs.shift();
@@ -224,7 +229,8 @@ async function ingestPOSForLocation(
         job.employee_id,
         location.id,
         job.year,
-        job.quarter
+        job.quarter,
+        { csWeights }
       );
       if (result.ok) stats.recomputed += 1;
       else

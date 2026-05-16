@@ -8,6 +8,7 @@ import {
   Users,
   FileText,
   Upload,
+  Settings,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/employees", label: "Employees", icon: Users },
   { href: "/dashboard/reports", label: "Reports", icon: FileText },
   { href: "/dashboard/uploads", label: "Uploads", icon: Upload },
+  { href: "/dashboard/admin/scoring", label: "Scoring", icon: Settings },
 ];
 
 export default async function DashboardLayout({

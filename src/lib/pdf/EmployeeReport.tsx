@@ -8,6 +8,14 @@ import {
 } from "@react-pdf/renderer";
 import { classifyFixed } from "@/lib/classify";
 import {
+  classifyCustomerServiceScore,
+  computeCustomerServiceScoreBreakdown,
+  DEFAULT_CS_WEIGHTS,
+  formatCustomerServiceScore,
+  type CustomerServiceScoreBreakdown,
+  type CustomerServiceWeights,
+} from "@/lib/customer-service-score";
+import {
   formatHireDate,
   formatMoney,
   formatPercent,
@@ -22,7 +30,9 @@ import type { ExpectationLabel, FixedMetricKey } from "@/lib/types";
 // hour, and tip-rate-vs-location-average — driven by 2025 POS sales ingest.
 // Tip rows render only when the underlying data is present; locations without
 // POS data still produce a clean report without empty tip rows.
-export const TEMPLATE_VERSION = "1.3.0";
+// 1.4.0 (Phase 9) adds the Customer Service Score composite row + breakdown
+// sub-section; the row + sub-section auto-hide when the composite is null.
+export const TEMPLATE_VERSION = "1.4.0";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -92,6 +102,48 @@ const styles = StyleSheet.create({
     padding: 12,
     minHeight: 80,
   },
+  // ---- Phase 9: Customer Service breakdown sub-section ----
+  breakdownTable: {
+    borderWidth: 1,
+    borderColor: COLORS.rule,
+    borderRadius: 4,
+  },
+  breakdownHeader: {
+    flexDirection: "row",
+    backgroundColor: "#F1F5F9",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.rule,
+  },
+  breakdownRow: {
+    flexDirection: "row",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: COLORS.rule,
+    alignItems: "center",
+  },
+  breakdownRowLast: {
+    flexDirection: "row",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  bdComponentCol: { flex: 4 },
+  bdNativeCol: { flex: 2 },
+  bdScoreCol: { flex: 2 },
+  bdBadgeCol: { flex: 3 },
+  legendBox: {
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 3,
+    fontSize: 8,
+    color: COLORS.muted,
+    lineHeight: 1.4,
+  },
   signatureRow: { flexDirection: "row", marginTop: 14 },
   sigSignatureCol: { flex: 3, marginRight: 16 },
   sigDateCol: { flex: 2 },
@@ -144,6 +196,11 @@ export interface MetricSnapshot {
   location_tip_rate_pct: number | null;
   location_tip_per_hour: number | null;
   tip_rate_delta_pp: number | null;
+  // Phase 9: composite customer service score (0–100). Null when fewer than
+  // 2 of 3 components were present; the row + breakdown sub-section auto-hide
+  // in that case.
+  customer_service_score: number | null;
+  customer_service_score_components_count: number | null;
 }
 
 export interface TrailingQuarter {
@@ -171,11 +228,17 @@ export interface ReportData {
    * being present with length > 1.
    */
   trailing_quarters?: TrailingQuarter[];
+  /**
+   * Phase 9: weights used when computing this report's composite. Used to
+   * render the per-component breakdown sub-section. Omit and the renderer
+   * falls back to defaults (0.40/0.40/0.20).
+   */
+  customer_service_weights?: CustomerServiceWeights;
 }
 
 // ---- Metric kind table ----
 
-type MetricKind = "pct" | "rating" | "count" | "money" | "delta_pp";
+type MetricKind = "pct" | "rating" | "count" | "money" | "delta_pp" | "score_100";
 
 interface MetricDef {
   key: keyof MetricSnapshot;
@@ -244,6 +307,14 @@ const METRIC_DEFS: MetricDef[] = [
       return "Meets Expectations";
     },
   },
+  // ---- Phase 9: composite customer service score, auto-hidden when null ----
+  {
+    key: "customer_service_score",
+    name: "Customer Service Score",
+    kind: "score_100",
+    showIf: (s) => s.customer_service_score !== null,
+    classifyValue: (value) => classifyCustomerServiceScore(value),
+  },
 ];
 
 // ---- Helpers ----
@@ -293,6 +364,7 @@ function formatDelta(
   if (kind === "pct" || kind === "delta_pp") body = `${abs.toFixed(2)}pp`;
   else if (kind === "rating") body = abs.toFixed(2);
   else if (kind === "money") body = `$${abs.toFixed(2)}`;
+  else if (kind === "score_100") body = `${Math.round(abs)}`;
   else body = Math.round(abs).toString();
   return { text: `${sign}${body}`, color };
 }
@@ -330,6 +402,144 @@ function MetricRow({
           <Text style={{ color: COLORS.muted }}>—</Text>
         )}
       </View>
+    </View>
+  );
+}
+
+// ---- Customer Service breakdown sub-section (Phase 9) ----
+
+function badgeForCsScore(score: number | null) {
+  return classifyCustomerServiceScore(score);
+}
+
+function CustomerServiceBreakdown({
+  metrics,
+  weights,
+}: {
+  metrics: MetricSnapshot;
+  weights: CustomerServiceWeights;
+}) {
+  const breakdown: CustomerServiceScoreBreakdown =
+    computeCustomerServiceScoreBreakdown(
+      metrics.tattle_rating,
+      metrics.customer_service_rating,
+      metrics.tip_rate_delta_pp,
+      weights
+    );
+
+  const rows: Array<{
+    name: string;
+    native: string;
+    score: number | null;
+    effectiveWeight: number | null;
+    configuredWeight: number;
+  }> = [
+    {
+      name: "Tattle rating",
+      native: formatRating(metrics.tattle_rating),
+      score: breakdown.tattle_component_score,
+      effectiveWeight: breakdown.effective_weight_tattle,
+      configuredWeight: weights.weight_tattle,
+    },
+    {
+      name: "Customer reviews",
+      native: formatRating(metrics.customer_service_rating),
+      score: breakdown.reviews_component_score,
+      effectiveWeight: breakdown.effective_weight_reviews,
+      configuredWeight: weights.weight_reviews,
+    },
+    {
+      name: "Tip-rate delta",
+      native:
+        metrics.tip_rate_delta_pp === null
+          ? "—"
+          : `${metrics.tip_rate_delta_pp > 0 ? "+" : metrics.tip_rate_delta_pp < 0 ? "-" : ""}${Math.abs(
+              metrics.tip_rate_delta_pp
+            ).toFixed(2)}pp`,
+      score: breakdown.tip_component_score,
+      effectiveWeight: breakdown.effective_weight_tip,
+      configuredWeight: weights.weight_tip,
+    },
+  ];
+
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Customer Service breakdown</Text>
+      <View style={styles.breakdownTable}>
+        <View style={styles.breakdownHeader}>
+          <Text style={[styles.tableHeaderCell, styles.bdComponentCol]}>
+            Component
+          </Text>
+          <Text style={[styles.tableHeaderCell, styles.bdNativeCol]}>
+            Native value
+          </Text>
+          <Text style={[styles.tableHeaderCell, styles.bdScoreCol]}>
+            0–100 score
+          </Text>
+          <Text style={[styles.tableHeaderCell, styles.bdBadgeCol]}>
+            Band (weight)
+          </Text>
+        </View>
+        {rows.map((r, i) => {
+          const isLast = i === rows.length - 1;
+          const cls = badgeForCsScore(r.score);
+          const weightStr =
+            r.score === null
+              ? `(${(r.configuredWeight * 100).toFixed(0)}% configured, missing)`
+              : breakdown.composite_score !== null && r.effectiveWeight !== null
+                ? `(weight ${(r.effectiveWeight * 100).toFixed(0)}%)`
+                : `(weight ${(r.configuredWeight * 100).toFixed(0)}%)`;
+          return (
+            <View
+              key={r.name}
+              style={isLast ? styles.breakdownRowLast : styles.breakdownRow}
+            >
+              <Text style={styles.bdComponentCol}>{r.name}</Text>
+              <Text style={styles.bdNativeCol}>{r.native}</Text>
+              <Text style={styles.bdScoreCol}>
+                {r.score === null ? "—" : formatCustomerServiceScore(r.score)}
+              </Text>
+              <View style={styles.bdBadgeCol}>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  {cls ? (
+                    <View style={[styles.badge, badgeStyle(cls)]}>
+                      <Text>
+                        {cls === "Exceeds Expectations"
+                          ? "Green"
+                          : cls === "Meets Expectations"
+                            ? "Yellow"
+                            : "Red"}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ color: COLORS.muted }}>—</Text>
+                  )}
+                  <Text style={{ marginLeft: 6, color: COLORS.muted, fontSize: 9 }}>
+                    {weightStr}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      {breakdown.components_count === 2 && (
+        <Text style={{ marginTop: 6, fontSize: 9, color: COLORS.muted }}>
+          Composite computed from 2 of 3 components (the missing component&apos;s
+          weight was redistributed pro-rata across the two present components).
+        </Text>
+      )}
+      <Text style={styles.legendBox}>
+        Customer Service Score blends three signals into a single 0–100
+        composite. Each component is normalized linearly (ratings:
+        (rating − 1) / 4 × 100; tip-rate delta: (delta + 2) / 4 × 100, clamped
+        to 0–100). Bands: Green ≥ 85, Yellow 70–&lt;85, Red &lt; 70.{"\n"}
+        Note: the tip component on this score uses a ±2pp window centered on
+        the location average, which is intentionally different from the
+        dashboard&apos;s Tip Rate vs Location Avg badge (±0.25pp neutral band).
+        Same underlying signal; the badge measures &quot;vs location avg,&quot;
+        the score measures &quot;contribution to top-tier service.&quot;
+      </Text>
     </View>
   );
 }
@@ -422,6 +632,10 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
                     : `${current > 0 ? "+" : current < 0 ? "-" : ""}${Math.abs(
                         current
                       ).toFixed(2)}pp`;
+              } else if (def.kind === "score_100") {
+                // Composite score rounds to whole numbers per the Phase 9 spec.
+                display =
+                  current === null ? "—" : `${formatCustomerServiceScore(current)} / 100`;
               } else {
                 display = formatQuantity(current);
               }
@@ -444,6 +658,13 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
             });
           })()}
         </View>
+
+        {m.customer_service_score !== null && (
+          <CustomerServiceBreakdown
+            metrics={m}
+            weights={data.customer_service_weights ?? DEFAULT_CS_WEIGHTS}
+          />
+        )}
 
         <Text style={styles.sectionTitle}>Manager Feedback</Text>
         <View style={styles.feedbackBox}>

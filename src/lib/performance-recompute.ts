@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { quarterInfo, type Quarter } from "./quarter";
+import {
+  computeCustomerServiceScoreBreakdown,
+  fetchCustomerServiceWeights,
+  type CustomerServiceScoreBreakdown,
+  type CustomerServiceWeights,
+} from "./customer-service-score";
 
 interface TimeEntryRow {
   entry_date: string;
@@ -155,6 +161,13 @@ export interface RangeMetrics {
   location_tip_rate_pct: number | null;
   location_tip_per_hour: number | null;
   tip_rate_delta_pp: number | null;
+  // Phase 9 — Customer Service Score (composite). Null composite when fewer
+  // than 2 of 3 components are present. Per-component scores + effective
+  // weights are kept in `customer_service_score_breakdown` so the dashboard
+  // drill-down and PDF breakdown render without re-deriving the math.
+  customer_service_score: number | null;
+  customer_service_score_components_count: number;
+  customer_service_score_breakdown: CustomerServiceScoreBreakdown;
 }
 
 /**
@@ -257,7 +270,8 @@ export async function computeMetricsForRange(
   employeeId: string,
   locationId: string,
   periodStart: string,
-  periodEnd: string
+  periodEnd: string,
+  opts?: { csWeights?: CustomerServiceWeights }
 ): Promise<{ ok: true; metrics: RangeMetrics } | { ok: false; error: string }> {
   const { data: entries, error } = await supabase
     .from("time_entries")
@@ -476,6 +490,15 @@ export async function computeMetricsForRange(
     periodEnd
   );
 
+  // ---- Customer Service Score (Phase 9) ----
+  const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
+  const csBreakdown = computeCustomerServiceScoreBreakdown(
+    tattle_rating,
+    customer_service_rating,
+    tip.tip_rate_delta_pp,
+    csWeights
+  );
+
   return {
     ok: true,
     metrics: {
@@ -505,6 +528,9 @@ export async function computeMetricsForRange(
       customer_review_quantity,
       customer_service_rating,
       ...tip,
+      customer_service_score: csBreakdown.composite_score,
+      customer_service_score_components_count: csBreakdown.components_count,
+      customer_service_score_breakdown: csBreakdown,
     },
   };
 }
@@ -520,7 +546,8 @@ export async function recomputePerformanceForQuarter(
   employeeId: string,
   locationId: string,
   year: number,
-  quarter: Quarter
+  quarter: Quarter,
+  opts?: { csWeights?: CustomerServiceWeights }
 ): Promise<{ ok: true; metrics: PerformanceMetrics } | { ok: false; error: string }> {
   const q = quarterInfo(year, quarter);
   const periodStart = q.periodStart.toISOString().slice(0, 10);
@@ -761,6 +788,15 @@ export async function recomputePerformanceForQuarter(
     periodEnd
   );
 
+  // ---- Customer Service Score (Phase 9) ----
+  const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
+  const csBreakdown = computeCustomerServiceScoreBreakdown(
+    tattle_rating,
+    customer_service_rating,
+    tip.tip_rate_delta_pp,
+    csWeights
+  );
+
   const { error: upsertError } = await supabase
     .from("performance_records")
     .upsert(
@@ -797,6 +833,8 @@ export async function recomputePerformanceForQuarter(
         location_tip_rate_pct: tip.location_tip_rate_pct,
         location_tip_per_hour: tip.location_tip_per_hour,
         tip_rate_delta_pp: tip.tip_rate_delta_pp,
+        customer_service_score: csBreakdown.composite_score,
+        customer_service_score_components_count: csBreakdown.components_count,
       },
       { onConflict: "employee_id,report_period_id" }
     );
