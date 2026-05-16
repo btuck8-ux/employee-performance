@@ -6,6 +6,10 @@ import {
   fetchCustomerServiceWeights,
   type CustomerServiceWeights,
 } from "@/lib/customer-service-score";
+import {
+  fetchTotalImpactWeights,
+  type TotalImpactWeights,
+} from "@/lib/total-impact-score";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
 import type { Quarter } from "@/lib/quarter";
 
@@ -151,6 +155,136 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
   if (recompute) {
     params.set("recomputed", String(recomputed));
     if (failures > 0) params.set("failures", String(failures));
+  }
+  redirect(`${back}?${params.toString()}`);
+}
+
+/**
+ * Update the singleton `total_impact_score_config` row and (optionally)
+ * trigger a global recompute so persisted Total Impact Scores reflect the
+ * new weighting. Mirrors `updateCustomerServiceWeightsAction` — see that
+ * function for the why-each-step rationale.
+ */
+export async function updateTotalImpactWeightsAction(formData: FormData) {
+  const back = "/dashboard/admin/scoring";
+
+  const wCs = parseWeight(formData.get("weight_cs_score"));
+  const wAtt = parseWeight(formData.get("weight_attendance"));
+  const wOn = parseWeight(formData.get("weight_on_time"));
+  const wTasks = parseWeight(formData.get("weight_tasks"));
+  const wSurvey = parseWeight(formData.get("weight_survey"));
+  const recompute = formData.get("recompute") === "1";
+
+  const five = [wCs, wAtt, wOn, wTasks, wSurvey];
+  if (five.some((w) => !Number.isFinite(w))) {
+    redirect(
+      `${back}?tis_error=${encodeURIComponent("All five TIS weights must be numbers between 0 and 1.")}`
+    );
+  }
+  if (five.some((w) => w < 0)) {
+    redirect(`${back}?tis_error=${encodeURIComponent("Weights cannot be negative.")}`);
+  }
+  if (five.some((w) => w > 1)) {
+    redirect(`${back}?tis_error=${encodeURIComponent("Each weight must be ≤ 1.")}`);
+  }
+  const sum = wCs + wAtt + wOn + wTasks + wSurvey;
+  if (Math.abs(sum - 1) > WEIGHT_SUM_EPSILON) {
+    redirect(
+      `${back}?tis_error=${encodeURIComponent(
+        `TIS weights must sum to 1.000 (got ${sum.toFixed(4)}).`
+      )}`
+    );
+  }
+
+  const supabase = await createClient();
+
+  const { data: existing } = await supabase
+    .from("total_impact_score_config")
+    .select("id")
+    .limit(1)
+    .maybeSingle();
+
+  const payload = {
+    weight_cs_score: Number(wCs.toFixed(3)),
+    weight_attendance: Number(wAtt.toFixed(3)),
+    weight_on_time: Number(wOn.toFixed(3)),
+    weight_tasks: Number(wTasks.toFixed(3)),
+    weight_survey: Number(wSurvey.toFixed(3)),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from("total_impact_score_config")
+      .update(payload)
+      .eq("id", existing.id);
+    if (error) {
+      redirect(`${back}?tis_error=${encodeURIComponent("DB update failed: " + error.message)}`);
+    }
+  } else {
+    const { error } = await supabase
+      .from("total_impact_score_config")
+      .insert(payload);
+    if (error) {
+      redirect(`${back}?tis_error=${encodeURIComponent("DB insert failed: " + error.message)}`);
+    }
+  }
+
+  let recomputed = 0;
+  let failures = 0;
+  if (recompute) {
+    // Reuse pre-fetched CS weights too so each recompute job avoids two
+    // separate singleton round-trips.
+    const csWeights: CustomerServiceWeights = await fetchCustomerServiceWeights(supabase);
+    const tisWeights: TotalImpactWeights = await fetchTotalImpactWeights(supabase);
+    const { data: prRows } = await supabase
+      .from("performance_records")
+      .select("employee_id, location_id, report_periods!inner(year, quarter)")
+      .range(0, 99999);
+    type Job = { employee_id: string; location_id: string; year: number; quarter: Quarter };
+    const jobs: Job[] = ((prRows ?? []) as unknown as Array<{
+      employee_id: string;
+      location_id: string;
+      report_periods: { year: number; quarter: number } | null;
+    }>)
+      .filter((r) => r.report_periods !== null)
+      .map((r) => ({
+        employee_id: r.employee_id,
+        location_id: r.location_id,
+        year: r.report_periods!.year,
+        quarter: r.report_periods!.quarter as Quarter,
+      }));
+
+    async function worker() {
+      while (true) {
+        const job = jobs.shift();
+        if (!job) return;
+        const result = await recomputePerformanceForQuarter(
+          supabase,
+          job.employee_id,
+          job.location_id,
+          job.year,
+          job.quarter,
+          { csWeights, tisWeights }
+        );
+        if (result.ok) recomputed += 1;
+        else failures += 1;
+      }
+    }
+    await Promise.all(
+      Array.from({ length: RECOMPUTE_CONCURRENCY }, worker)
+    );
+  }
+
+  revalidatePath("/dashboard/admin/scoring");
+  revalidatePath("/dashboard/employees");
+  revalidatePath("/dashboard/locations");
+
+  const params = new URLSearchParams();
+  params.set("tis_saved", "1");
+  if (recompute) {
+    params.set("tis_recomputed", String(recomputed));
+    if (failures > 0) params.set("tis_failures", String(failures));
   }
   redirect(`${back}?${params.toString()}`);
 }

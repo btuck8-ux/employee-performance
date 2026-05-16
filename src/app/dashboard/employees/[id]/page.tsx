@@ -15,6 +15,14 @@ import {
   type CustomerServiceScoreQuarterRow,
 } from "@/components/employee/CustomerServiceScoreCard";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { TotalImpactScoreCard } from "@/components/employee/TotalImpactScoreCard";
+import {
+  computeTotalImpactScoreBreakdown,
+  fetchAllTimeWorkedHours,
+  fetchTotalImpactWeights,
+  isEligibleForRanking,
+  TIS_ELIGIBILITY_MIN_HOURS,
+} from "@/lib/total-impact-score";
 import { generateTattleSummaryAction } from "./tattle-summary-actions";
 import { generatePerformanceReportAction } from "./generate-report-actions";
 import { generateTaskDetailReportAction } from "./generate-task-detail-actions";
@@ -68,7 +76,7 @@ export default async function EmployeeDetailPage({
   const { data: records } = await supabase
     .from("performance_records")
     .select(
-      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp, customer_service_score, customer_service_score_components_count, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(label, period_start, period_end)"
+      "id, attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts, surveys_assigned, surveys_completed, survey_engagement_pct, tasks_accountable, tasks_completed, tasks_owned, task_completion_pct, task_list_completion_pct, avg_task_list_completion_pct, tattle_quantity, tattle_rating, tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service, customer_review_quantity, customer_service_rating, tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp, customer_service_score, customer_service_score_components_count, total_impact_score, total_impact_score_components_count, tattle_summary, tattle_summary_generated_at, manager_feedback, report_periods(id, label, period_start, period_end)"
     )
     .eq("employee_id", id);
 
@@ -101,10 +109,12 @@ export default async function EmployeeDetailPage({
     tip_rate_delta_pp: number | string | null;
     customer_service_score: number | string | null;
     customer_service_score_components_count: number | null;
+    total_impact_score: number | string | null;
+    total_impact_score_components_count: number | null;
     tattle_summary: string | null;
     tattle_summary_generated_at: string | null;
     manager_feedback: string | null;
-    report_periods: { label: string; period_start: string; period_end: string } | null;
+    report_periods: { id: string; label: string; period_start: string; period_end: string } | null;
   };
   const rawRows = (records ?? []) as unknown as RawPerfRow[];
   rawRows.sort((a, b) =>
@@ -362,6 +372,114 @@ export default async function EmployeeDetailPage({
     }
   }
 
+  // ---- Phase 10: Total Impact Score initial state ----
+  // Prefetch the most-recent quarter's snapshot + ranks so the tile paints
+  // without a loading flash on first render. Eligibility is computed up front
+  // (all-time hours + active flag) so the "Not eligible" annotation is
+  // accurate without a follow-up roundtrip.
+  const tisWeights = await fetchTotalImpactWeights(supabase);
+  const tisQuarters: QuarterOption[] = rawRows
+    .filter((r) => r.report_periods !== null)
+    .map((r) => ({
+      id: r.report_periods!.id,
+      label: r.report_periods!.label,
+      period_start: r.report_periods!.period_start,
+      period_end: r.report_periods!.period_end,
+    }));
+  const allTimeHoursWorked = loc?.id
+    ? await fetchAllTimeWorkedHours(supabase, emp.id, loc.id)
+    : 0;
+  const tisEligible = isEligibleForRanking(!!emp.active, allTimeHoursWorked);
+
+  // Earliest worked entry — anchors "All time" mode for this employee.
+  const { data: earliestEntryRow } = await supabase
+    .from("time_entries")
+    .select("entry_date")
+    .eq("employee_id", emp.id)
+    .order("entry_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const tisEarliestDate =
+    (earliestEntryRow?.entry_date as string | undefined) ?? null;
+
+  let tisInitialWindow: TimeWindow | null = null;
+  if (tisQuarters.length > 0) {
+    tisInitialWindow = resolveQuarterWindow(tisQuarters[0]);
+  } else if (tisEarliestDate) {
+    tisInitialWindow = resolveAllTimeWindow(tisEarliestDate, todayDate);
+  }
+
+  // Initial snapshot: when the default window is a quarter, derive from the
+  // already-fetched rawRows; otherwise leave null and let the client fetch.
+  let tisInitialSnapshot: Awaited<
+    ReturnType<typeof import("./fetch-tis-actions").fetchTisRangeSnapshotAction>
+  > | null = null;
+  let tisInitialRanks: Awaited<
+    ReturnType<typeof import("./fetch-tis-actions").fetchTisRanksForEmployeeAction>
+  > | null = null;
+
+  if (tisInitialWindow && tisInitialWindow.mode === "quarter" && tisInitialWindow.quarterId && loc?.id) {
+    const r0 = rawRows.find((r) => r.report_periods?.id === tisInitialWindow!.quarterId);
+    const cs = toNumOrNull(r0?.customer_service_score ?? null);
+    const att = toNumOrNull(r0?.attendance_pct ?? null);
+    const on = toNumOrNull(r0?.on_time_grace_pct ?? null);
+    const tasks = toNumOrNull(r0?.avg_task_list_completion_pct ?? null);
+    const survey = toNumOrNull(r0?.survey_engagement_pct ?? null);
+    const breakdown = computeTotalImpactScoreBreakdown(cs, att, on, tasks, survey, tisWeights);
+    tisInitialSnapshot = {
+      composite_score: breakdown.composite_score,
+      components_count: breakdown.components_count,
+      breakdown,
+      cs_score: cs,
+      cs_components_count: r0?.customer_service_score_components_count ?? null,
+      attendance_pct: att,
+      on_time_grace_pct: on,
+      avg_task_list_completion_pct: tasks,
+      survey_engagement_pct: survey,
+      weights: tisWeights,
+    };
+
+    if (tisEligible) {
+      const { data: rkRows } = await supabase.rpc(
+        "compute_tis_rankings_for_quarter",
+        { p_report_period_id: tisInitialWindow.quarterId }
+      );
+      type RankRow = {
+        employee_id: string;
+        location_rank: number | null;
+        location_total: number;
+        client_rank: number | null;
+        client_total: number;
+        platform_rank: number | null;
+        platform_total: number;
+      };
+      const me = ((rkRows ?? []) as RankRow[]).find((r) => r.employee_id === emp.id);
+      tisInitialRanks = {
+        eligible: true,
+        hours_worked: allTimeHoursWorked,
+        hours_required: TIS_ELIGIBILITY_MIN_HOURS,
+        location_rank: me?.location_rank ?? null,
+        location_total: me?.location_total ?? 0,
+        client_rank: me?.client_rank ?? null,
+        client_total: me?.client_total ?? 0,
+        platform_rank: me?.platform_rank ?? null,
+        platform_total: me?.platform_total ?? 0,
+      };
+    } else {
+      tisInitialRanks = {
+        eligible: false,
+        hours_worked: allTimeHoursWorked,
+        hours_required: TIS_ELIGIBILITY_MIN_HOURS,
+        location_rank: null,
+        location_total: 0,
+        client_rank: null,
+        client_total: 0,
+        platform_rank: null,
+        platform_total: 0,
+      };
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -479,6 +597,32 @@ export default async function EmployeeDetailPage({
             </p>
           ) : (
             <CustomerServiceScoreCard quarters={csScoreRows} weights={csWeights} />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Total impact score</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!loc?.id || !tisInitialWindow || !tisInitialSnapshot || !tisInitialRanks ? (
+            <p className="text-sm text-slate-500">
+              No performance records yet. The composite tile will appear once
+              the underlying data is ingested.
+            </p>
+          ) : (
+            <TotalImpactScoreCard
+              employeeId={emp.id}
+              locationId={loc.id}
+              quarters={tisQuarters}
+              earliestDate={tisEarliestDate}
+              latestDate={todayDate}
+              initialWindow={tisInitialWindow}
+              initialSnapshot={tisInitialSnapshot}
+              initialRanks={tisInitialRanks}
+              weights={tisWeights}
+            />
           )}
         </CardContent>
       </Card>

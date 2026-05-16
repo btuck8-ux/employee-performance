@@ -228,6 +228,12 @@ export default async function LocationDetailPage({
           >
             Teams analytics →
           </Link>
+          <Link
+            href={`/dashboard/locations/${id}/rankings`}
+            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+          >
+            Total Impact rankings →
+          </Link>
         </div>
       </div>
 

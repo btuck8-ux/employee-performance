@@ -6,6 +6,12 @@ import {
   type CustomerServiceScoreBreakdown,
   type CustomerServiceWeights,
 } from "./customer-service-score";
+import {
+  computeTotalImpactScoreBreakdown,
+  fetchTotalImpactWeights,
+  type TotalImpactScoreBreakdown,
+  type TotalImpactWeights,
+} from "./total-impact-score";
 
 interface TimeEntryRow {
   entry_date: string;
@@ -168,6 +174,14 @@ export interface RangeMetrics {
   customer_service_score: number | null;
   customer_service_score_components_count: number;
   customer_service_score_breakdown: CustomerServiceScoreBreakdown;
+  // Phase 10 — Total Impact Score (composite). Null composite when fewer
+  // than 4 of 5 components are present. Per-component scores + effective
+  // weights are kept in `total_impact_score_breakdown` so the dashboard
+  // tile + drilldown render without re-deriving the math. Eligibility for
+  // ranking is computed separately at the ranking surface.
+  total_impact_score: number | null;
+  total_impact_score_components_count: number;
+  total_impact_score_breakdown: TotalImpactScoreBreakdown;
 }
 
 /**
@@ -271,7 +285,10 @@ export async function computeMetricsForRange(
   locationId: string,
   periodStart: string,
   periodEnd: string,
-  opts?: { csWeights?: CustomerServiceWeights }
+  opts?: {
+    csWeights?: CustomerServiceWeights;
+    tisWeights?: TotalImpactWeights;
+  }
 ): Promise<{ ok: true; metrics: RangeMetrics } | { ok: false; error: string }> {
   const { data: entries, error } = await supabase
     .from("time_entries")
@@ -499,6 +516,20 @@ export async function computeMetricsForRange(
     csWeights
   );
 
+  // ---- Total Impact Score (Phase 10) ----
+  // A non-null csBreakdown.composite_score already encodes "Phase 9 composite
+  // present" (Phase 9 writes NULL for single-source / no-data states), which
+  // is the exact semantic TIS wants for its 5-component count.
+  const tisWeights = opts?.tisWeights ?? (await fetchTotalImpactWeights(supabase));
+  const tisBreakdown = computeTotalImpactScoreBreakdown(
+    csBreakdown.composite_score,
+    shift.attendance_pct,
+    shift.on_time_grace_pct,
+    avg_task_list_completion_pct,
+    survey_engagement_pct,
+    tisWeights
+  );
+
   return {
     ok: true,
     metrics: {
@@ -531,6 +562,9 @@ export async function computeMetricsForRange(
       customer_service_score: csBreakdown.composite_score,
       customer_service_score_components_count: csBreakdown.components_count,
       customer_service_score_breakdown: csBreakdown,
+      total_impact_score: tisBreakdown.composite_score,
+      total_impact_score_components_count: tisBreakdown.components_count,
+      total_impact_score_breakdown: tisBreakdown,
     },
   };
 }
@@ -547,7 +581,10 @@ export async function recomputePerformanceForQuarter(
   locationId: string,
   year: number,
   quarter: Quarter,
-  opts?: { csWeights?: CustomerServiceWeights }
+  opts?: {
+    csWeights?: CustomerServiceWeights;
+    tisWeights?: TotalImpactWeights;
+  }
 ): Promise<{ ok: true; metrics: PerformanceMetrics } | { ok: false; error: string }> {
   const q = quarterInfo(year, quarter);
   const periodStart = q.periodStart.toISOString().slice(0, 10);
@@ -797,6 +834,19 @@ export async function recomputePerformanceForQuarter(
     csWeights
   );
 
+  // ---- Total Impact Score (Phase 10) ----
+  // Non-null CS Score already encodes "Phase 9 composite present"; that's the
+  // semantic TIS wants for its 5-component count.
+  const tisWeights = opts?.tisWeights ?? (await fetchTotalImpactWeights(supabase));
+  const tisBreakdown = computeTotalImpactScoreBreakdown(
+    csBreakdown.composite_score,
+    metrics.attendance_pct,
+    metrics.on_time_grace_pct,
+    avg_task_list_completion_pct,
+    survey_engagement_pct,
+    tisWeights
+  );
+
   const { error: upsertError } = await supabase
     .from("performance_records")
     .upsert(
@@ -835,6 +885,8 @@ export async function recomputePerformanceForQuarter(
         tip_rate_delta_pp: tip.tip_rate_delta_pp,
         customer_service_score: csBreakdown.composite_score,
         customer_service_score_components_count: csBreakdown.components_count,
+        total_impact_score: tisBreakdown.composite_score,
+        total_impact_score_components_count: tisBreakdown.components_count,
       },
       { onConflict: "employee_id,report_period_id" }
     );
