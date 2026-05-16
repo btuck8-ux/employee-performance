@@ -9,10 +9,10 @@ import { notFound } from "next/navigation";
 export const maxDuration = 300;
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { StorageUploadForm } from "@/components/uploads/StorageUploadForm";
 import { createEmployeeAction } from "./actions";
 import { uploadEmployeesCsvAction } from "./upload-actions";
 import { uploadTimeDataAction } from "./upload-time-actions";
@@ -266,8 +266,11 @@ export default async function LocationDetailPage({
             <CardTitle>Bulk import employees</CardTitle>
           </CardHeader>
           <CardContent>
-            <form
+            <StorageUploadForm
               action={uploadEmployeesCsvAction}
+              fileFields={["file"]}
+              pendingLabel="Importing employees…"
+              submitLabel="Upload CSV"
               className="space-y-3"
             >
               <input type="hidden" name="location_id" value={location.id} />
@@ -281,8 +284,7 @@ export default async function LocationDetailPage({
                   employee&apos;s internal ID automatically.
                 </p>
               </div>
-              <SubmitButton pendingLabel="Importing employees…">Upload CSV</SubmitButton>
-            </form>
+            </StorageUploadForm>
           </CardContent>
         </Card>
 
@@ -376,8 +378,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload time data (scheduled + worked)</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadTimeDataAction}
+            fileFields={["scheduled_file", "worked_file"]}
+            pendingLabel="Importing & recomputing…"
+            submitLabel="Upload time data"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -425,10 +430,7 @@ export default async function LocationDetailPage({
                 imported a canonical roster.
               </span>
             </label>
-            <SubmitButton pendingLabel="Importing & recomputing…">
-              Upload time data
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 
@@ -464,8 +466,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload Tattle survey CSV</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadTattleCsvAction}
+            fileFields={["file"]}
+            pendingLabel="Importing & attributing…"
+            submitLabel="Upload tattles"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -486,10 +491,7 @@ export default async function LocationDetailPage({
                 must be uploaded after time data so attribution can resolve correctly.
               </p>
             </div>
-            <SubmitButton pendingLabel="Importing & attributing…">
-              Upload tattles
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 
@@ -524,8 +526,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload customer reviews CSV</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadCustomerReviewsCsvAction}
+            fileFields={["file"]}
+            pendingLabel="Importing & attributing…"
+            submitLabel="Upload reviews"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -545,10 +550,7 @@ export default async function LocationDetailPage({
                 through the worked-that-day fallback.
               </p>
             </div>
-            <SubmitButton pendingLabel="Importing & attributing…">
-              Upload reviews
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 
@@ -596,8 +598,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload survey engagement CSV (7taps)</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadSurveyCsvAction}
+            fileFields={["file"]}
+            pendingLabel="Importing & recomputing…"
+            submitLabel="Upload survey CSV"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -617,10 +622,7 @@ export default async function LocationDetailPage({
                 the quarter the survey was sent in.
               </p>
             </div>
-            <SubmitButton pendingLabel="Importing & recomputing…">
-              Upload survey CSV
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 
@@ -655,8 +657,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload tasks report CSV</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadTasksCsvAction}
+            fileFields={["file"]}
+            pendingLabel="Importing & computing accountability…"
+            submitLabel="Upload tasks"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -677,10 +682,7 @@ export default async function LocationDetailPage({
                 (e.g., per month) — re-uploading is idempotent and overwrites.
               </p>
             </div>
-            <SubmitButton pendingLabel="Importing & computing accountability…">
-              Upload tasks
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 
@@ -718,8 +720,11 @@ export default async function LocationDetailPage({
           <CardTitle>Upload POS sales CSV</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
+          <StorageUploadForm
             action={uploadPOSCsvAction}
+            fileFields={["file"]}
+            pendingLabel="Importing sales & recomputing tips…"
+            submitLabel="Upload POS sales"
             className="space-y-3"
           >
             <input type="hidden" name="location_id" value={location.id} />
@@ -744,10 +749,7 @@ export default async function LocationDetailPage({
                 quarter the import touches.
               </p>
             </div>
-            <SubmitButton pendingLabel="Importing sales & recomputing tips…">
-              Upload POS sales
-            </SubmitButton>
-          </form>
+          </StorageUploadForm>
         </CardContent>
       </Card>
 

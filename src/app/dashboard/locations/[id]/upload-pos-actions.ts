@@ -10,6 +10,7 @@ import {
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
+import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
 
 // NOTE on timeouts: in a "use server" file only async functions can be
 // exported, so `maxDuration` must live on the calling pages, not here. All
@@ -281,14 +282,14 @@ export async function uploadPOSCsvAction(formData: FormData) {
   console.log("[pos-import] uploadPOSCsvAction invoked");
 
   const location_id = String(formData.get("location_id") ?? "");
-  const file = formData.get("file") as File | null;
+  const storagePath = String(formData.get("file_path") ?? "");
 
   if (!location_id) {
     redirect(
       `/dashboard/locations?pos_error=${encodeURIComponent("Missing location.")}`
     );
   }
-  if (!file || file.size === 0) {
+  if (!storagePath) {
     redirect(
       `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
         "No file uploaded."
@@ -297,62 +298,80 @@ export async function uploadPOSCsvAction(formData: FormData) {
   }
 
   const supabase = await createClient();
-  const text = await file.text();
-  const parsed = parseSalesCsv(text);
-  console.log(
-    `[pos-import] parsed ${parsed.rows_in_file} rows -> ${parsed.unique_receipts} receipts ` +
-      `(${parsed.split_tender_receipts} split-tender)`
-  );
-  if (parsed.errors.length > 0 && parsed.records.length === 0) {
+
+  let text: string;
+  try {
+    text = await readCsvFromStorage(supabase, storagePath);
+  } catch (err) {
+    await deleteCsvFromStorage(supabase, storagePath);
     redirect(
       `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
-        parsed.errors.join("; ")
+        err instanceof Error ? err.message : "Failed to read uploaded file."
       )}`
     );
   }
 
-  const { data: locRow } = await supabase
-    .from("locations")
-    .select("id, name, csv_aliases")
-    .eq("id", location_id)
-    .single();
-  const location =
-    (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
-      id: location_id,
-      name: "",
-      csv_aliases: null,
-    };
+  try {
+    const parsed = parseSalesCsv(text);
+    console.log(
+      `[pos-import] parsed ${parsed.rows_in_file} rows -> ${parsed.unique_receipts} receipts ` +
+        `(${parsed.split_tender_receipts} split-tender)`
+    );
+    if (parsed.errors.length > 0 && parsed.records.length === 0) {
+      redirect(
+        `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
+          parsed.errors.join("; ")
+        )}`
+      );
+    }
 
-  const stats = await ingestPOSForLocation(supabase, parsed, location);
-  for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
+    const { data: locRow } = await supabase
+      .from("locations")
+      .select("id, name, csv_aliases")
+      .eq("id", location_id)
+      .single();
+    const location =
+      (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
+        id: location_id,
+        name: "",
+        csv_aliases: null,
+      };
 
-  console.log(
-    `[pos-import] ${location.name}: sales ${stats.sales_inserted}+${stats.sales_updated}u, ` +
-      `split=${stats.split_tender_receipts}, refunds=${stats.refund_rows}, ` +
-      `quarters=${stats.affected_quarters}, recomputed=${stats.recomputed}, ` +
-      `teams=${stats.teams_recomputed}, skipped_other=${stats.skipped_other_location}`
-  );
+    const stats = await ingestPOSForLocation(supabase, parsed, location);
+    for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
 
-  revalidatePath(`/dashboard/locations/${location_id}`);
-  revalidatePath(`/dashboard/locations/${location_id}/teams`);
-  revalidatePath("/dashboard/employees");
+    console.log(
+      `[pos-import] ${location.name}: sales ${stats.sales_inserted}+${stats.sales_updated}u, ` +
+        `split=${stats.split_tender_receipts}, refunds=${stats.refund_rows}, ` +
+        `quarters=${stats.affected_quarters}, recomputed=${stats.recomputed}, ` +
+        `teams=${stats.teams_recomputed}, skipped_other=${stats.skipped_other_location}`
+    );
 
-  const params = new URLSearchParams();
-  params.set("pos_in", String(stats.sales_inserted));
-  params.set("pos_up", String(stats.sales_updated));
-  params.set("pos_split", String(stats.split_tender_receipts));
-  params.set("pos_refunds", String(stats.refund_rows));
-  params.set("pos_quarters", String(stats.affected_quarters));
-  params.set("pos_recomputed", String(stats.recomputed));
-  params.set("pos_teams", String(stats.teams_recomputed));
-  if (stats.skipped_other_location > 0)
-    params.set("pos_skipped_other_location", String(stats.skipped_other_location));
-  if (stats.warnings.length > 0)
-    params.set("pos_warnings", stats.warnings.slice(0, 3).join(" | "));
-  if (stats.failures.length > 0)
-    params.set("pos_failures", stats.failures.slice(0, 3).join(" | "));
+    revalidatePath(`/dashboard/locations/${location_id}`);
+    revalidatePath(`/dashboard/locations/${location_id}/teams`);
+    revalidatePath("/dashboard/employees");
 
-  redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
+    const params = new URLSearchParams();
+    params.set("pos_in", String(stats.sales_inserted));
+    params.set("pos_up", String(stats.sales_updated));
+    params.set("pos_split", String(stats.split_tender_receipts));
+    params.set("pos_refunds", String(stats.refund_rows));
+    params.set("pos_quarters", String(stats.affected_quarters));
+    params.set("pos_recomputed", String(stats.recomputed));
+    params.set("pos_teams", String(stats.teams_recomputed));
+    if (stats.skipped_other_location > 0)
+      params.set("pos_skipped_other_location", String(stats.skipped_other_location));
+    if (stats.warnings.length > 0)
+      params.set("pos_warnings", stats.warnings.slice(0, 3).join(" | "));
+    if (stats.failures.length > 0)
+      params.set("pos_failures", stats.failures.slice(0, 3).join(" | "));
+
+    redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
+  } finally {
+    // Always reclaim the storage object — fires after the success redirect
+    // throws, and after any error redirect from inside this try.
+    await deleteCsvFromStorage(supabase, storagePath);
+  }
 }
 
 /**
@@ -369,153 +388,169 @@ export async function uploadPOSCsvBulkAction(formData: FormData) {
   const scope = String(formData.get("scope") ?? "all") as "client" | "all";
   const client_id =
     scope === "client" ? String(formData.get("client_id") ?? "") : null;
-  const file = formData.get("file") as File | null;
+  const storagePath = String(formData.get("file_path") ?? "");
 
   const redirectBase =
     scope === "client" && client_id
       ? `/dashboard/clients/${client_id}`
       : `/dashboard/uploads`;
 
-  if (!file || file.size === 0) {
+  if (!storagePath) {
     redirect(
       `${redirectBase}?bulk_pos_error=${encodeURIComponent("No file uploaded.")}`
     );
   }
 
   const supabase = await createClient();
-  const text = await file.text();
-  const parsed = parseSalesCsv(text);
 
-  if (parsed.errors.length > 0 && parsed.records.length === 0) {
+  let text: string;
+  try {
+    text = await readCsvFromStorage(supabase, storagePath);
+  } catch (err) {
+    await deleteCsvFromStorage(supabase, storagePath);
     redirect(
       `${redirectBase}?bulk_pos_error=${encodeURIComponent(
-        parsed.errors.join("; ")
+        err instanceof Error ? err.message : "Failed to read uploaded file."
       )}`
     );
   }
 
-  // Safety guard: bulk requires a Location column so each row routes to the
-  // correct store. Without it, every location's filter accepts every row and
-  // the CSV gets ingested N times. Ike's current per-store exports have no
-  // Location column — those must go through the per-location action.
-  const rowsWithLocation = parsed.records.filter(
-    (r) => r.location_label !== null
-  ).length;
-  if (rowsWithLocation === 0) {
-    redirect(
-      `${redirectBase}?bulk_pos_error=${encodeURIComponent(
-        "This CSV has no Location/Store/Site column — bulk upload requires one to route rows to the right store. Use the per-location upload instead (one file per store)."
-      )}`
-    );
-  }
+  try {
+    const parsed = parseSalesCsv(text);
 
-  let q = supabase
-    .from("locations")
-    .select("id, name, csv_aliases")
-    .order("name");
-  if (scope === "client" && client_id) q = q.eq("client_id", client_id);
-  const { data: targetsRaw } = await q;
-  const targets = (targetsRaw ?? []) as Array<{
-    id: string;
-    name: string;
-    csv_aliases: string[] | null;
-  }>;
-  if (targets.length === 0) {
-    redirect(
-      `${redirectBase}?bulk_pos_error=${encodeURIComponent(
-        scope === "client"
-          ? "No locations under this client."
-          : "No locations exist yet."
-      )}`
-    );
-  }
+    if (parsed.errors.length > 0 && parsed.records.length === 0) {
+      redirect(
+        `${redirectBase}?bulk_pos_error=${encodeURIComponent(
+          parsed.errors.join("; ")
+        )}`
+      );
+    }
 
-  const aggregated: IngestStats = newStats();
-  const perLocation: Array<{
-    name: string;
-    in: number;
-    up: number;
-    split: number;
-    refunds: number;
-    recomputed: number;
-  }> = [];
+    // Safety guard: bulk requires a Location column so each row routes to the
+    // correct store. Without it, every location's filter accepts every row and
+    // the CSV gets ingested N times. Ike's current per-store exports have no
+    // Location column — those must go through the per-location action.
+    const rowsWithLocation = parsed.records.filter(
+      (r) => r.location_label !== null
+    ).length;
+    if (rowsWithLocation === 0) {
+      redirect(
+        `${redirectBase}?bulk_pos_error=${encodeURIComponent(
+          "This CSV has no Location/Store/Site column — bulk upload requires one to route rows to the right store. Use the per-location upload instead (one file per store)."
+        )}`
+      );
+    }
 
-  for (const loc of targets) {
-    const stats = await ingestPOSForLocation(supabase, parsed, loc);
-    aggregated.sales_inserted += stats.sales_inserted;
-    aggregated.sales_updated += stats.sales_updated;
-    aggregated.split_tender_receipts += stats.split_tender_receipts;
-    aggregated.refund_rows += stats.refund_rows;
-    aggregated.affected_quarters = Math.max(
-      aggregated.affected_quarters,
-      stats.affected_quarters
-    );
-    aggregated.recomputed += stats.recomputed;
-    aggregated.teams_recomputed += stats.teams_recomputed;
-    aggregated.skipped_other_location += stats.skipped_other_location;
-    aggregated.failures.push(...stats.failures);
-    perLocation.push({
-      name: loc.name,
-      in: stats.sales_inserted,
-      up: stats.sales_updated,
-      split: stats.split_tender_receipts,
-      refunds: stats.refund_rows,
-      recomputed: stats.recomputed,
-    });
-  }
+    let q = supabase
+      .from("locations")
+      .select("id, name, csv_aliases")
+      .order("name");
+    if (scope === "client" && client_id) q = q.eq("client_id", client_id);
+    const { data: targetsRaw } = await q;
+    const targets = (targetsRaw ?? []) as Array<{
+      id: string;
+      name: string;
+      csv_aliases: string[] | null;
+    }>;
+    if (targets.length === 0) {
+      redirect(
+        `${redirectBase}?bulk_pos_error=${encodeURIComponent(
+          scope === "client"
+            ? "No locations under this client."
+            : "No locations exist yet."
+        )}`
+      );
+    }
 
-  // Truly unmatched: rows whose location_label matches no target name AND no alias.
-  const targetNames = new Set<string>();
-  for (const l of targets) {
-    targetNames.add(l.name.toLowerCase());
-    if (l.csv_aliases) {
-      for (const a of l.csv_aliases) {
-        if (a) targetNames.add(a.trim().toLowerCase());
+    const aggregated: IngestStats = newStats();
+    const perLocation: Array<{
+      name: string;
+      in: number;
+      up: number;
+      split: number;
+      refunds: number;
+      recomputed: number;
+    }> = [];
+
+    for (const loc of targets) {
+      const stats = await ingestPOSForLocation(supabase, parsed, loc);
+      aggregated.sales_inserted += stats.sales_inserted;
+      aggregated.sales_updated += stats.sales_updated;
+      aggregated.split_tender_receipts += stats.split_tender_receipts;
+      aggregated.refund_rows += stats.refund_rows;
+      aggregated.affected_quarters = Math.max(
+        aggregated.affected_quarters,
+        stats.affected_quarters
+      );
+      aggregated.recomputed += stats.recomputed;
+      aggregated.teams_recomputed += stats.teams_recomputed;
+      aggregated.skipped_other_location += stats.skipped_other_location;
+      aggregated.failures.push(...stats.failures);
+      perLocation.push({
+        name: loc.name,
+        in: stats.sales_inserted,
+        up: stats.sales_updated,
+        split: stats.split_tender_receipts,
+        refunds: stats.refund_rows,
+        recomputed: stats.recomputed,
+      });
+    }
+
+    // Truly unmatched: rows whose location_label matches no target name AND no alias.
+    const targetNames = new Set<string>();
+    for (const l of targets) {
+      targetNames.add(l.name.toLowerCase());
+      if (l.csv_aliases) {
+        for (const a of l.csv_aliases) {
+          if (a) targetNames.add(a.trim().toLowerCase());
+        }
       }
     }
-  }
-  let trulyUnmatched = 0;
-  for (const r of parsed.records) {
-    const lbl = (r.location_label ?? "").trim().toLowerCase();
-    if (lbl && !targetNames.has(lbl)) trulyUnmatched += 1;
-  }
+    let trulyUnmatched = 0;
+    for (const r of parsed.records) {
+      const lbl = (r.location_label ?? "").trim().toLowerCase();
+      if (lbl && !targetNames.has(lbl)) trulyUnmatched += 1;
+    }
 
-  for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
-  revalidatePath("/dashboard/employees");
-  if (scope === "client" && client_id)
-    revalidatePath(`/dashboard/clients/${client_id}`);
-  revalidatePath("/dashboard/uploads");
+    for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
+    revalidatePath("/dashboard/employees");
+    if (scope === "client" && client_id)
+      revalidatePath(`/dashboard/clients/${client_id}`);
+    revalidatePath("/dashboard/uploads");
 
-  console.log(
-    `[pos-import] BULK DONE across ${targets.length} locations: ` +
-      `sales=${aggregated.sales_inserted}+${aggregated.sales_updated}u, ` +
-      `split=${aggregated.split_tender_receipts}, refunds=${aggregated.refund_rows}, ` +
-      `recomputed=${aggregated.recomputed}, teams=${aggregated.teams_recomputed}, ` +
-      `unmatched=${trulyUnmatched}, failures=${aggregated.failures.length}`
-  );
-
-  const params = new URLSearchParams();
-  params.set("bulk_pos_locations", String(targets.length));
-  params.set("bulk_pos_in", String(aggregated.sales_inserted));
-  params.set("bulk_pos_up", String(aggregated.sales_updated));
-  params.set("bulk_pos_split", String(aggregated.split_tender_receipts));
-  params.set("bulk_pos_refunds", String(aggregated.refund_rows));
-  params.set("bulk_pos_recomputed", String(aggregated.recomputed));
-  params.set("bulk_pos_teams", String(aggregated.teams_recomputed));
-  params.set("bulk_pos_unmatched", String(trulyUnmatched));
-  const breakdown = perLocation
-    .filter((p) => p.in + p.up > 0)
-    .map(
-      (p) =>
-        `${p.name}: sales ${p.in}+${p.up}u · split ${p.split} · refunds ${p.refunds} · recomputed ${p.recomputed}`
-    )
-    .join(" | ");
-  if (breakdown) params.set("bulk_pos_breakdown", breakdown);
-  if (aggregated.failures.length > 0)
-    params.set(
-      "bulk_pos_failures",
-      aggregated.failures.slice(0, 3).join(" | ")
+    console.log(
+      `[pos-import] BULK DONE across ${targets.length} locations: ` +
+        `sales=${aggregated.sales_inserted}+${aggregated.sales_updated}u, ` +
+        `split=${aggregated.split_tender_receipts}, refunds=${aggregated.refund_rows}, ` +
+        `recomputed=${aggregated.recomputed}, teams=${aggregated.teams_recomputed}, ` +
+        `unmatched=${trulyUnmatched}, failures=${aggregated.failures.length}`
     );
 
-  redirect(`${redirectBase}?${params.toString()}`);
+    const params = new URLSearchParams();
+    params.set("bulk_pos_locations", String(targets.length));
+    params.set("bulk_pos_in", String(aggregated.sales_inserted));
+    params.set("bulk_pos_up", String(aggregated.sales_updated));
+    params.set("bulk_pos_split", String(aggregated.split_tender_receipts));
+    params.set("bulk_pos_refunds", String(aggregated.refund_rows));
+    params.set("bulk_pos_recomputed", String(aggregated.recomputed));
+    params.set("bulk_pos_teams", String(aggregated.teams_recomputed));
+    params.set("bulk_pos_unmatched", String(trulyUnmatched));
+    const breakdown = perLocation
+      .filter((p) => p.in + p.up > 0)
+      .map(
+        (p) =>
+          `${p.name}: sales ${p.in}+${p.up}u · split ${p.split} · refunds ${p.refunds} · recomputed ${p.recomputed}`
+      )
+      .join(" | ");
+    if (breakdown) params.set("bulk_pos_breakdown", breakdown);
+    if (aggregated.failures.length > 0)
+      params.set(
+        "bulk_pos_failures",
+        aggregated.failures.slice(0, 3).join(" | ")
+      );
+
+    redirect(`${redirectBase}?${params.toString()}`);
+  } finally {
+    await deleteCsvFromStorage(supabase, storagePath);
+  }
 }

@@ -6,6 +6,7 @@ import { parseTimeEntriesCsv, type ParsedTimeEntry } from "@/lib/time-entries-im
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
 import { quarterOfDate, type Quarter } from "@/lib/quarter";
 import { rowMatchesLocation } from "@/lib/location-match";
+import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
 
 interface ImportSummary {
   scheduled_inserted: number;
@@ -237,14 +238,12 @@ export async function uploadTimeDataAction(formData: FormData) {
   console.log("[time-import] uploadTimeDataAction invoked");
 
   const location_id = String(formData.get("location_id") ?? "");
-  const scheduledFile = formData.get("scheduled_file") as File | null;
-  const workedFile = formData.get("worked_file") as File | null;
+  const scheduledPath = String(formData.get("scheduled_file_path") ?? "");
+  const workedPath = String(formData.get("worked_file_path") ?? "");
   const deriveEmployees = formData.get("derive_employees") === "1";
 
   console.log(
-    `[time-import] location_id=${location_id} scheduled=${
-      scheduledFile?.size ?? 0
-    } worked=${workedFile?.size ?? 0}`
+    `[time-import] location_id=${location_id} scheduledPath=${scheduledPath || "(none)"} workedPath=${workedPath || "(none)"}`
   );
 
   if (!location_id) {
@@ -252,10 +251,7 @@ export async function uploadTimeDataAction(formData: FormData) {
       `/dashboard/locations?time_error=${encodeURIComponent("Missing location.")}`
     );
   }
-  if (
-    (!scheduledFile || scheduledFile.size === 0) &&
-    (!workedFile || workedFile.size === 0)
-  ) {
+  if (!scheduledPath && !workedPath) {
     redirect(
       `/dashboard/locations/${location_id}?time_error=${encodeURIComponent(
         "Upload at least one file (Scheduled or Worked)."
@@ -265,323 +261,70 @@ export async function uploadTimeDataAction(formData: FormData) {
 
   const supabase = await createClient();
 
-  // Fetch active/inactive employees for this location (single query)
-  const { data: locationEmployees, error: empErr } = await supabase
-    .from("employees")
-    .select("id, employee_name, active")
-    .eq("location_id", location_id);
-  if (empErr) {
-    console.error("[time-import] failed to fetch location employees:", empErr);
+  let scheduledText: string | null = null;
+  let workedText: string | null = null;
+  try {
+    if (scheduledPath) scheduledText = await readCsvFromStorage(supabase, scheduledPath);
+    if (workedPath) workedText = await readCsvFromStorage(supabase, workedPath);
+  } catch (err) {
+    await deleteCsvFromStorage(supabase, scheduledPath);
+    await deleteCsvFromStorage(supabase, workedPath);
     redirect(
       `/dashboard/locations/${location_id}?time_error=${encodeURIComponent(
-        "Could not fetch employees: " + empErr.message
+        err instanceof Error ? err.message : "Failed to read uploaded file."
       )}`
     );
   }
 
-  const activeEmployees = new Map<string, string>();
-  const inactiveEmployees = new Set<string>();
-  for (const e of locationEmployees ?? []) {
-    const key = e.employee_name.toLowerCase();
-    if (e.active) activeEmployees.set(key, e.id);
-    else inactiveEmployees.add(key);
-  }
-  console.log(
-    `[time-import] active employees at this location: ${activeEmployees.size}; inactive: ${inactiveEmployees.size}`
-  );
-
-  // Pre-fetch existing time entry keys for this location (single query) so we can
-  // distinguish inserts from updates without per-row lookups.
-  const { data: existingRows } = await supabase
-    .from("time_entries")
-    .select("employee_id, entry_date, entry_type")
-    .eq("location_id", location_id);
-  const existingKeys = new Set<string>();
-  for (const r of existingRows ?? []) {
-    existingKeys.add(`${r.employee_id}|${r.entry_date}|${r.entry_type}`);
-  }
-  console.log(`[time-import] existing time_entries at this location: ${existingKeys.size}`);
-
-  // Look up the target location's display name + alias list so we can filter
-  // all-locations CSV exports down to rows for THIS location.
-  const { data: locRow } = await supabase
-    .from("locations")
-    .select("name, csv_aliases")
-    .eq("id", location_id)
-    .single();
-  const targetLocationName = (locRow?.name as string | undefined) ?? "";
-  const targetAliases = (locRow?.csv_aliases as string[] | null | undefined) ?? null;
-
-  const summary: ImportSummary = {
-    scheduled_inserted: 0,
-    scheduled_updated: 0,
-    worked_inserted: 0,
-    worked_updated: 0,
-    unknown_employees: new Set(),
-    inactive_skipped: new Set(),
-    skipped_other_location: 0,
-    derived_employees_created: 0,
-    derived_employees_failed: 0,
-    failures: [],
-    warnings: [],
-  };
-
-  // If the user opted into auto-creating employees from this time data,
-  // pre-parse both files, collect unique unknown names, and insert them as
-  // active employees BEFORE the regular ingest. This unblocks Colorado-style
-  // cases where the user can't get an explicit roster CSV.
-  if (deriveEmployees) {
-    const seedRecords: ParsedTimeEntry[] = [];
-    if (scheduledFile && scheduledFile.size > 0) {
-      const t = await scheduledFile.text();
-      seedRecords.push(...parseTimeEntriesCsv(t).records);
-    }
-    if (workedFile && workedFile.size > 0) {
-      const t = await workedFile.text();
-      seedRecords.push(...parseTimeEntriesCsv(t).records);
-    }
-    if (seedRecords.length > 0) {
-      await autoDeriveEmployees(
-        supabase,
-        seedRecords,
-        location_id,
-        targetLocationName,
-        targetAliases,
-        activeEmployees,
-        inactiveEmployees,
-        summary
-      );
-    }
-    console.log(
-      `[time-import] auto-create seeded ${summary.derived_employees_created} employees ` +
-        `(${summary.derived_employees_failed} failed)`
-    );
-  }
-
-  const affectedKeys = new Set<string>();
-  if (scheduledFile && scheduledFile.size > 0) {
-    const text = await scheduledFile.text();
-    const { affectedQuarters } = await processFile(
-      supabase,
-      text,
-      scheduledFile.name,
-      location_id,
-      targetLocationName,
-      targetAliases,
-      "scheduled",
-      activeEmployees,
-      inactiveEmployees,
-      existingKeys,
-      summary
-    );
-    for (const k of affectedQuarters) affectedKeys.add(k);
-  }
-  if (workedFile && workedFile.size > 0) {
-    const text = await workedFile.text();
-    const { affectedQuarters } = await processFile(
-      supabase,
-      text,
-      workedFile.name,
-      location_id,
-      targetLocationName,
-      targetAliases,
-      "worked",
-      activeEmployees,
-      inactiveEmployees,
-      existingKeys,
-      summary
-    );
-    for (const k of affectedQuarters) affectedKeys.add(k);
-  }
-  console.log(
-    `[time-import] recomputing performance for ${affectedKeys.size} (employee, quarter) pairs`
-  );
-
-  let recomputed = 0;
-  for (const key of affectedKeys) {
-    const [employee_id, yearStr, quarterStr] = key.split("|");
-    const year = parseInt(yearStr, 10);
-    const quarter = parseInt(quarterStr, 10) as Quarter;
-    const result = await recomputePerformanceForQuarter(
-      supabase,
-      employee_id,
-      location_id,
-      year,
-      quarter
-    );
-    if (result.ok) recomputed += 1;
-    else
-      summary.failures.push(
-        `Recompute ${employee_id} ${year}-Q${quarter}: ${result.error}`
-      );
-  }
-
-  await supabase
-    .from("locations")
-    .update({ last_data_uploaded_at: new Date().toISOString() })
-    .eq("id", location_id);
-
-  revalidatePath(`/dashboard/locations/${location_id}`);
-  revalidatePath("/dashboard/employees");
-
-  console.log(
-    `[time-import] DONE. sched=${summary.scheduled_inserted}+${summary.scheduled_updated}u, ` +
-      `worked=${summary.worked_inserted}+${summary.worked_updated}u, ` +
-      `recomputed=${recomputed}, ` +
-      `unknown=${summary.unknown_employees.size}, inactive=${summary.inactive_skipped.size}, ` +
-      `failures=${summary.failures.length}`
-  );
-
-  const params = new URLSearchParams();
-  params.set("sched_in", String(summary.scheduled_inserted));
-  params.set("sched_up", String(summary.scheduled_updated));
-  params.set("work_in", String(summary.worked_inserted));
-  params.set("work_up", String(summary.worked_updated));
-  params.set("recomputed", String(recomputed));
-  if (summary.unknown_employees.size > 0)
-    params.set(
-      "unknown",
-      Array.from(summary.unknown_employees).slice(0, 5).join(", ")
-    );
-  if (summary.inactive_skipped.size > 0)
-    params.set(
-      "inactive",
-      Array.from(summary.inactive_skipped).slice(0, 5).join(", ")
-    );
-  if (summary.skipped_other_location > 0)
-    params.set("time_skipped_other_location", String(summary.skipped_other_location));
-  if (summary.derived_employees_created > 0)
-    params.set("time_derived_created", String(summary.derived_employees_created));
-  if (summary.derived_employees_failed > 0)
-    params.set("time_derived_failed", String(summary.derived_employees_failed));
-  if (summary.warnings.length > 0)
-    params.set("warnings", summary.warnings.slice(0, 3).join(" | "));
-  if (summary.failures.length > 0)
-    params.set("failures", summary.failures.slice(0, 3).join(" | "));
-
-  redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
-}
-
-/**
- * Bulk version: upload one all-locations time CSV (scheduled and/or worked)
- * and fan out to every target location at once. The Location column on each
- * row routes that row to the right location. Used by the top-level Uploads
- * page (scope=all) and Client detail pages (scope=client).
- */
-export async function uploadTimeDataBulkAction(formData: FormData) {
-  console.log("[time-import] uploadTimeDataBulkAction invoked");
-
-  const scope = String(formData.get("scope") ?? "all") as "client" | "all";
-  const client_id = scope === "client" ? String(formData.get("client_id") ?? "") : null;
-  const scheduledFile = formData.get("scheduled_file") as File | null;
-  const workedFile = formData.get("worked_file") as File | null;
-  const deriveEmployees = formData.get("derive_employees") === "1";
-
-  const redirectBase =
-    scope === "client" && client_id
-      ? `/dashboard/clients/${client_id}`
-      : `/dashboard/uploads`;
-
-  if (
-    (!scheduledFile || scheduledFile.size === 0) &&
-    (!workedFile || workedFile.size === 0)
-  ) {
-    redirect(
-      `${redirectBase}?bulk_time_error=${encodeURIComponent(
-        "Upload at least one file (Scheduled or Worked)."
-      )}`
-    );
-  }
-
-  const supabase = await createClient();
-
-  // Resolve target locations (including their csv_aliases for matching).
-  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
-  if (scope === "client" && client_id) q = q.eq("client_id", client_id);
-  const { data: targetsRaw } = await q;
-  const targets = (targetsRaw ?? []) as Array<{
-    id: string;
-    name: string;
-    csv_aliases: string[] | null;
-  }>;
-  if (targets.length === 0) {
-    redirect(
-      `${redirectBase}?bulk_time_error=${encodeURIComponent(
-        scope === "client" ? "No locations under this client." : "No locations exist yet."
-      )}`
-    );
-  }
-
-  // Read file texts once — re-parsed per location inside the loop, but the
-  // bytes only get pulled off the wire once.
-  const scheduledText =
-    scheduledFile && scheduledFile.size > 0 ? await scheduledFile.text() : null;
-  const workedText =
-    workedFile && workedFile.size > 0 ? await workedFile.text() : null;
-
-  // Aggregate stats across all touched locations.
-  const aggregated: ImportSummary = {
-    scheduled_inserted: 0,
-    scheduled_updated: 0,
-    worked_inserted: 0,
-    worked_updated: 0,
-    unknown_employees: new Set(),
-    inactive_skipped: new Set(),
-    skipped_other_location: 0,
-    derived_employees_created: 0,
-    derived_employees_failed: 0,
-    failures: [],
-    warnings: [],
-  };
-
-  // Pre-parse for the auto-derive pass (used inside the per-location loop below).
-  // We parse the texts ONCE here; processFile re-parses inside on each call but
-  // that's negligible at our row counts.
-  let seedRecords: ParsedTimeEntry[] = [];
-  if (deriveEmployees) {
-    if (scheduledText) {
-      seedRecords = seedRecords.concat(parseTimeEntriesCsv(scheduledText).records);
-    }
-    if (workedText) {
-      seedRecords = seedRecords.concat(parseTimeEntriesCsv(workedText).records);
-    }
-  }
-  let totalRecomputed = 0;
-  const perLocation: Array<{
-    name: string;
-    sched_in: number;
-    sched_up: number;
-    work_in: number;
-    work_up: number;
-    recomputed: number;
-  }> = [];
-
-  for (const loc of targets) {
-    // Per-location dependencies — same fetches the per-location action does.
-    const { data: locEmps } = await supabase
+  try {
+    // Fetch active/inactive employees for this location (single query)
+    const { data: locationEmployees, error: empErr } = await supabase
       .from("employees")
       .select("id, employee_name, active")
-      .eq("location_id", loc.id);
+      .eq("location_id", location_id);
+    if (empErr) {
+      console.error("[time-import] failed to fetch location employees:", empErr);
+      redirect(
+        `/dashboard/locations/${location_id}?time_error=${encodeURIComponent(
+          "Could not fetch employees: " + empErr.message
+        )}`
+      );
+    }
 
     const activeEmployees = new Map<string, string>();
     const inactiveEmployees = new Set<string>();
-    for (const e of locEmps ?? []) {
-      const key = (e.employee_name as string).toLowerCase();
-      if (e.active) activeEmployees.set(key, e.id as string);
+    for (const e of locationEmployees ?? []) {
+      const key = e.employee_name.toLowerCase();
+      if (e.active) activeEmployees.set(key, e.id);
       else inactiveEmployees.add(key);
     }
+    console.log(
+      `[time-import] active employees at this location: ${activeEmployees.size}; inactive: ${inactiveEmployees.size}`
+    );
 
+    // Pre-fetch existing time entry keys for this location (single query) so we can
+    // distinguish inserts from updates without per-row lookups.
     const { data: existingRows } = await supabase
       .from("time_entries")
       .select("employee_id, entry_date, entry_type")
-      .eq("location_id", loc.id);
+      .eq("location_id", location_id);
     const existingKeys = new Set<string>();
     for (const r of existingRows ?? []) {
       existingKeys.add(`${r.employee_id}|${r.entry_date}|${r.entry_type}`);
     }
+    console.log(`[time-import] existing time_entries at this location: ${existingKeys.size}`);
 
-    // Per-location summary, accumulated into aggregated at the end.
-    const locSummary: ImportSummary = {
+    // Look up the target location's display name + alias list so we can filter
+    // all-locations CSV exports down to rows for THIS location.
+    const { data: locRow } = await supabase
+      .from("locations")
+      .select("name, csv_aliases")
+      .eq("id", location_id)
+      .single();
+    const targetLocationName = (locRow?.name as string | undefined) ?? "";
+    const targetAliases = (locRow?.csv_aliases as string[] | null | undefined) ?? null;
+
+    const summary: ImportSummary = {
       scheduled_inserted: 0,
       scheduled_updated: 0,
       worked_inserted: 0,
@@ -595,17 +338,33 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       warnings: [],
     };
 
-    // Auto-create employees for THIS location from the seed records (if enabled).
-    if (deriveEmployees && seedRecords.length > 0) {
-      await autoDeriveEmployees(
-        supabase,
-        seedRecords,
-        loc.id,
-        loc.name,
-        loc.csv_aliases,
-        activeEmployees,
-        inactiveEmployees,
-        locSummary
+    // If the user opted into auto-creating employees from this time data,
+    // pre-parse both files, collect unique unknown names, and insert them as
+    // active employees BEFORE the regular ingest. This unblocks Colorado-style
+    // cases where the user can't get an explicit roster CSV.
+    if (deriveEmployees) {
+      const seedRecords: ParsedTimeEntry[] = [];
+      if (scheduledText) {
+        seedRecords.push(...parseTimeEntriesCsv(scheduledText).records);
+      }
+      if (workedText) {
+        seedRecords.push(...parseTimeEntriesCsv(workedText).records);
+      }
+      if (seedRecords.length > 0) {
+        await autoDeriveEmployees(
+          supabase,
+          seedRecords,
+          location_id,
+          targetLocationName,
+          targetAliases,
+          activeEmployees,
+          inactiveEmployees,
+          summary
+        );
+      }
+      console.log(
+        `[time-import] auto-create seeded ${summary.derived_employees_created} employees ` +
+          `(${summary.derived_employees_failed} failed)`
       );
     }
 
@@ -614,15 +373,15 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       const { affectedQuarters } = await processFile(
         supabase,
         scheduledText,
-        scheduledFile?.name ?? "scheduled.csv",
-        loc.id,
-        loc.name,
-        loc.csv_aliases,
+        "scheduled.csv",
+        location_id,
+        targetLocationName,
+        targetAliases,
         "scheduled",
         activeEmployees,
         inactiveEmployees,
         existingKeys,
-        locSummary
+        summary
       );
       for (const k of affectedQuarters) affectedKeys.add(k);
     }
@@ -630,21 +389,23 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       const { affectedQuarters } = await processFile(
         supabase,
         workedText,
-        workedFile?.name ?? "worked.csv",
-        loc.id,
-        loc.name,
-        loc.csv_aliases,
+        "worked.csv",
+        location_id,
+        targetLocationName,
+        targetAliases,
         "worked",
         activeEmployees,
         inactiveEmployees,
         existingKeys,
-        locSummary
+        summary
       );
       for (const k of affectedQuarters) affectedKeys.add(k);
     }
+    console.log(
+      `[time-import] recomputing performance for ${affectedKeys.size} (employee, quarter) pairs`
+    );
 
-    // Recompute the affected (employee, quarter) keys for this location.
-    let locRecomputed = 0;
+    let recomputed = 0;
     for (const key of affectedKeys) {
       const [employee_id, yearStr, quarterStr] = key.split("|");
       const year = parseInt(yearStr, 10);
@@ -652,90 +413,351 @@ export async function uploadTimeDataBulkAction(formData: FormData) {
       const result = await recomputePerformanceForQuarter(
         supabase,
         employee_id,
-        loc.id,
+        location_id,
         year,
         quarter
       );
-      if (result.ok) locRecomputed += 1;
-      else locSummary.failures.push(`Recompute ${employee_id} ${year}-Q${quarter} @ ${loc.name}: ${result.error}`);
+      if (result.ok) recomputed += 1;
+      else
+        summary.failures.push(
+          `Recompute ${employee_id} ${year}-Q${quarter}: ${result.error}`
+        );
     }
-    totalRecomputed += locRecomputed;
 
     await supabase
       .from("locations")
       .update({ last_data_uploaded_at: new Date().toISOString() })
-      .eq("id", loc.id);
+      .eq("id", location_id);
 
-    // Roll location summary up into aggregated.
-    aggregated.scheduled_inserted += locSummary.scheduled_inserted;
-    aggregated.scheduled_updated += locSummary.scheduled_updated;
-    aggregated.worked_inserted += locSummary.worked_inserted;
-    aggregated.worked_updated += locSummary.worked_updated;
-    for (const n of locSummary.unknown_employees) aggregated.unknown_employees.add(n);
-    for (const n of locSummary.inactive_skipped) aggregated.inactive_skipped.add(n);
-    aggregated.skipped_other_location += locSummary.skipped_other_location;
-    aggregated.derived_employees_created += locSummary.derived_employees_created;
-    aggregated.derived_employees_failed += locSummary.derived_employees_failed;
-    aggregated.failures.push(...locSummary.failures);
-    aggregated.warnings.push(...locSummary.warnings);
+    revalidatePath(`/dashboard/locations/${location_id}`);
+    revalidatePath("/dashboard/employees");
 
-    perLocation.push({
-      name: loc.name,
-      sched_in: locSummary.scheduled_inserted,
-      sched_up: locSummary.scheduled_updated,
-      work_in: locSummary.worked_inserted,
-      work_up: locSummary.worked_updated,
-      recomputed: locRecomputed,
-    });
+    console.log(
+      `[time-import] DONE. sched=${summary.scheduled_inserted}+${summary.scheduled_updated}u, ` +
+        `worked=${summary.worked_inserted}+${summary.worked_updated}u, ` +
+        `recomputed=${recomputed}, ` +
+        `unknown=${summary.unknown_employees.size}, inactive=${summary.inactive_skipped.size}, ` +
+        `failures=${summary.failures.length}`
+    );
+
+    const params = new URLSearchParams();
+    params.set("sched_in", String(summary.scheduled_inserted));
+    params.set("sched_up", String(summary.scheduled_updated));
+    params.set("work_in", String(summary.worked_inserted));
+    params.set("work_up", String(summary.worked_updated));
+    params.set("recomputed", String(recomputed));
+    if (summary.unknown_employees.size > 0)
+      params.set(
+        "unknown",
+        Array.from(summary.unknown_employees).slice(0, 5).join(", ")
+      );
+    if (summary.inactive_skipped.size > 0)
+      params.set(
+        "inactive",
+        Array.from(summary.inactive_skipped).slice(0, 5).join(", ")
+      );
+    if (summary.skipped_other_location > 0)
+      params.set("time_skipped_other_location", String(summary.skipped_other_location));
+    if (summary.derived_employees_created > 0)
+      params.set("time_derived_created", String(summary.derived_employees_created));
+    if (summary.derived_employees_failed > 0)
+      params.set("time_derived_failed", String(summary.derived_employees_failed));
+    if (summary.warnings.length > 0)
+      params.set("warnings", summary.warnings.slice(0, 3).join(" | "));
+    if (summary.failures.length > 0)
+      params.set("failures", summary.failures.slice(0, 3).join(" | "));
+
+    redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
+  } finally {
+    await deleteCsvFromStorage(supabase, scheduledPath);
+    await deleteCsvFromStorage(supabase, workedPath);
+  }
+}
+
+/**
+ * Bulk version: upload one all-locations time CSV (scheduled and/or worked)
+ * and fan out to every target location at once. The Location column on each
+ * row routes that row to the right location. Used by the top-level Uploads
+ * page (scope=all) and Client detail pages (scope=client).
+ */
+export async function uploadTimeDataBulkAction(formData: FormData) {
+  console.log("[time-import] uploadTimeDataBulkAction invoked");
+
+  const scope = String(formData.get("scope") ?? "all") as "client" | "all";
+  const client_id = scope === "client" ? String(formData.get("client_id") ?? "") : null;
+  const scheduledPath = String(formData.get("scheduled_file_path") ?? "");
+  const workedPath = String(formData.get("worked_file_path") ?? "");
+  const deriveEmployees = formData.get("derive_employees") === "1";
+
+  const redirectBase =
+    scope === "client" && client_id
+      ? `/dashboard/clients/${client_id}`
+      : `/dashboard/uploads`;
+
+  if (!scheduledPath && !workedPath) {
+    redirect(
+      `${redirectBase}?bulk_time_error=${encodeURIComponent(
+        "Upload at least one file (Scheduled or Worked)."
+      )}`
+    );
   }
 
-  // Revalidate every touched location and the relevant scope page.
-  for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
-  revalidatePath("/dashboard/employees");
-  if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
-  revalidatePath("/dashboard/uploads");
+  const supabase = await createClient();
 
-  console.log(
-    `[time-import] BULK DONE across ${targets.length} locations: sched=${aggregated.scheduled_inserted}+${aggregated.scheduled_updated}u, ` +
-      `worked=${aggregated.worked_inserted}+${aggregated.worked_updated}u, ` +
-      `recomputed=${totalRecomputed}, unknown=${aggregated.unknown_employees.size}, ` +
-      `inactive=${aggregated.inactive_skipped.size}, failures=${aggregated.failures.length}`
-  );
-
-  const params = new URLSearchParams();
-  params.set("bulk_time_locations", String(targets.length));
-  params.set("bulk_sched_in", String(aggregated.scheduled_inserted));
-  params.set("bulk_sched_up", String(aggregated.scheduled_updated));
-  params.set("bulk_work_in", String(aggregated.worked_inserted));
-  params.set("bulk_work_up", String(aggregated.worked_updated));
-  params.set("bulk_recomputed", String(totalRecomputed));
-  if (aggregated.unknown_employees.size > 0)
-    params.set(
-      "bulk_unknown",
-      Array.from(aggregated.unknown_employees).slice(0, 5).join(", ")
+  let scheduledText: string | null = null;
+  let workedText: string | null = null;
+  try {
+    if (scheduledPath) scheduledText = await readCsvFromStorage(supabase, scheduledPath);
+    if (workedPath) workedText = await readCsvFromStorage(supabase, workedPath);
+  } catch (err) {
+    await deleteCsvFromStorage(supabase, scheduledPath);
+    await deleteCsvFromStorage(supabase, workedPath);
+    redirect(
+      `${redirectBase}?bulk_time_error=${encodeURIComponent(
+        err instanceof Error ? err.message : "Failed to read uploaded file."
+      )}`
     );
-  if (aggregated.inactive_skipped.size > 0)
-    params.set(
-      "bulk_inactive",
-      Array.from(aggregated.inactive_skipped).slice(0, 5).join(", ")
-    );
-  if (aggregated.derived_employees_created > 0)
-    params.set("bulk_derived_created", String(aggregated.derived_employees_created));
-  if (aggregated.derived_employees_failed > 0)
-    params.set("bulk_derived_failed", String(aggregated.derived_employees_failed));
-  // Compact per-location breakdown for the success banner.
-  const breakdown = perLocation
-    .filter(
-      (p) => p.sched_in + p.sched_up + p.work_in + p.work_up + p.recomputed > 0
-    )
-    .map(
-      (p) =>
-        `${p.name}: sched ${p.sched_in}+${p.sched_up}u · worked ${p.work_in}+${p.work_up}u · recomputed ${p.recomputed}`
-    )
-    .join(" | ");
-  if (breakdown) params.set("bulk_time_breakdown", breakdown);
-  if (aggregated.failures.length > 0)
-    params.set("bulk_time_failures", aggregated.failures.slice(0, 3).join(" | "));
+  }
 
-  redirect(`${redirectBase}?${params.toString()}`);
+  try {
+    // Resolve target locations (including their csv_aliases for matching).
+    let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
+    if (scope === "client" && client_id) q = q.eq("client_id", client_id);
+    const { data: targetsRaw } = await q;
+    const targets = (targetsRaw ?? []) as Array<{
+      id: string;
+      name: string;
+      csv_aliases: string[] | null;
+    }>;
+    if (targets.length === 0) {
+      redirect(
+        `${redirectBase}?bulk_time_error=${encodeURIComponent(
+          scope === "client" ? "No locations under this client." : "No locations exist yet."
+        )}`
+      );
+    }
+
+    // Aggregate stats across all touched locations.
+    const aggregated: ImportSummary = {
+      scheduled_inserted: 0,
+      scheduled_updated: 0,
+      worked_inserted: 0,
+      worked_updated: 0,
+      unknown_employees: new Set(),
+      inactive_skipped: new Set(),
+      skipped_other_location: 0,
+      derived_employees_created: 0,
+      derived_employees_failed: 0,
+      failures: [],
+      warnings: [],
+    };
+
+    // Pre-parse for the auto-derive pass (used inside the per-location loop below).
+    // We parse the texts ONCE here; processFile re-parses inside on each call but
+    // that's negligible at our row counts.
+    let seedRecords: ParsedTimeEntry[] = [];
+    if (deriveEmployees) {
+      if (scheduledText) {
+        seedRecords = seedRecords.concat(parseTimeEntriesCsv(scheduledText).records);
+      }
+      if (workedText) {
+        seedRecords = seedRecords.concat(parseTimeEntriesCsv(workedText).records);
+      }
+    }
+    let totalRecomputed = 0;
+    const perLocation: Array<{
+      name: string;
+      sched_in: number;
+      sched_up: number;
+      work_in: number;
+      work_up: number;
+      recomputed: number;
+    }> = [];
+
+    for (const loc of targets) {
+      // Per-location dependencies — same fetches the per-location action does.
+      const { data: locEmps } = await supabase
+        .from("employees")
+        .select("id, employee_name, active")
+        .eq("location_id", loc.id);
+
+      const activeEmployees = new Map<string, string>();
+      const inactiveEmployees = new Set<string>();
+      for (const e of locEmps ?? []) {
+        const key = (e.employee_name as string).toLowerCase();
+        if (e.active) activeEmployees.set(key, e.id as string);
+        else inactiveEmployees.add(key);
+      }
+
+      const { data: existingRows } = await supabase
+        .from("time_entries")
+        .select("employee_id, entry_date, entry_type")
+        .eq("location_id", loc.id);
+      const existingKeys = new Set<string>();
+      for (const r of existingRows ?? []) {
+        existingKeys.add(`${r.employee_id}|${r.entry_date}|${r.entry_type}`);
+      }
+
+      // Per-location summary, accumulated into aggregated at the end.
+      const locSummary: ImportSummary = {
+        scheduled_inserted: 0,
+        scheduled_updated: 0,
+        worked_inserted: 0,
+        worked_updated: 0,
+        unknown_employees: new Set(),
+        inactive_skipped: new Set(),
+        skipped_other_location: 0,
+        derived_employees_created: 0,
+        derived_employees_failed: 0,
+        failures: [],
+        warnings: [],
+      };
+
+      // Auto-create employees for THIS location from the seed records (if enabled).
+      if (deriveEmployees && seedRecords.length > 0) {
+        await autoDeriveEmployees(
+          supabase,
+          seedRecords,
+          loc.id,
+          loc.name,
+          loc.csv_aliases,
+          activeEmployees,
+          inactiveEmployees,
+          locSummary
+        );
+      }
+
+      const affectedKeys = new Set<string>();
+      if (scheduledText) {
+        const { affectedQuarters } = await processFile(
+          supabase,
+          scheduledText,
+          "scheduled.csv",
+          loc.id,
+          loc.name,
+          loc.csv_aliases,
+          "scheduled",
+          activeEmployees,
+          inactiveEmployees,
+          existingKeys,
+          locSummary
+        );
+        for (const k of affectedQuarters) affectedKeys.add(k);
+      }
+      if (workedText) {
+        const { affectedQuarters } = await processFile(
+          supabase,
+          workedText,
+          "worked.csv",
+          loc.id,
+          loc.name,
+          loc.csv_aliases,
+          "worked",
+          activeEmployees,
+          inactiveEmployees,
+          existingKeys,
+          locSummary
+        );
+        for (const k of affectedQuarters) affectedKeys.add(k);
+      }
+
+      // Recompute the affected (employee, quarter) keys for this location.
+      let locRecomputed = 0;
+      for (const key of affectedKeys) {
+        const [employee_id, yearStr, quarterStr] = key.split("|");
+        const year = parseInt(yearStr, 10);
+        const quarter = parseInt(quarterStr, 10) as Quarter;
+        const result = await recomputePerformanceForQuarter(
+          supabase,
+          employee_id,
+          loc.id,
+          year,
+          quarter
+        );
+        if (result.ok) locRecomputed += 1;
+        else locSummary.failures.push(`Recompute ${employee_id} ${year}-Q${quarter} @ ${loc.name}: ${result.error}`);
+      }
+      totalRecomputed += locRecomputed;
+
+      await supabase
+        .from("locations")
+        .update({ last_data_uploaded_at: new Date().toISOString() })
+        .eq("id", loc.id);
+
+      // Roll location summary up into aggregated.
+      aggregated.scheduled_inserted += locSummary.scheduled_inserted;
+      aggregated.scheduled_updated += locSummary.scheduled_updated;
+      aggregated.worked_inserted += locSummary.worked_inserted;
+      aggregated.worked_updated += locSummary.worked_updated;
+      for (const n of locSummary.unknown_employees) aggregated.unknown_employees.add(n);
+      for (const n of locSummary.inactive_skipped) aggregated.inactive_skipped.add(n);
+      aggregated.skipped_other_location += locSummary.skipped_other_location;
+      aggregated.derived_employees_created += locSummary.derived_employees_created;
+      aggregated.derived_employees_failed += locSummary.derived_employees_failed;
+      aggregated.failures.push(...locSummary.failures);
+      aggregated.warnings.push(...locSummary.warnings);
+
+      perLocation.push({
+        name: loc.name,
+        sched_in: locSummary.scheduled_inserted,
+        sched_up: locSummary.scheduled_updated,
+        work_in: locSummary.worked_inserted,
+        work_up: locSummary.worked_updated,
+        recomputed: locRecomputed,
+      });
+    }
+
+    // Revalidate every touched location and the relevant scope page.
+    for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
+    revalidatePath("/dashboard/employees");
+    if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
+    revalidatePath("/dashboard/uploads");
+
+    console.log(
+      `[time-import] BULK DONE across ${targets.length} locations: sched=${aggregated.scheduled_inserted}+${aggregated.scheduled_updated}u, ` +
+        `worked=${aggregated.worked_inserted}+${aggregated.worked_updated}u, ` +
+        `recomputed=${totalRecomputed}, unknown=${aggregated.unknown_employees.size}, ` +
+        `inactive=${aggregated.inactive_skipped.size}, failures=${aggregated.failures.length}`
+    );
+
+    const params = new URLSearchParams();
+    params.set("bulk_time_locations", String(targets.length));
+    params.set("bulk_sched_in", String(aggregated.scheduled_inserted));
+    params.set("bulk_sched_up", String(aggregated.scheduled_updated));
+    params.set("bulk_work_in", String(aggregated.worked_inserted));
+    params.set("bulk_work_up", String(aggregated.worked_updated));
+    params.set("bulk_recomputed", String(totalRecomputed));
+    if (aggregated.unknown_employees.size > 0)
+      params.set(
+        "bulk_unknown",
+        Array.from(aggregated.unknown_employees).slice(0, 5).join(", ")
+      );
+    if (aggregated.inactive_skipped.size > 0)
+      params.set(
+        "bulk_inactive",
+        Array.from(aggregated.inactive_skipped).slice(0, 5).join(", ")
+      );
+    if (aggregated.derived_employees_created > 0)
+      params.set("bulk_derived_created", String(aggregated.derived_employees_created));
+    if (aggregated.derived_employees_failed > 0)
+      params.set("bulk_derived_failed", String(aggregated.derived_employees_failed));
+    // Compact per-location breakdown for the success banner.
+    const breakdown = perLocation
+      .filter(
+        (p) => p.sched_in + p.sched_up + p.work_in + p.work_up + p.recomputed > 0
+      )
+      .map(
+        (p) =>
+          `${p.name}: sched ${p.sched_in}+${p.sched_up}u · worked ${p.work_in}+${p.work_up}u · recomputed ${p.recomputed}`
+      )
+      .join(" | ");
+    if (breakdown) params.set("bulk_time_breakdown", breakdown);
+    if (aggregated.failures.length > 0)
+      params.set("bulk_time_failures", aggregated.failures.slice(0, 3).join(" | "));
+
+    redirect(`${redirectBase}?${params.toString()}`);
+  } finally {
+    await deleteCsvFromStorage(supabase, scheduledPath);
+    await deleteCsvFromStorage(supabase, workedPath);
+  }
 }

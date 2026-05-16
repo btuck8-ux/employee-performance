@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SubmitButton } from "@/components/ui/submit-button";
+import { StorageUploadForm } from "@/components/uploads/StorageUploadForm";
 import { createLocationAction } from "./actions";
 import { uploadEmployeesCsvBulkAction } from "@/app/dashboard/locations/[id]/upload-actions";
 import { uploadTimeDataBulkAction } from "@/app/dashboard/locations/[id]/upload-time-actions";
@@ -250,7 +250,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — employees</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadEmployeesCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadEmployeesCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Importing & fanning out…"
+                submitLabel={`Upload to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -268,10 +274,7 @@ export default async function ClientDetailPage({
                     are skipped.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Importing & fanning out…">
-                  Upload to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -314,7 +317,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — time data (scheduled + worked)</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadTimeDataBulkAction} className="space-y-4">
+              <StorageUploadForm
+                action={uploadTimeDataBulkAction}
+                fileFields={["scheduled_file", "worked_file"]}
+                pendingLabel="Importing & recomputing…"
+                submitLabel={`Upload time data to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-4"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -355,10 +364,7 @@ export default async function ClientDetailPage({
                     CSV for the locations under this client.
                   </span>
                 </label>
-                <SubmitButton pendingLabel="Importing & recomputing…">
-                  Upload time data to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -395,7 +401,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — tattle survey data</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadTattleCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadTattleCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Importing & attributing…"
+                submitLabel={`Upload tattles to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -416,10 +428,7 @@ export default async function ClientDetailPage({
                     attribution can resolve correctly.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Importing & attributing…">
-                  Upload tattles to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -443,7 +452,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — customer reviews</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadCustomerReviewsCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadCustomerReviewsCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Importing & attributing…"
+                submitLabel={`Upload reviews to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -463,10 +478,7 @@ export default async function ClientDetailPage({
                     uploaded first.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Importing & attributing…">
-                  Upload reviews to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -490,7 +502,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — survey responses</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadSurveyCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadSurveyCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Matching & assigning…"
+                submitLabel={`Upload surveys to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -510,10 +528,7 @@ export default async function ClientDetailPage({
                     under {client.name}.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Matching & assigning…">
-                  Upload surveys to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -542,7 +557,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — tasks (7tasks)</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadTasksCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadTasksCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Importing & computing accountability…"
+                submitLabel={`Upload tasks to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -564,10 +585,7 @@ export default async function ClientDetailPage({
                     be uploaded first.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Importing & computing accountability…">
-                  Upload tasks to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
 
@@ -596,7 +614,13 @@ export default async function ClientDetailPage({
               <CardTitle>Bulk upload — POS sales</CardTitle>
             </CardHeader>
             <CardContent>
-              <form action={uploadPOSCsvBulkAction} className="space-y-3">
+              <StorageUploadForm
+                action={uploadPOSCsvBulkAction}
+                fileFields={["file"]}
+                pendingLabel="Importing sales & recomputing tips…"
+                submitLabel={`Upload POS sales to all ${locCount} location${locCount === 1 ? "" : "s"}`}
+                className="space-y-3"
+              >
                 <input type="hidden" name="scope" value="client" />
                 <input type="hidden" name="client_id" value={client.id} />
                 <div className="space-y-1.5">
@@ -618,10 +642,7 @@ export default async function ClientDetailPage({
                     every store.
                   </p>
                 </div>
-                <SubmitButton pendingLabel="Importing sales & recomputing tips…">
-                  Upload POS sales to all {locCount} location{locCount === 1 ? "" : "s"}
-                </SubmitButton>
-              </form>
+              </StorageUploadForm>
             </CardContent>
           </Card>
         </>
