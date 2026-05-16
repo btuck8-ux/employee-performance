@@ -97,13 +97,19 @@ export function StorageUploadForm({
 
     setProgress(null);
 
-    // Phase 2 — invoke the server action. A redirect (the action's normal
-    // completion path) throws NEXT_REDIRECT and is handled by Next.js; we
-    // let it propagate. setPending(false) is only reached if the action
-    // returns without redirecting (none of the current importers do, but
-    // future-proof).
-    await action(formData);
-    setPending(false);
+    // Phase 2 — invoke the server action. The action's normal completion path
+    // calls `redirect()`, which Next.js surfaces to the client as a thrown
+    // RedirectError. Because importers redirect to the SAME URL (a soft
+    // revalidation of the current page), this component does NOT unmount —
+    // it re-renders with the new server data. Without `finally`, the throw
+    // would skip `setPending(false)` and the button would stay locked in its
+    // "pending" state forever (observed on DT POS 2026-05-16).
+    try {
+      await action(formData);
+    } finally {
+      setPending(false);
+      setProgress(null);
+    }
   }
 
   return (
