@@ -7,6 +7,7 @@ import { TeamLeaderboard, type TeamRow } from "./TeamLeaderboard";
 import { PairHeatmap } from "./PairHeatmap";
 import { HourlyTipRateView } from "./HourlyTipRateView";
 import { EmployeeDeltaBar } from "./EmployeeDeltaBar";
+import { LocationCsTrendView } from "./LocationCsTrendView";
 import { resolveQuarterWindow, resolveAllTimeWindow } from "./TimeWindowPicker";
 
 export interface Quarter {
@@ -20,6 +21,7 @@ interface TeamsDashboardProps {
   quarters: Quarter[];
   selectedQuarterId: string | null;
   locationId: string;
+  locationName: string;
   employees: Array<{ id: string; employee_name: string }>;
   scatterRows: ScatterRow[];
   teams: TeamRow[];
@@ -31,6 +33,7 @@ export function TeamsDashboard({
   quarters,
   selectedQuarterId,
   locationId,
+  locationName,
   employees,
   scatterRows,
   teams,
@@ -111,6 +114,7 @@ export function TeamsDashboard({
           <TabsTrigger value="leaderboard">Team leaderboard</TabsTrigger>
           <TabsTrigger value="heatmap">Pair heatmap</TabsTrigger>
           <TabsTrigger value="hourly">Hourly tip rate</TabsTrigger>
+          <TabsTrigger value="cs-trend">CS Trend</TabsTrigger>
         </TabsList>
 
         <TabsContent value="scatter">
@@ -182,6 +186,15 @@ export function TeamsDashboard({
               </p>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="cs-trend">
+          <LocationCsTrendView
+            locationId={locationId}
+            locationName={locationName}
+            quarters={quarters}
+            initialQuarterId={selectedQuarterId}
+          />
         </TabsContent>
       </Tabs>
     </div>

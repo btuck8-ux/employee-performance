@@ -231,6 +231,7 @@ export default async function TeamsPage({
           quarters={quarters}
           selectedQuarterId={selectedQuarter?.id ?? null}
           locationId={id}
+          locationName={location.name}
           employees={employees}
           scatterRows={scatterRows}
           teams={teams}
