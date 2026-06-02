@@ -37,7 +37,10 @@ export async function middleware(request: NextRequest) {
     // Vercel Cron sends Authorization: Bearer <CRON_SECRET> but no user
     // session. Bypass session check; each cron route enforces its own
     // CRON_SECRET match in the GET handler.
-    pathname.startsWith("/api/cron");
+    pathname.startsWith("/api/cron") ||
+    // /api/scores enforces its own SCORES_FEED_TOKEN bearer check in the
+    // route handler; bypass the session/redirect like the cron routes.
+    pathname.startsWith("/api/scores");
 
   if (!user && !isAuthRoute && !isPublicAsset) {
     const url = request.nextUrl.clone();
