@@ -5,18 +5,22 @@
  * company — the proven 6/4 email bridge. After this runs, nightly time/receipt
  * ingest joins on (seven_shifts_user_id + location_id) instead of name strings.
  *
- * NOT in cron (handoff §"cold backfills run as a one-off script"). Idempotent —
- * safe to re-run; it only sets the column.
+ * OPTIONAL / ad-hoc. The nightly cron now self-resolves identities at the start
+ * of every run (src/lib/ingest/sevenshifts/identities.ts), so you normally do
+ * NOT need this script. It remains for one-off local runs / audits.
  *
- * Requires env:
+ * Idempotent — safe to re-run; it only sets the column.
+ *
+ * Requires env (provided DIRECTLY — note `vercel env pull` returns EMPTY values
+ * for Sensitive vars like these tokens, so pulling does NOT work):
  *   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *   IKES_CULTUREPULSE          (token A: companies 360494, 185592)
  *   IKES_CULTUREPULSE_HOUSTON  (token B: company 62064)
  *
- * Run (Node 24 strips TS types natively):
- *   vercel env pull .env.local          # pull tokens + service-role key
+ * Run (Node 24 strips TS types natively), exporting the tokens yourself:
+ *   export IKES_CULTUREPULSE=... IKES_CULTUREPULSE_HOUSTON=...
+ *   node --env-file=.env.local scripts/backfill-seven-shifts-user-id.ts --dry
  *   node --env-file=.env.local scripts/backfill-seven-shifts-user-id.ts
- *   # or: npx tsx scripts/backfill-seven-shifts-user-id.ts
  *
  * Flags: --dry   preview matches without writing.
  */

@@ -25,6 +25,7 @@ import { ingestTimePunches } from "./time";
 import { ingestReceipts } from "./receipts";
 import { ingestTaskSummaries } from "./tasks";
 import { maybeSendFailureAlert } from "./alert";
+import { resolveIdentities, type IdentityResolutionSummary } from "./identities";
 
 const DEFAULT_LOOKBACK_DAYS = 7;
 
@@ -34,6 +35,7 @@ export interface NightlyIngestSummary {
   locations: number;
   runs: number;
   by_status: Record<string, number>;
+  identities: IdentityResolutionSummary;
   alert: { sent: boolean; reason: string };
   outcomes: Array<{
     source: IngestSource;
@@ -65,6 +67,15 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
   const supabase = createAdminClient();
 
   const crosswalk = await loadCrosswalk(supabase);
+
+  // Resolve employee identities first (idempotent email bridge) so the
+  // time/receipt fetchers can join punches/receipts to employees by
+  // seven_shifts_user_id. Self-healing: new hires bridge on the next run.
+  const identities = await resolveIdentities(supabase, crosswalk);
+  console.log(
+    `[nightly-ingest] identities: matched ${identities.total_matched} new; errors ${identities.errors.length}`
+  );
+
   const outcomes: RunOutcome[] = [];
 
   for (const loc of crosswalk) {
@@ -107,6 +118,7 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
     locations: crosswalk.length,
     runs: outcomes.length,
     by_status: byStatus,
+    identities,
     alert,
     outcomes: outcomes.map((o) => ({
       source: o.source,
