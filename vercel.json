@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/sweep-csv-uploads",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/nightly-ingest",
+      "schedule": "0 9 * * *"
     }
   ]
 }

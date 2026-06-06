@@ -1,0 +1,55 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/** The service-role client used across the ingest path (createAdminClient()). */
+export type AdminClient = SupabaseClient;
+
+/** One location's 7shifts wiring, read from the migration-030 crosswalk. */
+export interface LocationCrosswalk {
+  id: string; // EPD locations.id (uuid)
+  name: string;
+  location_code: string;
+  company_id: number; // seven_shifts_company_id
+  seven_shifts_location_id: number;
+  pos_via_7shifts: boolean;
+}
+
+/**
+ * Load the 8-row crosswalk. Only locations with both 7shifts ids set are
+ * returned (a location not yet wired is skipped, not errored). Ordered by
+ * location_code for stable, readable run logs.
+ */
+export async function loadCrosswalk(
+  supabase: AdminClient
+): Promise<LocationCrosswalk[]> {
+  const { data, error } = await supabase
+    .from("locations")
+    .select(
+      "id, name, location_code, seven_shifts_company_id, seven_shifts_location_id, pos_via_7shifts"
+    )
+    .not("seven_shifts_company_id", "is", null)
+    .not("seven_shifts_location_id", "is", null)
+    .order("location_code");
+
+  if (error) {
+    throw new Error(`Failed to load 7shifts crosswalk: ${error.message}`);
+  }
+
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    location_code: r.location_code as string,
+    company_id: Number(r.seven_shifts_company_id),
+    seven_shifts_location_id: Number(r.seven_shifts_location_id),
+    pos_via_7shifts: Boolean(r.pos_via_7shifts),
+  }));
+}
+
+/**
+ * 7tasks is the Colorado program (company 185592). NOLA (360494) and Houston
+ * (62064) do not run 7tasks, so the task source only fans out to CO stores.
+ */
+export const SEVEN_TASKS_COMPANY_ID = 185592;
+
+export function usesSevenTasks(loc: LocationCrosswalk): boolean {
+  return loc.company_id === SEVEN_TASKS_COMPANY_ID;
+}
