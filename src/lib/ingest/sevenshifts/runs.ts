@@ -1,6 +1,10 @@
 import type { AdminClient } from "./crosswalk";
 
-export type IngestSource = "7shifts_time" | "7tasks" | "pos_receipts";
+export type IngestSource =
+  | "7shifts_time"
+  | "7tasks"
+  | "pos_receipts"
+  | "cake_timesheets";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {

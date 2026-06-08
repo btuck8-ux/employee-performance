@@ -11,6 +11,12 @@ export interface LocationCrosswalk {
   company_id: number; // seven_shifts_company_id
   seven_shifts_location_id: number;
   pos_via_7shifts: boolean;
+  /**
+   * Which feed owns this location's worked actuals (migration 033).
+   * '7shifts' (default) -> the nightly 7shifts_time pull; 'cake' -> the CAKE
+   * labor feed. The orchestrator skips 7shifts_time when this is not '7shifts'.
+   */
+  actuals_source: "7shifts" | "cake";
 }
 
 /**
@@ -24,7 +30,7 @@ export async function loadCrosswalk(
   const { data, error } = await supabase
     .from("locations")
     .select(
-      "id, name, location_code, seven_shifts_company_id, seven_shifts_location_id, pos_via_7shifts"
+      "id, name, location_code, seven_shifts_company_id, seven_shifts_location_id, pos_via_7shifts, actuals_source"
     )
     .not("seven_shifts_company_id", "is", null)
     .not("seven_shifts_location_id", "is", null)
@@ -41,6 +47,7 @@ export async function loadCrosswalk(
     company_id: Number(r.seven_shifts_company_id),
     seven_shifts_location_id: Number(r.seven_shifts_location_id),
     pos_via_7shifts: Boolean(r.pos_via_7shifts),
+    actuals_source: (r.actuals_source as string) === "cake" ? "cake" : "7shifts",
   }));
 }
 

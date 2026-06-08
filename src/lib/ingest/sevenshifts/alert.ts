@@ -64,10 +64,21 @@ export interface AlertResult {
   reason: string;
 }
 
-/** Send the summary email if warranted; otherwise no-op. Never throws. */
-export async function maybeSendFailureAlert(runs: RunOutcome[]): Promise<AlertResult> {
-  const { shouldAlert, reasons } = decideAlert(runs);
-  if (!shouldAlert) return { sent: false, reason: "no alert condition" };
+/**
+ * Send the summary email if warranted; otherwise no-op. Never throws.
+ *
+ * `extraReasons` carries alert conditions computed outside the pure decideAlert()
+ * pass — currently the per-location empty-streak guard (streak.ts), which needs
+ * a DB lookup the orchestrator does before calling here. Any non-empty
+ * extraReasons forces an alert even when decideAlert() alone would stay quiet.
+ */
+export async function maybeSendFailureAlert(
+  runs: RunOutcome[],
+  extraReasons: string[] = []
+): Promise<AlertResult> {
+  const decision = decideAlert(runs);
+  const reasons = [...decision.reasons, ...extraReasons];
+  if (reasons.length === 0) return { sent: false, reason: "no alert condition" };
 
   const body = buildBody(runs, reasons);
   const apiKey = process.env.RESEND_API_KEY;

@@ -25,6 +25,7 @@ import { ingestTimePunches } from "./time";
 import { ingestReceipts } from "./receipts";
 import { ingestTaskSummaries } from "./tasks";
 import { maybeSendFailureAlert } from "./alert";
+import { emptyStreakReasons } from "./streak";
 import { resolveIdentities, type IdentityResolutionSummary } from "./identities";
 
 const DEFAULT_LOOKBACK_DAYS = 7;
@@ -79,8 +80,12 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
   const outcomes: RunOutcome[] = [];
 
   for (const loc of crosswalk) {
-    // --- 7shifts_time (all wired locations) ---
-    {
+    // --- 7shifts_time (only locations whose actuals come from 7shifts) ---
+    // Locations on another actuals source (e.g. NOLA -> CAKE, migration 033)
+    // skip this block: their 7shifts time pull is a silent no-op that would
+    // otherwise log `empty` nightly, and routing it here prevents double-sourcing
+    // time_entries. Scheduling is unaffected — only worked actuals are gated.
+    if (loc.actuals_source === "7shifts") {
       const w = await windowFor(supabase, "7shifts_time", loc, windowEnd);
       const runId = await startRun(supabase, "7shifts_time", loc.id, w.start, w.end);
       const outcome = await ingestTimePunches(supabase, loc, w.start, w.end);
@@ -107,7 +112,12 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
     }
   }
 
-  const alert = await maybeSendFailureAlert(outcomes);
+  // Per-location empty-streak guard: catch a single location drifting `empty`
+  // night after night even while the same source has data elsewhere (the NOLA
+  // failure mode decideAlert() missed). Needs ingest_runs history, so it runs
+  // here and feeds its reasons into the alert.
+  const streakReasons = await emptyStreakReasons(supabase, outcomes);
+  const alert = await maybeSendFailureAlert(outcomes, streakReasons);
 
   const byStatus: Record<string, number> = {};
   for (const o of outcomes) byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
