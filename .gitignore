@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# stray doc/data exports that belong in the Projects folder, not the repo
+/*.csv
+/*-handoff.md
