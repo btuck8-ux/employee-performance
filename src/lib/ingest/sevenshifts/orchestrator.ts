@@ -2,8 +2,14 @@
  * Nightly ingest orchestrator: fan out the 7shifts trio across the crosswalk.
  *
  *   7shifts_time  -> all wired locations (8)
- *   7tasks        -> Colorado stores only (company 185592) — log-only
  *   pos_receipts  -> locations with pos_via_7shifts = true (HOU at launch)
+ *
+ * NOTE: the old log-only `7tasks` step (aggregate task_list_daily_summary) was
+ * retired once the guest-feedback harvester began writing REAL per-employee
+ * 7Tasks rows under the same source='7tasks' key. Running both would double-log
+ * an ingest_runs row per CO store each night and corrupt the harvester's
+ * lastSuccessfulWindowEnd incremental-window math on that (source, location).
+ * Per-employee 7Tasks now lives entirely in /api/cron/harvest-guest-feedback.
  *
  * Each (source, location) gets its own incremental window: from the last
  * non-error run's window_end (default 7-day lookback on first run) to now.
@@ -13,7 +19,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { loadCrosswalk, usesSevenTasks, type LocationCrosswalk } from "./crosswalk";
+import { loadCrosswalk, type LocationCrosswalk } from "./crosswalk";
 import {
   startRun,
   finishRun,
@@ -23,7 +29,6 @@ import {
 } from "./runs";
 import { ingestTimePunches } from "./time";
 import { ingestReceipts } from "./receipts";
-import { ingestTaskSummaries } from "./tasks";
 import { maybeSendFailureAlert } from "./alert";
 import { emptyStreakReasons } from "./streak";
 import {
@@ -106,15 +111,6 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
       const w = await windowFor(supabase, "7shifts_time", loc, windowEnd);
       const runId = await startRun(supabase, "7shifts_time", loc.id, w.start, w.end);
       const outcome = await ingestTimePunches(supabase, loc, w.start, w.end);
-      await finishRun(supabase, runId, outcome);
-      outcomes.push(outcome);
-    }
-
-    // --- 7tasks (Colorado only; log-only) ---
-    if (usesSevenTasks(loc)) {
-      const w = await windowFor(supabase, "7tasks", loc, windowEnd);
-      const runId = await startRun(supabase, "7tasks", loc.id, w.start, w.end);
-      const outcome = await ingestTaskSummaries(loc, w.start, w.end);
       await finishRun(supabase, runId, outcome);
       outcomes.push(outcome);
     }
