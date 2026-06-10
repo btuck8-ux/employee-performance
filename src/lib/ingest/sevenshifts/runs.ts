@@ -4,7 +4,9 @@ export type IngestSource =
   | "7shifts_time"
   | "7tasks"
   | "pos_receipts"
-  | "cake_timesheets";
+  | "cake_timesheets"
+  | "tattle"
+  | "reviews";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {

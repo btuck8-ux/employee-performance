@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/nightly-ingest",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/harvest-guest-feedback",
+      "schedule": "30 9 * * *"
     }
   ]
 }
