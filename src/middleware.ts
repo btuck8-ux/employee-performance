@@ -40,7 +40,10 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/cron") ||
     // /api/scores enforces its own SCORES_FEED_TOKEN bearer check in the
     // route handler; bypass the session/redirect like the cron routes.
-    pathname.startsWith("/api/scores");
+    pathname.startsWith("/api/scores") ||
+    // /api/admin/* (operator backfills) enforce their own CRON_SECRET bearer
+    // check in the route handler; bypass the session/redirect like the crons.
+    pathname.startsWith("/api/admin");
 
   if (!user && !isAuthRoute && !isPublicAsset) {
     const url = request.nextUrl.clone();

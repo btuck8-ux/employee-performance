@@ -26,9 +26,27 @@ import { ingestReceipts } from "./receipts";
 import { ingestTaskSummaries } from "./tasks";
 import { maybeSendFailureAlert } from "./alert";
 import { emptyStreakReasons } from "./streak";
+import {
+  quarterWorkedCoverage,
+  coverageReasons,
+  quarterCoverageWindow,
+  type CoverageReport,
+} from "./coverage";
 import { resolveIdentities, type IdentityResolutionSummary } from "./identities";
+import { currentQuarter } from "@/lib/quarter";
 
-const DEFAULT_LOOKBACK_DAYS = 7;
+/**
+ * First-run backfill floor: the start of the current calendar quarter, as an
+ * ISO timestamp. Replaces the old 7-day default so a location's very first run
+ * — or a cron that comes up mid-quarter — backfills the whole quarter instead
+ * of leaving a silent pre-cron hole (handoff §3: HOU had 2 of 31 May days, CO
+ * stores ~9-10 of ~26). Only the first window is widened; once a location has a
+ * successful run, windowFor() resumes from lastSuccessfulWindowEnd as before, so
+ * this never re-pulls the quarter on subsequent nights.
+ */
+function firstRunFloor(): string {
+  return currentQuarter().periodStart.toISOString();
+}
 
 export interface NightlyIngestSummary {
   started_at: string;
@@ -38,6 +56,7 @@ export interface NightlyIngestSummary {
   by_status: Record<string, number>;
   identities: IdentityResolutionSummary;
   alert: { sent: boolean; reason: string };
+  coverage: CoverageReport[];
   outcomes: Array<{
     source: IngestSource;
     location_code: string;
@@ -56,9 +75,7 @@ async function windowFor(
   windowEnd: string
 ): Promise<{ start: string; end: string }> {
   const last = await lastSuccessfulWindowEnd(supabase, source, loc.id);
-  const start =
-    last ??
-    new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const start = last ?? firstRunFloor();
   return { start, end: windowEnd };
 }
 
@@ -117,7 +134,17 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
   // failure mode decideAlert() missed). Needs ingest_runs history, so it runs
   // here and feeds its reasons into the alert.
   const streakReasons = await emptyStreakReasons(supabase, outcomes);
-  const alert = await maybeSendFailureAlert(outcomes, streakReasons);
+
+  // Worked-day coverage health check: flag any 7shifts location whose distinct
+  // worked days this quarter fall below 80% of elapsed days — the quarter-wide
+  // hole class the firstRunFloor guard prevents going forward but cannot heal
+  // retroactively (handoff §3/§4). Reasons join the same alert.
+  const coverageWindow = quarterCoverageWindow(currentQuarter(), new Date());
+  const coverage = await quarterWorkedCoverage(supabase, crosswalk, coverageWindow);
+  const alert = await maybeSendFailureAlert(outcomes, [
+    ...streakReasons,
+    ...coverageReasons(coverage, coverageWindow.label),
+  ]);
 
   const byStatus: Record<string, number> = {};
   for (const o of outcomes) byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
@@ -130,6 +157,7 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
     by_status: byStatus,
     identities,
     alert,
+    coverage,
     outcomes: outcomes.map((o) => ({
       source: o.source,
       location_code: o.location_code,

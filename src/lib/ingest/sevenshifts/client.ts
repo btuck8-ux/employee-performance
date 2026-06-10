@@ -6,9 +6,11 @@
  *  - Header `x-api-version: 2025-03-01`.
  *  - Bearer = long-lived Access Token. 10 req/s/token. Cursor pagination
  *    (`meta.cursor.next`).
- *  - Token routing by company_id:
- *      A (IKES_CULTUREPULSE)         -> company 360494 (NOLA) + 185592 (6 CO)
- *      B (IKES_CULTUREPULSE_HOUSTON) -> company 62064  (Houston)
+ *  - Token routing by company_id (three separate tokens — NOLA and Colorado
+ *    were split off what used to be one shared token):
+ *      IKES_CULTUREPULSE_HOUSTON  -> company 62064  (Houston)
+ *      IKES_CULTUREPULSE          -> company 360494 (NOLA)
+ *      IKES_COLORADO_CULTUREPULSE -> company 185592 (the 6 Colorado stores)
  *
  * EPD pulls ACTUALS ONLY. No shifts/scheduled endpoints (that's Culture
  * Pulse's domain — hard fence).
@@ -17,9 +19,17 @@
 export const SEVEN_SHIFTS_BASE = "https://api.7shifts.com";
 export const SEVEN_SHIFTS_API_VERSION = "2025-03-01";
 
-/** Companies served by token A vs token B. */
-const TOKEN_A_COMPANIES = new Set<number>([360494, 185592]);
-const TOKEN_B_COMPANIES = new Set<number>([62064]);
+/**
+ * 7shifts access-token env var per company_id. Three distinct tokens: Houston,
+ * NOLA, and Colorado were each issued separately (NOLA and the 6 Colorado stores
+ * were split off what was once a single shared token). 185592 routing here is
+ * load-bearing for the CO stores — it must NOT fall back to the NOLA token.
+ */
+const TOKEN_ENV_BY_COMPANY: Record<number, string> = {
+  62064: "IKES_CULTUREPULSE_HOUSTON", // Houston
+  360494: "IKES_CULTUREPULSE", // NOLA
+  185592: "IKES_COLORADO_CULTUREPULSE", // the 6 Colorado stores
+};
 
 /**
  * Resolve the access token for a 7shifts company_id from env. Throws (rather
@@ -27,13 +37,10 @@ const TOKEN_B_COMPANIES = new Set<number>([62064]);
  * an empty pull masquerading as success.
  */
 export function tokenForCompany(companyId: number): string {
-  let envName: string | null = null;
-  if (TOKEN_A_COMPANIES.has(companyId)) envName = "IKES_CULTUREPULSE";
-  else if (TOKEN_B_COMPANIES.has(companyId)) envName = "IKES_CULTUREPULSE_HOUSTON";
-
+  const envName = TOKEN_ENV_BY_COMPANY[companyId];
   if (!envName) {
     throw new Error(
-      `No 7shifts token route for company_id ${companyId} (expected one of 360494, 185592, 62064).`
+      `No 7shifts token route for company_id ${companyId} (expected one of 62064, 360494, 185592).`
     );
   }
   const token = process.env[envName];
