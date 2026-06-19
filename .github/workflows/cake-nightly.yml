@@ -1,0 +1,49 @@
+name: CAKE nightly timesheet harvest (NOLA)
+
+# Pulls NOLA's previous days from CAKE and lands them in EPD time_entries.
+# Runs every morning; the import is idempotent so the rolling window is safe.
+on:
+  schedule:
+    # 13:30 UTC = 08:30 America/Chicago (CDT). Adjust if you want it earlier/later.
+    - cron: "30 13 * * *"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: cake-nightly
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scripts/cake-nightly
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps + Chromium
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run harvester
+        env:
+          CAKE_USERNAME: ${{ secrets.CAKE_USERNAME }}
+          CAKE_PASSWORD: ${{ secrets.CAKE_PASSWORD }}
+          EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
+          EPD_CRON_SECRET: ${{ secrets.EPD_CRON_SECRET }}
+          DAYS_BACK: "3"
+        run: npm run harvest
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cake-harvest-failure
+          path: scripts/cake-nightly/cake-harvest-failure.png
+          if-no-files-found: ignore

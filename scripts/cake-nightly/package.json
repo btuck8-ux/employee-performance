@@ -1,0 +1,13 @@
+{
+  "name": "cake-nightly-harvester",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nightly Playwright harvester: logs into CAKE, pulls NOLA timesheets, POSTs to EPD's cake-timesheet-import route.",
+  "scripts": {
+    "harvest": "node harvest.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
