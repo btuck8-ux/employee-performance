@@ -4,8 +4,7 @@ import { runGuestFeedbackHarvest } from "@/lib/ingest/guest-feedback/harvest";
 /**
  * Nightly unified guest-feedback harvester (handoff §4b).
  *
- * Pulls Tattle snapshots, Tattle online reviews, and per-employee 7Tasks for
- * every non-excluded store on a rolling per-(source, location) incremental
+ * Pulls Tattle snapshots and Tattle online reviews for every non-excluded store on a rolling per-(source, location) incremental
  * window, landing rows through the same ingest*ForLocation compute as the manual
  * uploads. One ingest_runs row per source × location; failures roll into the
  * shared alert (alert.ts) + empty-streak guard (streak.ts).
@@ -30,7 +29,14 @@ export async function GET(request: Request) {
   }
 
   try {
-    const summary = await runGuestFeedbackHarvest({ locationCodes: "all" });
+    // 7Tasks now arrives via the 7shifts Playwright harness (GitHub Actions →
+    // /api/admin/import-tasks-csv), mirroring the CAKE nightly. So the Vercel
+    // cron runs only the env-token sources here; including "tasks" would fire the
+    // retired dashboard-cookie path and error every night.
+    const summary = await runGuestFeedbackHarvest({
+      locationCodes: "all",
+      sources: ["tattle", "reviews"],
+    });
     console.log(
       `[harvest-cron] done: ${summary.runs} runs across ${summary.locations} locations`,
       summary.by_status
