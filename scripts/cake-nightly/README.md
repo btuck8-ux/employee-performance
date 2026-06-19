@@ -24,15 +24,19 @@ Playwright login → `getShifts` per profile → build CSV → POST to
 
 Set these in **Settings → Secrets and variables → Actions**:
 
-| Secret            | Value                                                            |
-| ----------------- | ---------------------------------------------------------------- |
-| `CAKE_USERNAME`   | CAKE login email (e.g. `tbascom@loveandsandwiches.com`)          |
-| `CAKE_PASSWORD`   | CAKE login password                                              |
-| `EPD_BASE_URL`    | `https://employee-performance-one.vercel.app`                    |
-| `EPD_CRON_SECRET` | the same value as EPD's `CRON_SECRET` (authorizes the routes)    |
+| Secret              | Value                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| `CAKE_USERNAME`     | CAKE login email (e.g. `tbascom@loveandsandwiches.com`)            |
+| `CAKE_PASSWORD`     | CAKE login password                                                |
+| `EPD_BASE_URL`      | `https://employee-performance-one.vercel.app`                      |
+| `EPD_HARVEST_TOKEN` | a token you choose; must equal Vercel env `CAKE_HARVEST_TOKEN`      |
 
-No CAKE credentials live in the repo or in EPD — only in GitHub secrets, read at
-runtime. The harvester never logs the password or token.
+**Dedicated token (not `CRON_SECRET`).** The import routes accept
+`CAKE_HARVEST_TOKEN` (set in **Vercel** env) and fall back to `CRON_SECRET` only
+until it's set. So you set a fresh value in Vercel as `CAKE_HARVEST_TOKEN` and the
+*same* value in GitHub as `EPD_HARVEST_TOKEN` — EPD's master `CRON_SECRET` is
+never shared with the GitHub Action. No CAKE credentials live in the repo or in
+EPD; the harvester never logs the password or token.
 
 ## Run it locally (to test / watch the login)
 
@@ -43,7 +47,7 @@ npx playwright install chromium
 CAKE_USERNAME='tbascom@loveandsandwiches.com' \
 CAKE_PASSWORD='********' \
 EPD_BASE_URL='https://employee-performance-one.vercel.app' \
-EPD_CRON_SECRET='********' \
+EPD_HARVEST_TOKEN='********' \
 HEADLESS=false DAYS_BACK=4 \
 npm run harvest
 ```

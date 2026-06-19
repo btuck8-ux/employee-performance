@@ -12,7 +12,7 @@
  *   CAKE_USERNAME      CAKE login email (e.g. tbascom@loveandsandwiches.com)
  *   CAKE_PASSWORD      CAKE login password
  *   EPD_BASE_URL       e.g. https://employee-performance-one.vercel.app
- *   EPD_CRON_SECRET    the EPD CRON_SECRET (authorizes the admin routes)
+ *   EPD_HARVEST_TOKEN  matches Vercel CAKE_HARVEST_TOKEN (authorizes the import routes)
  * Optional:
  *   DAYS_BACK          rolling window size in days (default 3)
  *   CAKE_ACCOUNT_ID    default 11527572 (NOLA)
@@ -25,7 +25,7 @@ const {
   CAKE_USERNAME,
   CAKE_PASSWORD,
   EPD_BASE_URL,
-  EPD_CRON_SECRET,
+  EPD_HARVEST_TOKEN,
   DAYS_BACK = "3",
   CAKE_ACCOUNT_ID = "11527572",
   HEADLESS = "true",
@@ -37,7 +37,7 @@ const STAFF_URL = `https://staff.cake.net/timesheets?appClient=MP&accountId=${CA
 const GETSHIFTS_URL = `https://payroll.cake.net/${CAKE_ACCOUNT_ID}/getShifts`;
 
 function requireEnv() {
-  const missing = ["CAKE_USERNAME", "CAKE_PASSWORD", "EPD_BASE_URL", "EPD_CRON_SECRET"].filter(
+  const missing = ["CAKE_USERNAME", "CAKE_PASSWORD", "EPD_BASE_URL", "EPD_HARVEST_TOKEN"].filter(
     (k) => !process.env[k]
   );
   if (missing.length) {
@@ -64,7 +64,7 @@ function addDays(isoDate, n) {
 
 async function fetchProfileIds() {
   const res = await fetch(`${EPD_BASE_URL}/api/admin/cake-profile-ids`, {
-    headers: { Authorization: `Bearer ${EPD_CRON_SECRET}` },
+    headers: { Authorization: `Bearer ${EPD_HARVEST_TOKEN}` },
   });
   if (!res.ok) throw new Error(`cake-profile-ids ${res.status}: ${await res.text()}`);
   const json = await res.json();
@@ -203,7 +203,7 @@ async function postToEpd(csv, windowStart, windowEnd) {
   const url = `${EPD_BASE_URL}/api/admin/cake-timesheet-import?window_start=${windowStart}&window_end=${windowEnd}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${EPD_CRON_SECRET}`, "Content-Type": "text/csv" },
+    headers: { Authorization: `Bearer ${EPD_HARVEST_TOKEN}`, "Content-Type": "text/csv" },
     body: csv,
   });
   const text = await res.text();

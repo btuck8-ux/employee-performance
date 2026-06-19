@@ -36,7 +36,7 @@ jobs:
           CAKE_USERNAME: ${{ secrets.CAKE_USERNAME }}
           CAKE_PASSWORD: ${{ secrets.CAKE_PASSWORD }}
           EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
-          EPD_CRON_SECRET: ${{ secrets.EPD_CRON_SECRET }}
+          EPD_HARVEST_TOKEN: ${{ secrets.EPD_HARVEST_TOKEN }}
           DAYS_BACK: "3"
         run: npm run harvest
 

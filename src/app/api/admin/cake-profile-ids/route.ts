@@ -18,9 +18,11 @@ export const dynamic = "force-dynamic";
 const NOLA_LOCATION_ID = "570102ad-988f-4972-8475-f2f85a7dc0ae";
 
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
+  // Dedicated harvester token (least privilege); falls back to CRON_SECRET so
+  // nothing breaks before CAKE_HARVEST_TOKEN is set. Once set, only it is accepted.
+  const secret = process.env.CAKE_HARVEST_TOKEN ?? process.env.CRON_SECRET;
   if (!secret) {
-    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
+    return NextResponse.json({ error: "CAKE_HARVEST_TOKEN/CRON_SECRET not configured" }, { status: 500 });
   }
   if ((request.headers.get("authorization") ?? "") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
