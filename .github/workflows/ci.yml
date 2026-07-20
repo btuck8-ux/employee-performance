@@ -1,0 +1,36 @@
+name: CI
+
+# Lint + unit tests on every push to main and every PR targeting main.
+# Tests run on Node's built-in runner with native TypeScript type-stripping
+# (node --test, see package.json "test"), which requires Node >= 22.18; we pin
+# 24 to match the existing workflows and keep type-stripping unflagged.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test

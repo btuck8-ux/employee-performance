@@ -14,15 +14,17 @@ export default async function DashboardHome() {
         .is("superseded_at", null),
     ]);
 
+  // Request-time cutoff for "stale" locations. Computed once here rather than
+  // inline in the query: this is a server component, so Date.now() is a
+  // legitimate request-time value, not a render-purity violation.
+  // eslint-disable-next-line react-hooks/purity
+  const staleCutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
   const { data: staleLocations } = await supabase
     .from("locations")
     .select("id, name, last_data_uploaded_at")
     .eq("active", true)
-    .or(
-      `last_data_uploaded_at.is.null,last_data_uploaded_at.lt.${new Date(
-        Date.now() - 48 * 60 * 60 * 1000
-      ).toISOString()}`
-    )
+    .or(`last_data_uploaded_at.is.null,last_data_uploaded_at.lt.${staleCutoffIso}`)
     .limit(5);
 
   return (
