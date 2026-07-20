@@ -41,6 +41,9 @@ export async function middleware(request: NextRequest) {
     // /api/scores enforces its own SCORES_FEED_TOKEN bearer check in the
     // route handler; bypass the session/redirect like the cron routes.
     pathname.startsWith("/api/scores") ||
+    // /api/identity (EPD->CP identity feed) enforces its own SCORES_FEED_TOKEN
+    // bearer check in the route handler; bypass like /api/scores.
+    pathname.startsWith("/api/identity") ||
     // /api/admin/* (operator backfills) enforce their own CRON_SECRET bearer
     // check in the route handler; bypass the session/redirect like the crons.
     pathname.startsWith("/api/admin");
