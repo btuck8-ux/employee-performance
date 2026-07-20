@@ -91,7 +91,21 @@ export async function GET(request: Request) {
 
   const { data, error, count } = await query;
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Log the underlying DB error server-side (visible in Vercel function logs)
+    // but never leak PostgREST/Postgres internals to the external CP consumer.
+    console.error("[scores-feed] query failed", {
+      view,
+      location_code: locationCode,
+      period,
+      since,
+      limit,
+      offset,
+      message: error.message,
+    });
+    return NextResponse.json(
+      { error: "Internal error retrieving scores" },
+      { status: 500 }
+    );
   }
 
   const total = count ?? 0;
