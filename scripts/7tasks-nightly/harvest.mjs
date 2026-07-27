@@ -160,7 +160,9 @@ async function fetchTasksCsv(page, companyId, startDate, endDate) {
   if (init.status < 200 || init.status >= 300) {
     throw new Error(`tasks_report initiate ${init.status}: ${init.body.slice(0, 300)}`);
   }
-  const uuid = parseJson(init.body)?.data?.report_task_uuid;
+  // June capture named this report_task_uuid; the API now returns data.uuid.
+  const initData = parseJson(init.body)?.data ?? {};
+  const uuid = initData.report_task_uuid ?? initData.uuid;
   if (!uuid) {
     throw new Error(
       `tasks_report (company ${companyId}) returned no report_task_uuid; body: ${init.body.slice(0, 300)}`
