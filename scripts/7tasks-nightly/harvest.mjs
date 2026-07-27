@@ -106,8 +106,12 @@ async function login(page, user, pass) {
   // FusionAuth's Log In button carries no type attribute (captured 7/27).
   await page.click('button.button-login, button[type="submit"], input[type="submit"]');
   try {
+    // Success = back on app.7shifts.com off the exact /login page. The OAuth
+    // callback lands on a /login/... path the SPA renders as 404 while the
+    // session is live, so exact-path is the right test; the tasks_report API
+    // call afterwards is the real auth check.
     await page.waitForURL(
-      (url) => url.hostname === "app.7shifts.com" && !url.pathname.startsWith("/login"),
+      (url) => url.hostname === "app.7shifts.com" && url.pathname !== "/login",
       { timeout: 60000 }
     );
   } catch (err) {
