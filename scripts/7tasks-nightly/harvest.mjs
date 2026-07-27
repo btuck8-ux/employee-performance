@@ -97,7 +97,8 @@ async function login(page, user, pass) {
       (url) => url.hostname === "app.7shifts.com" && !url.pathname.startsWith("/login"),
       { timeout: 60000 }
     ),
-    page.click('button[type="submit"], input[type="submit"]'),
+    // FusionAuth's Log In button carries no type attribute (captured 7/27).
+    page.click('button.button-login, button[type="submit"], input[type="submit"]'),
   ]);
   await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
   console.log("Logged in; landed on", page.url());
