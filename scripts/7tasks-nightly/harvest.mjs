@@ -82,6 +82,24 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** The tasks_report API rejects ranges over 30 days — slice wide windows
+ * into inclusive [start, end] chunks of at most 28 days. */
+function windowSlices(startDate, endDate, chunkDays = 28) {
+  const slices = [];
+  let cursor = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  while (cursor <= end) {
+    const sliceStart = cursor.toISOString().slice(0, 10);
+    const sliceEndDate = new Date(cursor);
+    sliceEndDate.setUTCDate(sliceEndDate.getUTCDate() + chunkDays - 1);
+    const sliceEnd = sliceEndDate > end ? endDate : sliceEndDate.toISOString().slice(0, 10);
+    slices.push([sliceStart, sliceEnd]);
+    cursor = new Date(sliceEndDate);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return slices;
+}
+
 async function login(page, user, pass) {
   console.log("Navigating to 7shifts login...");
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -235,16 +253,20 @@ async function main() {
       const page = await context.newPage();
       try {
         await login(page, acct.user, acct.pass);
-        console.log(`[${acct.label}] exporting Tasks report for company ${acct.company}...`);
-        const csv = await fetchTasksCsv(page, acct.company, startDate, endDate);
-        console.log(`[${acct.label}] ${csv.split("\n").length} CSV lines; posting to EPD`);
-        const result = await postToEpd(csv, startDate, endDate);
-        console.log(
-          `[${acct.label}] EPD by_status=${JSON.stringify(result.by_status)} ` +
-            `outcomes=${(result.outcomes ?? [])
-              .map((o) => `${o.location_code}:${o.status}(${o.rows_upserted})`)
-              .join(" ")}`
-        );
+        for (const [sliceStart, sliceEnd] of windowSlices(startDate, endDate)) {
+          console.log(
+            `[${acct.label}] exporting Tasks report for company ${acct.company} (${sliceStart}..${sliceEnd})...`
+          );
+          const csv = await fetchTasksCsv(page, acct.company, sliceStart, sliceEnd);
+          console.log(`[${acct.label}] ${csv.split("\n").length} CSV lines; posting to EPD`);
+          const result = await postToEpd(csv, sliceStart, sliceEnd);
+          console.log(
+            `[${acct.label}] EPD by_status=${JSON.stringify(result.by_status)} ` +
+              `outcomes=${(result.outcomes ?? [])
+                .map((o) => `${o.location_code}:${o.status}(${o.rows_upserted})`)
+                .join(" ")}`
+          );
+        }
       } catch (err) {
         const message = err?.message || String(err);
         console.error(`[${acct.label}] FAILED: ${message}`);
