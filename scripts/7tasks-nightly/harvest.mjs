@@ -124,40 +124,56 @@ async function login(page, user, pass) {
   console.log("Login submitted; proceeding on", page.url());
 }
 
-/** Build a Cookie header (+ CSRF echo) from the authenticated browser context. */
-async function sessionHeaders(context) {
-  const cookies = await context.cookies();
-  const relevant = cookies.filter((c) => c.domain.includes("7shifts.com"));
-  if (relevant.length === 0) throw new Error("No 7shifts cookies after login");
-  const cookieHeader = relevant.map((c) => `${c.name}=${c.value}`).join("; ");
-  const xsrf = relevant.find((c) => c.name === "XSRF-TOKEN");
-  return {
-    Cookie: cookieHeader,
-    Accept: "application/json",
-    ...(xsrf ? { "X-Csrf-Token": decodeURIComponent(xsrf.value) } : {}),
-  };
+/**
+ * GET a dashboard API path FROM THE PAGE CONTEXT (credentials: 'include').
+ * Cloudflare clearance is bound to the browser's fingerprint, so replaying
+ * the cookies from Node gets challenged — in-page fetch is the proven CAKE
+ * pattern. Returns { status, body } with body as text.
+ */
+async function pageFetch(page, url) {
+  return page.evaluate(async (u) => {
+    const r = await fetch(u, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    return { status: r.status, body: await r.text() };
+  }, url);
 }
 
-/** The dashboard's 3-step async Tasks export (mirrors EPD's tasks-source.ts). */
-async function fetchTasksCsv(headers, companyId, startDate, endDate) {
-  const initRes = await fetch(
-    `${DASHBOARD_BASE}/company/${companyId}/tasks_report?start_date=${startDate}&end_date=${endDate}&async_v2=true`,
-    { headers }
-  );
-  if (!initRes.ok) {
-    throw new Error(`tasks_report initiate ${initRes.status}: ${(await initRes.text()).slice(0, 300)}`);
+function parseJson(body) {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
   }
-  const uuid = (await initRes.json())?.data?.report_task_uuid;
-  if (!uuid) throw new Error(`tasks_report (company ${companyId}) returned no report_task_uuid`);
+}
+
+/** The dashboard's 3-step async Tasks export (mirrors EPD's tasks-source.ts),
+ * driven from the authenticated page. Only the pre-signed CSV download runs
+ * in Node (S3, self-authorizing, no Cloudflare). */
+async function fetchTasksCsv(page, companyId, startDate, endDate) {
+  const init = await pageFetch(
+    page,
+    `${DASHBOARD_BASE}/company/${companyId}/tasks_report?start_date=${startDate}&end_date=${endDate}&async_v2=true`
+  );
+  if (init.status !== 200) {
+    throw new Error(`tasks_report initiate ${init.status}: ${init.body.slice(0, 300)}`);
+  }
+  const uuid = parseJson(init.body)?.data?.report_task_uuid;
+  if (!uuid) {
+    throw new Error(
+      `tasks_report (company ${companyId}) returned no report_task_uuid; body: ${init.body.slice(0, 300)}`
+    );
+  }
 
   let fileUrl = null;
   for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
     await sleep(POLL_DELAY_MS);
-    const pollRes = await fetch(`${DASHBOARD_BASE}/company/${companyId}/report_task/${uuid}`, { headers });
-    if (!pollRes.ok) {
-      throw new Error(`report_task poll ${pollRes.status}: ${(await pollRes.text()).slice(0, 300)}`);
+    const poll = await pageFetch(page, `${DASHBOARD_BASE}/company/${companyId}/report_task/${uuid}`);
+    if (poll.status !== 200) {
+      throw new Error(`report_task poll ${poll.status}: ${poll.body.slice(0, 300)}`);
     }
-    const body = (await pollRes.json())?.data ?? {};
+    const body = parseJson(poll.body)?.data ?? {};
     if (body.file_url) {
       fileUrl = body.file_url;
       break;
@@ -209,9 +225,8 @@ async function main() {
       const page = await context.newPage();
       try {
         await login(page, acct.user, acct.pass);
-        const headers = await sessionHeaders(context);
         console.log(`[${acct.label}] exporting Tasks report for company ${acct.company}...`);
-        const csv = await fetchTasksCsv(headers, acct.company, startDate, endDate);
+        const csv = await fetchTasksCsv(page, acct.company, startDate, endDate);
         console.log(`[${acct.label}] ${csv.split("\n").length} CSV lines; posting to EPD`);
         const result = await postToEpd(csv, startDate, endDate);
         console.log(
