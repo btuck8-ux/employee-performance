@@ -31,7 +31,7 @@ import { maybeSendFailureAlert } from "@/lib/ingest/sevenshifts/alert";
 import { emptyStreakReasons } from "@/lib/ingest/sevenshifts/streak";
 import { ingestTattlesForLocation } from "@/lib/ingest/tattle/ingest-location";
 import { ingestReviewsForLocation } from "@/lib/ingest/reviews/ingest-location";
-import { ingestTasksForLocation } from "@/lib/ingest/tasks/ingest-location";
+import { ingestParsedTasksForTargets } from "@/lib/ingest/tasks/ingest-targets";
 import { fetchTattleSnapshots } from "./tattle-source";
 import { fetchReviews } from "./reviews-source";
 import { fetchTasksReport } from "./tasks-source";
@@ -326,45 +326,17 @@ export async function runGuestFeedbackHarvest(
       const fetchStart = minDate([...windows.values()].map((w) => w.startDate));
       try {
         const parsed = await fetchTasksReport(companyId, fetchStart, endDate);
-        for (const loc of companyTargets) {
-          const w = windows.get(loc.id)!;
-          const runId = await startRun(supabase, "7tasks", loc.id, w.windowStartIso, endIso);
-          const stats = await ingestTasksForLocation(supabase, parsed, loc);
-          const touched = stats.tasks_inserted + stats.tasks_updated;
-          const status = statusFromCounts(touched, stats.failures);
-          await finishRun(supabase, runId, {
-            status,
-            rows_in: touched,
-            rows_upserted: touched,
-            rows_skipped: stats.skipped_other_location,
-            detail: {
-              tasks_inserted: stats.tasks_inserted,
-              tasks_updated: stats.tasks_updated,
-              tasks_complete: stats.tasks_complete,
-              tasks_incomplete: stats.tasks_incomplete,
-              accountability_rows: stats.accountability_rows,
-              ownership_rows: stats.ownership_rows,
-              ownership_unmatched: Array.from(stats.ownership_unmatched),
-              recomputed: stats.recomputed,
-              warnings: stats.warnings,
-              failures: stats.failures,
-            },
-            error_text: stats.failures.length > 0 ? stats.failures.slice(0, 3).join(" | ") : null,
-          });
-          outcomes.push({
-            source: "7tasks",
-            location_id: loc.id,
-            location_code: loc.location_code,
-            status,
-            rows_in: touched,
-            rows_upserted: touched,
-            rows_skipped: stats.skipped_other_location,
-            detail: null,
-            error_text: stats.failures[0] ?? null,
-            window_start: w.windowStartIso,
-            window_end: endIso,
-          });
-        }
+        // Shared per-location loop (ingest-targets.ts) — the same path
+        // /api/admin/import-tasks-csv runs, so there is ONE tasks ingest.
+        outcomes.push(
+          ...(await ingestParsedTasksForTargets(
+            supabase,
+            parsed,
+            companyTargets,
+            new Map([...windows].map(([id, w]) => [id, w.windowStartIso])),
+            endIso
+          ))
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[harvest] tasks fetch failed (company ${companyId}):`, message);

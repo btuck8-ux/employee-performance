@@ -15,6 +15,10 @@
 
 import type { RunOutcome } from "./runs";
 
+// ⚠ The onboarding@resend.dev fallback is Resend's SANDBOX sender: it can only
+// deliver to the Resend account owner's own signup email — any other recipient
+// gets a 403. For real delivery, verify a domain in the Resend account and set
+// INGEST_ALERT_FROM (e.g. "EPD Ingest <ingest@loveandsandwiches.com>").
 const ALERT_FROM = process.env.INGEST_ALERT_FROM ?? "EPD Ingest <onboarding@resend.dev>";
 
 export interface AlertDecision {
@@ -107,8 +111,12 @@ export async function maybeSendFailureAlert(
     });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
-      console.error(`[ingest/alert] Resend ${res.status}: ${t.slice(0, 300)}\n${body}`);
-      return { sent: false, reason: `resend ${res.status}` };
+      const hint =
+        res.status === 403 && !process.env.INGEST_ALERT_FROM
+          ? " — sandbox sender onboarding@resend.dev can only deliver to the Resend account owner's email; verify a domain and set INGEST_ALERT_FROM to fix"
+          : "";
+      console.error(`[ingest/alert] Resend ${res.status}${hint}: ${t.slice(0, 300)}\n${body}`);
+      return { sent: false, reason: `resend ${res.status}${hint}` };
     }
     return { sent: true, reason: "sent via resend" };
   } catch (err) {

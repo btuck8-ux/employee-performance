@@ -1,0 +1,49 @@
+name: 7Tasks nightly harvest (HOU + CO)
+
+# Exports the per-employee 7shifts Tasks report for each company and lands it
+# in EPD via /api/admin/import-tasks-csv. Rolling window; idempotent import.
+on:
+  schedule:
+    # 13:45 UTC — near the CAKE 13:30 slot, well clear of the 09:xx Vercel crons.
+    - cron: "45 13 * * *"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: 7tasks-nightly
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scripts/7tasks-nightly
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install deps + Chromium
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run harvester
+        env:
+          SEVENSHIFTS_USERNAME: ${{ secrets.SEVENSHIFTS_USERNAME }}
+          SEVENSHIFTS_PASSWORD: ${{ secrets.SEVENSHIFTS_PASSWORD }}
+          EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
+          EPD_HARVEST_TOKEN: ${{ secrets.EPD_HARVEST_TOKEN }}
+          DAYS_BACK: "7"
+        run: npm run harvest
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 7tasks-harvest-failure
+          path: scripts/7tasks-nightly/7tasks-harvest-failure.png
+          if-no-files-found: ignore

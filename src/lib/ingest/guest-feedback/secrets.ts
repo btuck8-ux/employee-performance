@@ -47,11 +47,6 @@ export function tattleBearerToken(): string {
   return required("TATTLE_BEARER_TOKEN");
 }
 
-/** Tattle refresh token — optional; used to refresh the bearer on expiry. */
-export function tattleRefreshToken(): string | null {
-  return process.env.TATTLE_REFRESH_TOKEN ?? null;
-}
-
 /** 7shifts dashboard cookie session (Source C per-employee Tasks export). */
 export function sevenShiftsDashboardCookie(): string {
   return required("SEVENSHIFTS_DASHBOARD_COOKIE");

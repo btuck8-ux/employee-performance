@@ -16,6 +16,7 @@ import {
   EmployeeTaskDetailReportDocument,
 } from "@/lib/pdf/EmployeeTaskDetailReport";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { getCategoryCurrency } from "@/lib/category-currency";
 import { buildTaskDetailData } from "./generate-task-detail-actions";
 
 function num(v: number | string | null | undefined): number | null {
@@ -225,6 +226,14 @@ export async function renderAndStorePerformanceReport(
     generated_at,
     trailing_quarters,
     customer_service_weights: await fetchCustomerServiceWeights(supabase),
+    // Per-category "data through" stamps + staleness banner (Part 2): a
+    // truncated ingest window must be visible on the report, not render as a
+    // normal full-period score.
+    category_currency: await getCategoryCurrency(
+      supabase,
+      pr.location_id,
+      period.period_end
+    ),
   };
 
   // Render the performance PDF. Cast through unknown because the wrapper

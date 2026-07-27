@@ -1,0 +1,49 @@
+name: Tattle nightly token refresh
+
+# Captures a fresh Tattle OIDC access token via Playwright login and pushes it
+# to EPD (app_settings), so the 09:30 UTC Tattle/Reviews harvest cron never
+# depends on a hand-pasted TATTLE_BEARER_TOKEN again.
+on:
+  schedule:
+    # 13:50 UTC — the harness family slot (CAKE 13:30, 7Tasks 13:45).
+    - cron: "50 13 * * *"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: tattle-nightly
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scripts/tattle-nightly
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install deps + Chromium
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run token refresher
+        env:
+          TATTLE_USERNAME: ${{ secrets.TATTLE_USERNAME }}
+          TATTLE_PASSWORD: ${{ secrets.TATTLE_PASSWORD }}
+          EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
+          EPD_HARVEST_TOKEN: ${{ secrets.EPD_HARVEST_TOKEN }}
+        run: npm run harvest
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tattle-harvest-failure
+          path: scripts/tattle-nightly/tattle-harvest-failure.png
+          if-no-files-found: ignore

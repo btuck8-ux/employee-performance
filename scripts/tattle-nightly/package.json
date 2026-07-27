@@ -1,0 +1,13 @@
+{
+  "name": "tattle-nightly-refresher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nightly Playwright token refresher: logs into the Tattle dashboard, captures the OIDC access token, POSTs it to EPD's set-tattle-token route.",
+  "scripts": {
+    "harvest": "node harvest.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

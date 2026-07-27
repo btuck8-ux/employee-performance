@@ -24,6 +24,10 @@ import {
   formatTenure,
 } from "@/lib/format";
 import type { ExpectationLabel, FixedMetricKey } from "@/lib/types";
+import {
+  staleCategories,
+  type CategoryCurrencyEntry,
+} from "@/lib/category-currency";
 
 // 1.1.0 added Δ + sparkline + trend page. 1.2.0 dropped the sparkline/trend
 // page. 1.3.0 (Phase 7b) adds presence-based tip metrics — tip rate, tip per
@@ -58,6 +62,16 @@ const styles = StyleSheet.create({
   label: { fontSize: 9, color: COLORS.muted, marginBottom: 2 },
   value: { fontSize: 12 },
   sectionTitle: { fontSize: 13, fontWeight: 700, marginTop: 12, marginBottom: 8 },
+  currencyBlock: { marginTop: 6 },
+  currencyBanner: {
+    fontSize: 8,
+    color: "#92400e",
+    backgroundColor: "#fef3c7",
+    padding: 4,
+    borderRadius: 2,
+    marginBottom: 3,
+  },
+  currencyLine: { fontSize: 7, color: "#6b7280" },
   table: { borderWidth: 1, borderColor: COLORS.rule, borderRadius: 4 },
   tableHeader: {
     flexDirection: "row",
@@ -234,6 +248,14 @@ export interface ReportData {
    * falls back to defaults (0.40/0.40/0.20).
    */
   customer_service_weights?: CustomerServiceWeights;
+  /**
+   * Per-category "data through" stamps (category-currency.ts). When present,
+   * a compact currency line renders under the metrics table and a staleness
+   * banner appears if any category's newest data trails min(period_end,
+   * today) by more than STALE_AFTER_DAYS. Null data_through (a category this
+   * location never ingests, e.g. NOLA sales) renders neutrally as "—".
+   */
+  category_currency?: CategoryCurrencyEntry[];
 }
 
 // ---- Metric kind table ----
@@ -665,6 +687,31 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
             weights={data.customer_service_weights ?? DEFAULT_CS_WEIGHTS}
           />
         )}
+
+        {data.category_currency && data.category_currency.length > 0 && (() => {
+          const stale = staleCategories(data.category_currency, data.report_period_end);
+          const staleKeys = new Set(stale.map((s) => s.key));
+          return (
+            <View style={styles.currencyBlock}>
+              {stale.length > 0 && (
+                <Text style={styles.currencyBanner}>
+                  Partial data: {stale
+                    .map((s) => `${s.label} through ${s.data_through}`)
+                    .join(", ")} — scores may not reflect the full period.
+                </Text>
+              )}
+              <Text style={styles.currencyLine}>
+                Data through:{" "}
+                {data.category_currency
+                  .map(
+                    (c) =>
+                      `${c.label} ${c.data_through ?? "—"}${staleKeys.has(c.key) ? " (!)" : ""}`
+                  )
+                  .join("  ·  ")}
+              </Text>
+            </View>
+          );
+        })()}
 
         <Text style={styles.sectionTitle}>Manager Feedback</Text>
         <View style={styles.feedbackBox}>

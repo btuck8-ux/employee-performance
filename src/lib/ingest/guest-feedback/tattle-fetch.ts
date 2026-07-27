@@ -1,61 +1,47 @@
 /**
  * Shared authenticated fetch for the two Tattle sources (snapshots + reviews),
- * which use the same dashboard Bearer token (handoff §3).
+ * which use the same dashboard Bearer token (handoff §3; durable-auth rework
+ * 2026-07-27 Part 3).
  *
- * On 401/403 it attempts ONE token refresh if a refresh route is configured
- * (TATTLE_REFRESH_URL + TATTLE_REFRESH_TOKEN — the standard ngStorage/JWT
- * refresh the handoff flags as the durability win), then retries. If refresh is
- * not configured or fails, it raises SessionExpiredError('tattle') so the
- * harvester logs an `error` ingest_run with a clear "recapture tattle" message
- * and the nightly alert fires. v1 ships captured-token-in-env; wiring
- * TATTLE_REFRESH_URL is the no-recapture upgrade.
+ * Token resolution: the DB-stored token pushed nightly by the Playwright
+ * harness (app_settings via token-store.ts) wins; the hand-pasted
+ * TATTLE_BEARER_TOKEN env var is the bootstrap/fallback. On 401/403 the store
+ * is RE-READ once (the harness may have pushed a fresher token than the one
+ * cached this run) and the request retried; still-unauthorized raises
+ * SessionExpiredError('tattle') so the run logs an `error` ingest_run and the
+ * nightly alert fires.
+ *
+ * The old TATTLE_REFRESH_URL JSON refresh was removed: live inspection
+ * (2026-07-27) showed Tattle auth is OIDC (oidc-client-ts) — a form-encoded
+ * grant_type=refresh_token POST with a client_id, not a JSON {refresh_token}
+ * body — and OIDC refresh tokens rotate, so a server-side env refresh goes
+ * stale anyway. The Playwright harness IS the refresh path (same family as
+ * CAKE + 7Tasks).
  */
 
-import {
-  SessionExpiredError,
-  tattleBearerToken,
-  tattleRefreshToken,
-} from "./secrets";
+import { SessionExpiredError, tattleBearerToken } from "./secrets";
+import { readStoredTattleBearer } from "./token-store";
 
-// Module-scoped so a successful refresh within one harvest run is reused by
-// later requests in that run. Lazily seeded from env on first use.
+// Module-scoped so the store lookup happens once per warm run; a 401 re-read
+// updates it in place.
 let currentBearer: string | null = null;
 
-function bearer(): string {
-  if (!currentBearer) currentBearer = tattleBearerToken();
+async function bearer(): Promise<string> {
+  if (!currentBearer) {
+    currentBearer = (await readStoredTattleBearer()) ?? tattleBearerToken();
+  }
   return currentBearer;
 }
 
 /**
- * Best-effort refresh. Returns true if a new bearer was obtained. Only attempts
- * when both TATTLE_REFRESH_URL and a refresh token are present — we do NOT guess
- * the refresh endpoint (handoff: "find the refresh endpoint when wiring").
+ * On 401/403: re-read the stored token, bypassing the run cache. Returns true
+ * only when the store holds a DIFFERENT token than the one that just failed.
  */
-async function tryRefresh(): Promise<boolean> {
-  const refreshUrl = process.env.TATTLE_REFRESH_URL;
-  const refreshToken = tattleRefreshToken();
-  if (!refreshUrl || !refreshToken) return false;
-
-  try {
-    const res = await fetch(refreshUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${refreshToken}`,
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!res.ok) return false;
-    const body = (await res.json().catch(() => null)) as
-      | { token?: string; access_token?: string }
-      | null;
-    const next = body?.token ?? body?.access_token ?? null;
-    if (!next) return false;
-    currentBearer = next;
-    return true;
-  } catch {
-    return false;
-  }
+async function tryStoredRefresh(failedToken: string): Promise<boolean> {
+  const stored = await readStoredTattleBearer();
+  if (!stored || stored === failedToken) return false;
+  currentBearer = stored;
+  return true;
 }
 
 interface TattleFetchInit {
@@ -85,12 +71,13 @@ export async function tattleFetch(
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
 
-  let res = await doFetch(bearer());
+  const usedToken = await bearer();
+  let res = await doFetch(usedToken);
 
   if (res.status === 401 || res.status === 403) {
-    const refreshed = await tryRefresh();
+    const refreshed = await tryStoredRefresh(usedToken);
     if (refreshed) {
-      res = await doFetch(bearer());
+      res = await doFetch(await bearer());
     }
     if (res.status === 401 || res.status === 403) {
       throw new SessionExpiredError("tattle");

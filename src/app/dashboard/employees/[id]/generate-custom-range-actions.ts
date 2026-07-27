@@ -10,6 +10,7 @@ import {
   type ReportData,
 } from "@/lib/pdf/EmployeeReport";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { getCategoryCurrency } from "@/lib/category-currency";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
 
 /**
@@ -161,6 +162,7 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     manager_feedback,
     generated_at,
     customer_service_weights: csWeights,
+    category_currency: await getCategoryCurrency(supabase, location_id, range_end),
   };
 
   const docElement = React.createElement(EmployeeReportDocument, { data: reportData });
