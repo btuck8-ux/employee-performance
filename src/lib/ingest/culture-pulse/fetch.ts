@@ -8,8 +8,14 @@
  *    small targeted subset (2–7 people/store/week), which is exactly why the
  *    worked-pool denominator this feed replaces was inflating "assigned".
  *  - Completed: survey_responses (finished_at IS NOT NULL) joined to surveys
- *    for target_monday and to employee_directory for the completer's
- *    name/code.
+ *    for target_monday. IMPORTANT: survey_responses.employee_id references
+ *    CP's `employees` table (id, first_name, last_name, email, ...), NOT
+ *    employee_directory — verified 2026-07-27 after the first backfill
+ *    landed 0 completions (67/67 finished responses match employees.id,
+ *    0 match employee_directory.id). The completer's full name
+ *    (first_name || ' ' || last_name) bridges to employee_directory by
+ *    name (67/67 live), email secondary (65/67), which yields the
+ *    employee_code for the EPD-side resolve.
  *
  * Launch-week caveat: the email-job automation started ~2026-05-18; earlier
  * target_mondays have no job rows. Those weeks fall back to "anyone with a
@@ -67,7 +73,6 @@ export async function fetchCpSurveyWeeks(
         .range(from, to),
     "employee_directory"
   );
-  const dirById = new Map(directory.map((d) => [d.id, d]));
   const dirByEmail = new Map(
     directory.filter((d) => d.email).map((d) => [d.email!.toLowerCase(), d])
   );
@@ -121,6 +126,27 @@ export async function fetchCpSurveyWeeks(
           "survey_responses"
         );
 
+  // CP `employees` rows for this location — the FK target of
+  // survey_responses.employee_id (NOT employee_directory).
+  const cpEmployees =
+    responses.length === 0
+      ? []
+      : await fetchAll<{
+          id: string;
+          first_name: string | null;
+          last_name: string | null;
+          email: string | null;
+        }>(
+          (from, to) =>
+            cp
+              .from("employees")
+              .select("id, first_name, last_name, email")
+              .eq("location_id", cpLocationId)
+              .range(from, to),
+          "employees"
+        );
+  const cpEmpById = new Map(cpEmployees.map((e) => [e.id, e]));
+
   // Assemble weeks. Key members by directory id when known, else by
   // email/name string, so a send + its response collapse to one member.
   interface WeekAcc {
@@ -160,8 +186,23 @@ export async function fetchCpSurveyWeeks(
     const monday = mondayBySurveyId.get(r.survey_id);
     if (!monday) continue;
     const w = weekFor(monday);
-    const dir = r.employee_id ? (dirById.get(r.employee_id) ?? null) : null;
-    const key = dir ? `dir:${dir.id}` : `resp:${r.survey_id}:${r.employee_id ?? "?"}`;
+
+    // employee_id -> CP employees row -> full name -> directory bridge
+    // (name primary, email secondary). The directory row supplies the
+    // employee_code and the same member key the send log used, so a send
+    // and its response collapse to one member.
+    const emp = r.employee_id ? (cpEmpById.get(r.employee_id) ?? null) : null;
+    const fullName = emp
+      ? [emp.first_name, emp.last_name].filter(Boolean).join(" ").trim() || null
+      : null;
+    const dir =
+      (fullName && dirByName.get(fullName.toLowerCase())) ||
+      (emp?.email && dirByEmail.get(emp.email.toLowerCase())) ||
+      null;
+
+    const key = dir
+      ? `dir:${dir.id}`
+      : `resp:${(fullName ?? r.employee_id ?? "?").toLowerCase()}`;
     const completionDate = r.finished_at.slice(0, 10);
     const existing = w.members.get(key);
     if (existing) {
@@ -172,8 +213,8 @@ export async function fetchCpSurveyWeeks(
     } else {
       // Responder absent from the send log — they were evidently sent one.
       w.members.set(key, {
-        name: dir?.employee_name ?? null,
-        email: dir?.email ?? null,
+        name: dir?.employee_name ?? fullName,
+        email: dir?.email ?? emp?.email ?? null,
         employee_code: dir?.employee_code ?? null,
         completed: true,
         completion_date: completionDate,
