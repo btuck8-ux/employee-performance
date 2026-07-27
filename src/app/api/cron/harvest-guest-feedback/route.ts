@@ -29,13 +29,16 @@ export async function GET(request: Request) {
   }
 
   try {
-    // 7Tasks now arrives via the 7shifts Playwright harness (GitHub Actions →
-    // /api/admin/import-tasks-csv), mirroring the CAKE nightly. So the Vercel
-    // cron runs only the env-token sources here; including "tasks" would fire the
-    // retired dashboard-cookie path and error every night.
+    // 7Tasks rejoined the server-side nightly 2026-07-27: Source C now pulls
+    // the PUBLIC 7shifts API (tasks-api-source.ts, token auth — the labor
+    // client), so all three sources are env-token again. The Playwright
+    // harness (7tasks-nightly.yml, 13:45 UTC) runs in PARALLEL during the
+    // cutover window; both paths are idempotent on the same natural keys.
+    // Once parity holds for a few nights, disable the harness workflow
+    // (handoff 2026-07-27 §4) — do not remove it, it is the fallback.
     const summary = await runGuestFeedbackHarvest({
       locationCodes: "all",
-      sources: ["tattle", "reviews"],
+      sources: ["tattle", "reviews", "tasks"],
     });
     console.log(
       `[harvest-cron] done: ${summary.runs} runs across ${summary.locations} locations`,

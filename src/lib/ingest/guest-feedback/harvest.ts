@@ -34,7 +34,7 @@ import { ingestReviewsForLocation } from "@/lib/ingest/reviews/ingest-location";
 import { ingestParsedTasksForTargets } from "@/lib/ingest/tasks/ingest-targets";
 import { fetchTattleSnapshots } from "./tattle-source";
 import { fetchReviews } from "./reviews-source";
-import { fetchTasksReport } from "./tasks-source";
+import { fetchTasksViaApi } from "@/lib/ingest/tasks/tasks-api-source";
 
 export type GuestFeedbackSource = "tattle" | "reviews" | "tasks";
 export const ALL_SOURCES: GuestFeedbackSource[] = ["tattle", "reviews", "tasks"];
@@ -62,6 +62,8 @@ interface Target {
   location_code: string;
   csv_aliases: string[] | null;
   company_id: number | null;
+  /** 7shifts location id — routes the tasks API pull per store. */
+  seven_shifts_location_id: number | null;
 }
 
 export interface HarvestSummary {
@@ -110,7 +112,7 @@ async function loadTargets(
 ): Promise<Target[]> {
   const { data, error } = await supabase
     .from("locations")
-    .select("id, name, location_code, csv_aliases, seven_shifts_company_id")
+    .select("id, name, location_code, csv_aliases, seven_shifts_company_id, seven_shifts_location_id")
     .order("location_code");
   if (error) throw new Error(`Failed to load locations: ${error.message}`);
 
@@ -121,6 +123,8 @@ async function loadTargets(
     csv_aliases: (r.csv_aliases as string[] | null) ?? null,
     company_id:
       r.seven_shifts_company_id != null ? Number(r.seven_shifts_company_id) : null,
+    seven_shifts_location_id:
+      r.seven_shifts_location_id != null ? Number(r.seven_shifts_location_id) : null,
   }));
 
   rows = rows.filter((r) => !EXCLUDED_CODES.has(r.location_code));
@@ -306,10 +310,18 @@ export async function runGuestFeedbackHarvest(
     }
   }
 
-  // ---- Source C: per-employee 7Tasks (one export per company, routed by store) ----
+  // ---- Source C: per-employee 7Tasks via the PUBLIC 7shifts API ----
+  // Token-authenticated pull on the labor client (tasks-api-source.ts) —
+  // replaced the dashboard-cookie export 2026-07-27 after the Step 0 grain
+  // probe confirmed task_lists embeds per-task user_id completions. Stores
+  // route by seven_shifts_location_id; completers resolve via the
+  // employees.seven_shifts_user_id crosswalk.
   if (sources.includes("tasks")) {
     const taskTargets = targets.filter(
-      (t) => t.company_id != null && TASKS_COMPANY_IDS.has(t.company_id)
+      (t) =>
+        t.company_id != null &&
+        TASKS_COMPANY_IDS.has(t.company_id) &&
+        t.seven_shifts_location_id != null
     );
     const byCompany = new Map<number, Target[]>();
     for (const t of taskTargets) {
@@ -325,7 +337,17 @@ export async function runGuestFeedbackHarvest(
       }
       const fetchStart = minDate([...windows.values()].map((w) => w.startDate));
       try {
-        const parsed = await fetchTasksReport(companyId, fetchStart, endDate);
+        const parsed = await fetchTasksViaApi(
+          supabase,
+          companyId,
+          companyTargets.map((t) => ({
+            id: t.id,
+            name: t.name,
+            seven_shifts_location_id: t.seven_shifts_location_id!,
+          })),
+          fetchStart,
+          endDate
+        );
         // Shared per-location loop (ingest-targets.ts) — the same path
         // /api/admin/import-tasks-csv runs, so there is ONE tasks ingest.
         outcomes.push(
