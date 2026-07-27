@@ -105,29 +105,23 @@ async function login(page, user, pass) {
   await page.fill(passSel, pass);
   // FusionAuth's Log In button carries no type attribute (captured 7/27).
   await page.click('button.button-login, button[type="submit"], input[type="submit"]');
-  try {
-    // Success = back on app.7shifts.com off the exact /login page. The OAuth
-    // callback lands on a /login/... path the SPA renders as 404 while the
-    // session is live, so exact-path is the right test; the tasks_report API
-    // call afterwards is the real auth check.
-    await page.waitForURL(
-      (url) => url.hostname === "app.7shifts.com" && url.pathname !== "/login",
-      { timeout: 60000 }
+
+  // The post-auth URL never leaves /login (SPA route renders the app shell in
+  // place), so URL-based success detection is useless. Settle, fail fast on a
+  // visible credential rejection, and let the tasks_report API call be the
+  // real auth check (it 401s with a clear message if the session is dead).
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(5000);
+  const rejected = await page
+    .getByText(/wrong email or password/i)
+    .count()
+    .catch(() => 0);
+  if (rejected > 0) {
+    throw new Error(
+      `7shifts rejected the credentials for ${user} (wrong email or password — re-check the GitHub secret)`
     );
-  } catch (err) {
-    // Distinguish "vendor rejected the credentials" from a slow redirect —
-    // the former needs a re-pasted secret, not a retry.
-    const rejected = await page
-      .getByText(/wrong email or password/i)
-      .count()
-      .catch(() => 0);
-    if (rejected > 0) {
-      throw new Error(`7shifts rejected the credentials for ${user} (wrong email or password — re-check the GitHub secret)`);
-    }
-    throw err;
   }
-  await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
-  console.log("Logged in; landed on", page.url());
+  console.log("Login submitted; proceeding on", page.url());
 }
 
 /** Build a Cookie header (+ CSRF echo) from the authenticated browser context. */
