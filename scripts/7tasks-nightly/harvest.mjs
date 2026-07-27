@@ -10,28 +10,40 @@
  * accountability + recompute). Rolling window (default last 7 days) — the
  * upsert makes overlap free.
  *
+ * Houston (62064) and Colorado (185592) are SEPARATE 7shifts orgs — a login
+ * belongs to one org, so one session's cookies cannot pull the other
+ * company's tasks_report. Each region therefore gets its own service account
+ * and its own login in a fresh browser context (no session bleed).
+ *
  * Required env (GitHub repo secrets):
- *   SEVENSHIFTS_USERNAME  7shifts dashboard login email (MFA-free account!)
- *   SEVENSHIFTS_PASSWORD  7shifts dashboard password
+ *   SEVENSHIFTS_USERNAME_HH / SEVENSHIFTS_PASSWORD_HH  Houston org login
+ *   SEVENSHIFTS_USERNAME_CO / SEVENSHIFTS_PASSWORD_CO  Colorado org login
+ *     (both MFA-free service accounts!)
  *   EPD_BASE_URL          e.g. https://employee-performance-one.vercel.app
  *   EPD_HARVEST_TOKEN     matches Vercel TASKS_HARVEST_TOKEN/CAKE_HARVEST_TOKEN
  * Optional:
  *   DAYS_BACK             rolling window size in days (default 7)
- *   COMPANY_IDS           default "62064,185592" (HOU + the 6 CO stores)
  *   HEADLESS              "false" to watch locally (default true)
  */
 
 import { chromium } from "playwright";
 
 const {
-  SEVENSHIFTS_USERNAME,
-  SEVENSHIFTS_PASSWORD,
+  SEVENSHIFTS_USERNAME_HH,
+  SEVENSHIFTS_PASSWORD_HH,
+  SEVENSHIFTS_USERNAME_CO,
+  SEVENSHIFTS_PASSWORD_CO,
   EPD_BASE_URL,
   EPD_HARVEST_TOKEN,
   DAYS_BACK = "7",
-  COMPANY_IDS = "62064,185592",
   HEADLESS = "true",
 } = process.env;
+
+/** Explicit account↔company map — one 7shifts org per service account. */
+const ACCOUNTS = [
+  { label: "HOU", company: 62064, user: SEVENSHIFTS_USERNAME_HH, pass: SEVENSHIFTS_PASSWORD_HH },
+  { label: "CO", company: 185592, user: SEVENSHIFTS_USERNAME_CO, pass: SEVENSHIFTS_PASSWORD_CO },
+];
 
 const DASHBOARD_BASE = "https://app.7shifts.com/api/v2";
 const LOGIN_URL = "https://app.7shifts.com/login";
@@ -40,8 +52,10 @@ const POLL_MAX_ATTEMPTS = 40; // ~60s; reports finish in seconds
 
 function requireEnv() {
   const missing = [
-    "SEVENSHIFTS_USERNAME",
-    "SEVENSHIFTS_PASSWORD",
+    "SEVENSHIFTS_USERNAME_HH",
+    "SEVENSHIFTS_PASSWORD_HH",
+    "SEVENSHIFTS_USERNAME_CO",
+    "SEVENSHIFTS_PASSWORD_CO",
     "EPD_BASE_URL",
     "EPD_HARVEST_TOKEN",
   ].filter((k) => !process.env[k]);
@@ -65,15 +79,15 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function login(page) {
+async function login(page, user, pass) {
   console.log("Navigating to 7shifts login...");
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   const userSel = 'input[name="email"], input[type="email"], input#email';
   const passSel = 'input[name="password"], input[type="password"], input#password';
   await page.waitForSelector(userSel, { timeout: 30000 });
-  await page.fill(userSel, SEVENSHIFTS_USERNAME);
-  await page.fill(passSel, SEVENSHIFTS_PASSWORD);
+  await page.fill(userSel, user);
+  await page.fill(passSel, pass);
   await Promise.all([
     page.waitForURL(
       (url) => url.hostname === "app.7shifts.com" && !url.pathname.startsWith("/login"),
@@ -152,36 +166,46 @@ async function main() {
 
   const endDate = isoDate(new Date());
   const startDate = daysAgo(parseInt(DAYS_BACK, 10));
-  const companies = COMPANY_IDS.split(",").map((s) => parseInt(s.trim(), 10)).filter(Boolean);
-  console.log(`Window: ${startDate} .. ${endDate}; companies: ${companies.join(", ")}`);
+  console.log(
+    `Window: ${startDate} .. ${endDate}; regions: ${ACCOUNTS.map((a) => `${a.label}=${a.company}`).join(", ")}`
+  );
 
   const browser = await chromium.launch({ headless: HEADLESS !== "false" });
-  const context = await browser.newContext();
-  const page = await context.newPage();
   try {
-    await login(page);
-    const headers = await sessionHeaders(context);
-
-    for (const companyId of companies) {
-      console.log(`Exporting Tasks report for company ${companyId}...`);
-      const csv = await fetchTasksCsv(headers, companyId, startDate, endDate);
-      const lines = csv.split("\n").length;
-      console.log(`  company ${companyId}: ${lines} CSV lines; posting to EPD`);
-      const result = await postToEpd(csv, startDate, endDate);
-      console.log(
-        `  EPD result: by_status=${JSON.stringify(result.by_status)} ` +
-          `outcomes=${(result.outcomes ?? [])
-            .map((o) => `${o.location_code}:${o.status}(${o.rows_upserted})`)
-            .join(" ")}`
-      );
+    // One login per region, each in a fresh context — the two companies are
+    // separate 7shifts orgs, so cookies must not be shared between them.
+    // Each region's CSV is single-org; the import route's Location-column
+    // routing ingests the matching stores and skips the rest.
+    for (const acct of ACCOUNTS) {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      try {
+        await login(page, acct.user, acct.pass);
+        const headers = await sessionHeaders(context);
+        console.log(`[${acct.label}] exporting Tasks report for company ${acct.company}...`);
+        const csv = await fetchTasksCsv(headers, acct.company, startDate, endDate);
+        console.log(`[${acct.label}] ${csv.split("\n").length} CSV lines; posting to EPD`);
+        const result = await postToEpd(csv, startDate, endDate);
+        console.log(
+          `[${acct.label}] EPD by_status=${JSON.stringify(result.by_status)} ` +
+            `outcomes=${(result.outcomes ?? [])
+              .map((o) => `${o.location_code}:${o.status}(${o.rows_upserted})`)
+              .join(" ")}`
+        );
+      } catch (err) {
+        try {
+          await page.screenshot({
+            path: `7tasks-harvest-failure-${acct.label}.png`,
+            fullPage: true,
+          });
+          console.error(`Saved failure screenshot to 7tasks-harvest-failure-${acct.label}.png`);
+        } catch {}
+        throw err; // one region failing fails the run so the alert fires
+      } finally {
+        await context.close();
+      }
     }
     console.log("Done.");
-  } catch (err) {
-    try {
-      await page.screenshot({ path: "7tasks-harvest-failure.png", fullPage: true });
-      console.error("Saved failure screenshot to 7tasks-harvest-failure.png");
-    } catch {}
-    throw err;
   } finally {
     await browser.close();
   }

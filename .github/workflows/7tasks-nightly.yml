@@ -1,12 +1,19 @@
 name: 7Tasks nightly harvest (HOU + CO)
 
-# Exports the per-employee 7shifts Tasks report for each company and lands it
-# in EPD via /api/admin/import-tasks-csv. Rolling window; idempotent import.
+# Exports the per-employee 7shifts Tasks report for each region and lands it
+# in EPD via /api/admin/import-tasks-csv. Houston (62064) and Colorado
+# (185592) are separate 7shifts orgs, so each region logs in with its own
+# service account. Rolling window; idempotent import.
 on:
   schedule:
     # 13:45 UTC — near the CAKE 13:30 slot, well clear of the 09:xx Vercel crons.
     - cron: "45 13 * * *"
-  workflow_dispatch: {} # allow manual runs from the Actions tab
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: "Rolling window size in days (use 77 for the one-time CO/HOU backfill)"
+        required: false
+        default: "7"
 
 concurrency:
   group: 7tasks-nightly
@@ -33,11 +40,13 @@ jobs:
 
       - name: Run harvester
         env:
-          SEVENSHIFTS_USERNAME: ${{ secrets.SEVENSHIFTS_USERNAME }}
-          SEVENSHIFTS_PASSWORD: ${{ secrets.SEVENSHIFTS_PASSWORD }}
+          SEVENSHIFTS_USERNAME_HH: ${{ secrets.SEVENSHIFTS_USERNAME_HH }}
+          SEVENSHIFTS_PASSWORD_HH: ${{ secrets.SEVENSHIFTS_PASSWORD_HH }}
+          SEVENSHIFTS_USERNAME_CO: ${{ secrets.SEVENSHIFTS_USERNAME_CO }}
+          SEVENSHIFTS_PASSWORD_CO: ${{ secrets.SEVENSHIFTS_PASSWORD_CO }}
           EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
           EPD_HARVEST_TOKEN: ${{ secrets.EPD_HARVEST_TOKEN }}
-          DAYS_BACK: "7"
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
         run: npm run harvest
 
       - name: Upload failure screenshot
@@ -45,5 +54,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 7tasks-harvest-failure
-          path: scripts/7tasks-nightly/7tasks-harvest-failure.png
+          path: scripts/7tasks-nightly/7tasks-harvest-failure-*.png
           if-no-files-found: ignore

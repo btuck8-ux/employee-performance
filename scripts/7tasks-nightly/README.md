@@ -10,10 +10,15 @@ dashboard session API (`app.7shifts.com/api/v2`, not the public Access-Token
 API), and dashboard cookies expire in days — the same fragility that retired
 the server-side pull (see the harvest-guest-feedback cron route comment).
 
+Houston and Colorado are **separate 7shifts orgs** — one login cannot pull
+the other company's report — so each region has its own service account and
+gets its own login in a fresh browser context.
+
 ## Secrets (GitHub repo settings → Actions secrets)
 
-- `SEVENSHIFTS_USERNAME` / `SEVENSHIFTS_PASSWORD` — dashboard login.
-  ⚠ The account must be MFA-free (use an MFA-exempt service account).
+- `SEVENSHIFTS_USERNAME_HH` / `SEVENSHIFTS_PASSWORD_HH` — Houston org (62064).
+- `SEVENSHIFTS_USERNAME_CO` / `SEVENSHIFTS_PASSWORD_CO` — Colorado org (185592).
+  ⚠ Both accounts must be MFA-free (MFA-exempt service accounts).
 - `EPD_BASE_URL` — `https://employee-performance-one.vercel.app`
 - `EPD_HARVEST_TOKEN` — matches Vercel `TASKS_HARVEST_TOKEN` (or the shared
   `CAKE_HARVEST_TOKEN`; the route accepts either, `CRON_SECRET` as fallback).
@@ -23,12 +28,13 @@ the server-side pull (see the harvest-guest-feedback cron route comment).
 ```sh
 cd scripts/7tasks-nightly
 npm install && npx playwright install chromium
-SEVENSHIFTS_USERNAME=… SEVENSHIFTS_PASSWORD=… \
+SEVENSHIFTS_USERNAME_HH=… SEVENSHIFTS_PASSWORD_HH=… \
+SEVENSHIFTS_USERNAME_CO=… SEVENSHIFTS_PASSWORD_CO=… \
 EPD_BASE_URL=… EPD_HARVEST_TOKEN=… \
 DAYS_BACK=7 HEADLESS=false npm run harvest
 ```
 
 ## Backfill
 
-Set `DAYS_BACK` wide (e.g. `77` to reach back to 2026-05-11) for a one-time
-catch-up; the import is idempotent so overlap is free.
+Dispatch the workflow manually with the `days_back` input set wide (e.g. `77`
+to reach back to 2026-05-11); the import is idempotent so overlap is free.
