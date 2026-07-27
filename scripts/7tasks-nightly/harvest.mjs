@@ -156,7 +156,8 @@ async function fetchTasksCsv(page, companyId, startDate, endDate) {
     page,
     `${DASHBOARD_BASE}/company/${companyId}/tasks_report?start_date=${startDate}&end_date=${endDate}&async_v2=true`
   );
-  if (init.status !== 200) {
+  // 202 Accepted — the report job is async by design.
+  if (init.status < 200 || init.status >= 300) {
     throw new Error(`tasks_report initiate ${init.status}: ${init.body.slice(0, 300)}`);
   }
   const uuid = parseJson(init.body)?.data?.report_task_uuid;
@@ -170,7 +171,7 @@ async function fetchTasksCsv(page, companyId, startDate, endDate) {
   for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
     await sleep(POLL_DELAY_MS);
     const poll = await pageFetch(page, `${DASHBOARD_BASE}/company/${companyId}/report_task/${uuid}`);
-    if (poll.status !== 200) {
+    if (poll.status < 200 || poll.status >= 300) {
       throw new Error(`report_task poll ${poll.status}: ${poll.body.slice(0, 300)}`);
     }
     const body = parseJson(poll.body)?.data ?? {};
