@@ -39,10 +39,13 @@ const {
   HEADLESS = "true",
 } = process.env;
 
-/** Explicit account↔company map — one 7shifts org per service account. */
+/** Explicit account↔company map — one 7shifts org per service account.
+ * Values are trimmed: a stray newline in a pasted GitHub secret reads as a
+ * wrong password at the vendor. */
+const trim = (v) => (v ?? "").trim();
 const ACCOUNTS = [
-  { label: "HOU", company: 62064, user: SEVENSHIFTS_USERNAME_HH, pass: SEVENSHIFTS_PASSWORD_HH },
-  { label: "CO", company: 185592, user: SEVENSHIFTS_USERNAME_CO, pass: SEVENSHIFTS_PASSWORD_CO },
+  { label: "HOU", company: 62064, user: trim(SEVENSHIFTS_USERNAME_HH), pass: trim(SEVENSHIFTS_PASSWORD_HH) },
+  { label: "CO", company: 185592, user: trim(SEVENSHIFTS_USERNAME_CO), pass: trim(SEVENSHIFTS_PASSWORD_CO) },
 ];
 
 const DASHBOARD_BASE = "https://app.7shifts.com/api/v2";
@@ -92,14 +95,22 @@ async function login(page, user, pass) {
   await page.waitForSelector(userSel, { timeout: 30000 });
   await page.fill(userSel, user);
   await page.fill(passSel, pass);
-  await Promise.all([
-    page.waitForURL(
+  // FusionAuth's Log In button carries no type attribute (captured 7/27).
+  await page.click('button.button-login, button[type="submit"], input[type="submit"]');
+  try {
+    await page.waitForURL(
       (url) => url.hostname === "app.7shifts.com" && !url.pathname.startsWith("/login"),
       { timeout: 60000 }
-    ),
-    // FusionAuth's Log In button carries no type attribute (captured 7/27).
-    page.click('button.button-login, button[type="submit"], input[type="submit"]'),
-  ]);
+    );
+  } catch (err) {
+    // Distinguish "vendor rejected the credentials" from a slow redirect —
+    // the former needs a re-pasted secret, not a retry.
+    const content = await page.content().catch(() => "");
+    if (/wrong email or password/i.test(content)) {
+      throw new Error(`7shifts rejected the credentials for ${user} (wrong email or password — re-check the GitHub secret)`);
+    }
+    throw err;
+  }
   await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
   console.log("Logged in; landed on", page.url());
 }
