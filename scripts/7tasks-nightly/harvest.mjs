@@ -188,9 +188,16 @@ async function fetchTasksCsv(page, companyId, startDate, endDate) {
   }
   if (!fileUrl) throw new Error(`tasks_report (company ${companyId}) did not finish in time`);
 
-  const csvRes = await fetch(fileUrl); // pre-signed; self-authorizing
-  if (!csvRes.ok) throw new Error(`CSV download ${csvRes.status}`);
-  return csvRes.text();
+  // The file URL 403s from Node (no longer a self-authorizing pre-signed
+  // link) — download in-page like the rest of the flow.
+  const dl = await page.evaluate(async (u) => {
+    const r = await fetch(u, { credentials: "include" });
+    return { status: r.status, body: await r.text() };
+  }, fileUrl);
+  if (dl.status < 200 || dl.status >= 300) {
+    throw new Error(`CSV download ${dl.status}: ${dl.body.slice(0, 200)}`);
+  }
+  return dl.body;
 }
 
 async function postToEpd(csv, windowStart, windowEnd) {
