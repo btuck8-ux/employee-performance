@@ -35,9 +35,12 @@ jobs:
 
       - name: Install deps + Chromium
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
 
+      # HEADED under xvfb: Cloudflare fronts the 7shifts login and challenges
+      # headless Chromium outright; a headed browser has a fighting chance.
       - name: Run harvester
         env:
           SEVENSHIFTS_USERNAME_HH: ${{ secrets.SEVENSHIFTS_USERNAME_HH }}
@@ -47,7 +50,8 @@ jobs:
           EPD_BASE_URL: ${{ secrets.EPD_BASE_URL }}
           EPD_HARVEST_TOKEN: ${{ secrets.EPD_HARVEST_TOKEN }}
           DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
-        run: npm run harvest
+          HEADLESS: "false"
+        run: xvfb-run --auto-servernum npm run harvest
 
       - name: Upload failure screenshot
         if: failure()

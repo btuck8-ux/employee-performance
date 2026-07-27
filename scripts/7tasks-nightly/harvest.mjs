@@ -83,8 +83,12 @@ async function login(page, user, pass) {
   console.log("Navigating to 7shifts login...");
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  const userSel = 'input[name="email"], input[type="email"], input#email';
-  const passSel = 'input[name="password"], input[type="password"], input#password';
+  // app.7shifts.com/login redirects to login.7shifts.com (FusionAuth OAuth):
+  // the form is input#loginId + input#password (captured live 7/27). Cloudflare
+  // fronts it — headless Chromium gets challenged, so the harness must run
+  // HEADED (xvfb in CI). The email/... selectors are kept as fallbacks.
+  const userSel = 'input#loginId, input[name="loginId"], input[name="email"], input[type="email"], input#email';
+  const passSel = 'input#password, input[name="password"], input[type="password"]';
   await page.waitForSelector(userSel, { timeout: 30000 });
   await page.fill(userSel, user);
   await page.fill(passSel, pass);
