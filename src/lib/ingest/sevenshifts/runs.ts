@@ -7,7 +7,8 @@ export type IngestSource =
   | "cake_timesheets"
   | "tattle"
   | "reviews"
-  | "toast_sales";
+  | "toast_sales"
+  | "culture_pulse";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {
