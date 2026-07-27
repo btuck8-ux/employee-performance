@@ -10,6 +10,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/ingest-toast-sales",
+      "schedule": "15 9 * * *"
+    },
+    {
       "path": "/api/cron/harvest-guest-feedback",
       "schedule": "30 9 * * *"
     }

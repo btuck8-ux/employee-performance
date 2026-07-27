@@ -7,10 +7,7 @@ import {
   type ParsedSalesRecord,
   type PosImportResult,
 } from "@/lib/pos-import";
-import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
-import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
-import { fetchTotalImpactWeights } from "@/lib/total-impact-score";
-import { quarterOfDate, type Quarter } from "@/lib/quarter";
+import { recomputeAfterSalesUpsert } from "@/lib/ingest/sevenshifts/recompute";
 import { rowMatchesLocation } from "@/lib/location-match";
 import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
 
@@ -25,7 +22,6 @@ type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
 const UPSERT_BATCH_SIZE = 500;
 const FETCH_PAGE = 1000; // PostgREST max-rows is 1000 by default
-const RECOMPUTE_CONCURRENCY = 6; // parallelism for the (employee × quarter) recompute loop
 
 interface IngestStats {
   sales_inserted: number;
@@ -182,101 +178,19 @@ async function ingestPOSForLocation(
     stats
   );
 
-  // Discover the (year, quarter) set touched by this import. Note: the
-  // transaction_at strings are "YYYY-MM-DDTHH:MM:SS" so the first 10 chars
-  // are a valid YYYY-MM-DD date.
-  const affectedQuarters = new Map<string, { year: number; quarter: Quarter }>();
-  for (const r of records) {
-    const isoDate = r.transaction_at.slice(0, 10);
-    const q = quarterOfDate(new Date(isoDate + "T12:00:00"));
-    affectedQuarters.set(`${q.year}-Q${q.quarter}`, q);
-  }
-  stats.affected_quarters = affectedQuarters.size;
-
-  // Pull every active employee at this location once — they're the set of
-  // employees whose (employee, quarter) rows we'll refresh.
-  const { data: activeEmps } = await supabase
-    .from("employees")
-    .select("id")
-    .eq("location_id", location.id)
-    .eq("active", true);
-  const employeeIds = ((activeEmps ?? []) as Array<{ id: string }>).map(
-    (e) => e.id
+  // Shared post-sales recompute tail (ingest/sevenshifts/recompute.ts): every
+  // active employee × touched quarter, then the team tip-impact slice per
+  // quarter. The same tail the 7shifts pos_receipts and Toast sales feeds run,
+  // so all three sales writers stay recompute-identical.
+  const rc = await recomputeAfterSalesUpsert(
+    supabase,
+    location.id,
+    records.map((r) => r.transaction_at)
   );
-
-  // Recompute: cartesian (employee × affected quarter). recomputePerformance
-  // is idempotent and will also refresh the OTHER metrics, which is fine.
-  // Parallelized with a small worker pool — at DT scale (25 emps × 4 quarters
-  // = 100 jobs, each ~5 queries) serial = ~150s = hits Vercel's max. Pool of
-  // 6 keeps total time well under the function limit without overwhelming
-  // Postgres.
-  const jobs: Array<{ employee_id: string; year: number; quarter: Quarter }> = [];
-  for (const { year, quarter } of affectedQuarters.values()) {
-    for (const employee_id of employeeIds) {
-      jobs.push({ employee_id, year, quarter });
-    }
-  }
-
-  // Fetch weights once before the recompute pool; pass through to every job so
-  // we don't round-trip the singleton config rows N times.
-  const csWeights = await fetchCustomerServiceWeights(supabase);
-  const tisWeights = await fetchTotalImpactWeights(supabase);
-
-  async function recomputeWorker() {
-    while (true) {
-      const job = jobs.shift();
-      if (!job) return;
-      const result = await recomputePerformanceForQuarter(
-        supabase,
-        job.employee_id,
-        location.id,
-        job.year,
-        job.quarter,
-        { csWeights, tisWeights }
-      );
-      if (result.ok) stats.recomputed += 1;
-      else
-        stats.failures.push(
-          `Recompute ${job.employee_id} ${job.year}-Q${job.quarter} @ ${location.name}: ${result.error}`
-        );
-    }
-  }
-  await Promise.all(
-    Array.from({ length: RECOMPUTE_CONCURRENCY }, recomputeWorker)
-  );
-
-  // Co-presence team aggregation (Phase 7). One SQL function call per touched
-  // quarter does the full sweep — adding sales shifts the location baseline,
-  // which propagates to every team's delta_vs_loc_pp, so we have to rebuild
-  // each affected (location, quarter) slice from scratch. The function is
-  // idempotent: DELETEs the slice and re-INSERTs in one transaction.
-  //
-  // Run serially after the per-employee recompute completes — much cheaper
-  // than the per-employee loop (single SQL call per quarter, not per
-  // employee), so no need for a worker pool.
-  for (const { year, quarter } of affectedQuarters.values()) {
-    const { data: period } = await supabase
-      .from("report_periods")
-      .select("id")
-      .eq("year", year)
-      .eq("quarter", quarter)
-      .maybeSingle();
-    if (!period?.id) continue;
-    const { data: teamCount, error: teamErr } = await supabase.rpc(
-      "recompute_team_tip_impact",
-      {
-        p_location_id: location.id,
-        p_report_period_id: period.id as string,
-      }
-    );
-    if (teamErr) {
-      stats.failures.push(
-        `Team aggregation ${year}-Q${quarter} @ ${location.name}: ${teamErr.message}`
-      );
-    } else if (typeof teamCount === "number") {
-      stats.teams_recomputed += teamCount;
-    }
-  }
+  stats.affected_quarters = rc.quarters.length;
+  stats.recomputed = rc.recomputed;
+  stats.teams_recomputed = rc.teams_recomputed;
+  stats.failures.push(...rc.failures);
 
   await supabase
     .from("locations")

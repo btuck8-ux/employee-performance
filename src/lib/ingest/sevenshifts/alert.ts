@@ -31,7 +31,7 @@ export function decideAlert(runs: RunOutcome[]): AlertDecision {
   }
   // A source that ran everywhere but came back uniformly empty is suspicious
   // (e.g. an auth failure that returns 200 + empty, or a broken filter).
-  for (const source of ["7shifts_time", "pos_receipts"] as const) {
+  for (const source of ["7shifts_time", "pos_receipts", "toast_sales"] as const) {
     const ofSource = runs.filter((r) => r.source === source);
     if (ofSource.length > 0 && ofSource.every((r) => r.status === "empty")) {
       reasons.push(`all ${source} runs empty (${ofSource.length} location(s))`);

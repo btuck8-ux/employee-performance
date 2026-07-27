@@ -102,3 +102,64 @@ export function distinctQuarters(
   }
   return Array.from(map.values());
 }
+
+export interface SalesRecomputeSummary {
+  quarters: Array<{ year: number; quarter: Quarter }>;
+  recomputed: number;
+  teams_recomputed: number;
+  failures: string[];
+}
+
+/**
+ * The shared recompute tail every sales writer runs after upserting
+ * sales_records: refresh EVERY active employee at the location for each
+ * touched quarter, then rebuild the team tip-impact slice per quarter.
+ *
+ * Why everyone-at-location and not just employees whose presence overlaps the
+ * new sales: adding sales shifts the LOCATION baseline (location_tip_rate_pct,
+ * location_tip_per_hour), which changes every employee's tip_rate_delta_pp —
+ * a sale rung during nobody's shift still touches every quarter row.
+ *
+ * Callers: the manual POS CSV upload (upload-pos-actions.ts), the 7shifts
+ * pos_receipts feed (receipts.ts), and the Toast sales feed (ingest/toast).
+ * One tail, three writers — do not fork this logic per feed.
+ */
+export async function recomputeAfterSalesUpsert(
+  supabase: AdminClient,
+  locationId: string,
+  transactionAts: string[]
+): Promise<SalesRecomputeSummary> {
+  const quarters = distinctQuarters(transactionAts);
+  const summary: SalesRecomputeSummary = {
+    quarters,
+    recomputed: 0,
+    teams_recomputed: 0,
+    failures: [],
+  };
+  if (quarters.length === 0) return summary;
+
+  const { data: activeEmps } = await supabase
+    .from("employees")
+    .select("id")
+    .eq("location_id", locationId)
+    .eq("active", true);
+  const employeeIds = ((activeEmps ?? []) as Array<{ id: string }>).map((e) => e.id);
+
+  const jobs: RecomputeJob[] = [];
+  for (const q of quarters) {
+    for (const employee_id of employeeIds) {
+      jobs.push({ employee_id, year: q.year, quarter: q.quarter });
+    }
+  }
+
+  const rc = await runRecomputeJobs(supabase, locationId, jobs);
+  summary.recomputed = rc.recomputed;
+  summary.failures.push(...rc.failures);
+  summary.teams_recomputed = await recomputeTeamTipImpact(
+    supabase,
+    locationId,
+    quarters,
+    summary.failures
+  );
+  return summary;
+}

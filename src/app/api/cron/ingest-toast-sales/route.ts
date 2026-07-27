@@ -1,0 +1,51 @@
+import { NextResponse } from "next/server";
+import { runToastSalesIngest } from "@/lib/ingest/toast/orchestrator";
+
+/**
+ * Nightly Toast sales ingest — the 6 CO stores' permanent direct-API sales
+ * feed (handoff-co-sales-toast-plus-cake-2026-07-26.md §2).
+ *
+ * Pulls each store's incremental window from Toast's Orders API and lands
+ * rows through the same sales_records upsert + recompute path as the manual
+ * POS imports and Houston's 7shifts pos_receipts. One ingest_runs row per
+ * store (source 'toast_sales').
+ *
+ * Scheduled via vercel.json at 09:15 UTC — after the 09:00 nightly-ingest so
+ * the evening's 7shifts labor is already landed when the recompute runs, and
+ * before the 09:30 guest-feedback harvest. Middleware-exempt under
+ * /api/cron/* (src/middleware.ts); this handler enforces its own
+ * Authorization: Bearer <CRON_SECRET>, which Vercel Cron forwards.
+ */
+
+export const dynamic = "force-dynamic";
+// 6 stores × (a night or two of business dates + recompute); well within the
+// ceiling nightly, and enough headroom for a multi-day self-heal after an
+// outage.
+export const maxDuration = 300;
+
+export async function GET(request: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { error: "CRON_SECRET not configured" },
+      { status: 500 }
+    );
+  }
+  const auth = request.headers.get("authorization") ?? "";
+  if (auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const summary = await runToastSalesIngest();
+    console.log(
+      `[ingest-toast-sales] done: ${summary.runs} runs across ${summary.locations} locations`,
+      summary.by_status
+    );
+    return NextResponse.json(summary);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[ingest-toast-sales] fatal:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

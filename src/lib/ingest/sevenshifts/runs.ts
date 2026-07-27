@@ -6,7 +6,8 @@ export type IngestSource =
   | "pos_receipts"
   | "cake_timesheets"
   | "tattle"
-  | "reviews";
+  | "reviews"
+  | "toast_sales";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {
@@ -16,6 +17,13 @@ export interface FinishRunInput {
   rows_skipped?: number;
   detail?: Record<string, unknown> | null;
   error_text?: string | null;
+  /**
+   * Optional high-water-mark correction. A fetcher that pulled LESS than the
+   * window startRun recorded (e.g. the Toast feed's per-run business-date cap)
+   * passes the clamped end here so lastSuccessfulWindowEnd resumes from what
+   * was actually pulled, not from the aspirational window.
+   */
+  window_end?: string | null;
 }
 
 /**
@@ -69,17 +77,21 @@ export async function finishRun(
   input: FinishRunInput
 ): Promise<void> {
   if (!runId) return;
+  const update: Record<string, unknown> = {
+    finished_at: new Date().toISOString(),
+    status: input.status,
+    rows_in: input.rows_in ?? 0,
+    rows_upserted: input.rows_upserted ?? 0,
+    rows_skipped: input.rows_skipped ?? 0,
+    detail: input.detail ?? null,
+    error_text: input.error_text ?? null,
+  };
+  if (input.window_end !== undefined && input.window_end !== null) {
+    update.window_end = input.window_end;
+  }
   const { error } = await supabase
     .from("ingest_runs")
-    .update({
-      finished_at: new Date().toISOString(),
-      status: input.status,
-      rows_in: input.rows_in ?? 0,
-      rows_upserted: input.rows_upserted ?? 0,
-      rows_skipped: input.rows_skipped ?? 0,
-      detail: input.detail ?? null,
-      error_text: input.error_text ?? null,
-    })
+    .update(update)
     .eq("id", runId);
   if (error) {
     console.error(`[ingest/runs] failed to finish run ${runId}:`, error.message);

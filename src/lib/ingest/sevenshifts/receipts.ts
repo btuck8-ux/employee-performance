@@ -17,12 +17,7 @@
 
 import { getAll } from "./client";
 import { utcToLocalWallClock, timezoneForLocationCode } from "./tz";
-import {
-  distinctQuarters,
-  runRecomputeJobs,
-  recomputeTeamTipImpact,
-  type RecomputeJob,
-} from "./recompute";
+import { recomputeAfterSalesUpsert } from "./recompute";
 import type { AdminClient, LocationCrosswalk } from "./crosswalk";
 import type { RunOutcome } from "./runs";
 
@@ -134,21 +129,13 @@ export async function ingestReceipts(
     }
 
     // POS attribution is presence-based, so every active employee at the
-    // location for an affected quarter must be recomputed (mirror POS CSV
-    // importer), then the team tip-impact slice rebuilt per quarter.
-    const quarters = distinctQuarters(payloads.map((p) => p.transaction_at));
-    const { data: activeEmps } = await supabase
-      .from("employees")
-      .select("id")
-      .eq("location_id", loc.id)
-      .eq("active", true);
-    const employeeIds = ((activeEmps ?? []) as Array<{ id: string }>).map((e) => e.id);
-    const jobs: RecomputeJob[] = [];
-    for (const q of quarters) {
-      for (const employee_id of employeeIds) jobs.push({ employee_id, year: q.year, quarter: q.quarter });
-    }
-    const rc = await runRecomputeJobs(supabase, loc.id, jobs);
-    const teamsRecomputed = await recomputeTeamTipImpact(supabase, loc.id, quarters, rc.failures);
+    // location for an affected quarter must be recomputed, then the team
+    // tip-impact slice rebuilt per quarter — the shared post-sales tail.
+    const rc = await recomputeAfterSalesUpsert(
+      supabase,
+      loc.id,
+      payloads.map((p) => p.transaction_at)
+    );
 
     if (payloads.length > 0) {
       await supabase
@@ -162,9 +149,9 @@ export async function ingestReceipts(
     base.detail = {
       receipts_fetched: receipts.length,
       sales_upserted: upserted,
-      quarters_recomputed: quarters.length,
+      quarters_recomputed: rc.quarters.length,
       records_recomputed: rc.recomputed,
-      teams_recomputed: teamsRecomputed,
+      teams_recomputed: rc.teams_recomputed,
       skipped_no_date: skippedNoDate,
       recompute_failures: rc.failures.slice(0, 20),
     };
