@@ -93,6 +93,14 @@ async function login(page, user, pass) {
   const userSel = 'input#loginId, input[name="loginId"], input[name="email"], input[type="email"], input#email';
   const passSel = 'input#password, input[name="password"], input[type="password"]';
   await page.waitForSelector(userSel, { timeout: 30000 });
+
+  // A cookie-consent overlay sometimes covers the form; dismiss best-effort.
+  await page
+    .locator('button:has-text("Accept")')
+    .first()
+    .click({ timeout: 3000 })
+    .catch(() => {});
+
   await page.fill(userSel, user);
   await page.fill(passSel, pass);
   // FusionAuth's Log In button carries no type attribute (captured 7/27).
@@ -105,8 +113,11 @@ async function login(page, user, pass) {
   } catch (err) {
     // Distinguish "vendor rejected the credentials" from a slow redirect —
     // the former needs a re-pasted secret, not a retry.
-    const content = await page.content().catch(() => "");
-    if (/wrong email or password/i.test(content)) {
+    const rejected = await page
+      .getByText(/wrong email or password/i)
+      .count()
+      .catch(() => 0);
+    if (rejected > 0) {
       throw new Error(`7shifts rejected the credentials for ${user} (wrong email or password — re-check the GitHub secret)`);
     }
     throw err;
@@ -187,11 +198,14 @@ async function main() {
   );
 
   const browser = await chromium.launch({ headless: HEADLESS !== "false" });
+  const regionFailures = [];
   try {
     // One login per region, each in a fresh context — the two companies are
     // separate 7shifts orgs, so cookies must not be shared between them.
     // Each region's CSV is single-org; the import route's Location-column
-    // routing ingests the matching stores and skips the rest.
+    // routing ingests the matching stores and skips the rest. A region
+    // failing does NOT block the other region's ingest; the run still exits
+    // non-zero at the end so the workflow (and its alert) goes red.
     for (const acct of ACCOUNTS) {
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -209,6 +223,9 @@ async function main() {
               .join(" ")}`
         );
       } catch (err) {
+        const message = err?.message || String(err);
+        console.error(`[${acct.label}] FAILED: ${message}`);
+        regionFailures.push(`${acct.label}: ${message}`);
         try {
           await page.screenshot({
             path: `7tasks-harvest-failure-${acct.label}.png`,
@@ -216,15 +233,18 @@ async function main() {
           });
           console.error(`Saved failure screenshot to 7tasks-harvest-failure-${acct.label}.png`);
         } catch {}
-        throw err; // one region failing fails the run so the alert fires
       } finally {
         await context.close();
       }
     }
-    console.log("Done.");
   } finally {
     await browser.close();
   }
+
+  if (regionFailures.length > 0) {
+    throw new Error(`${regionFailures.length} region(s) failed — ${regionFailures.join(" | ")}`);
+  }
+  console.log("Done.");
 }
 
 main().catch((err) => {
