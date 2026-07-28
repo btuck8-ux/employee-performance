@@ -114,6 +114,30 @@ function analyze(rows: Row[]) {
     for (const k of Object.keys(r)) if (!KNOWN_FIELDS.has(k)) unexpected.add(k);
   }
 
+  // Rows colliding on the full proposed unique key — what actually differs?
+  // (HOU 20260727 showed 3 such collisions; the answer decides upsert vs dedupe.)
+  const byKey = new Map<string, Row[]>();
+  for (const r of rows) {
+    const k = grainKey(r, true);
+    const list = byKey.get(k);
+    if (list) list.push(r);
+    else byKey.set(k, [r]);
+  }
+  const duplicateExamples = Array.from(byKey.values())
+    .filter((list) => list.length > 1)
+    .slice(0, 5)
+    .map((list) =>
+      list.map((r) => ({
+        selectionGuid: redact(r["selectionGuid"]),
+        itemName: redact(r["selectionMenuItemName"]),
+        level: r["itemFulfillmentLevel"],
+        station: r["prepStationName"] ?? null,
+        firedAt: r["ticketFiredAt"],
+        startedAt: r["itemStartedAt"],
+        fulfilledAt: r["itemFulfilledAt"],
+      }))
+    );
+
   return {
     row_count: rows.length,
     distinct: {
@@ -148,6 +172,7 @@ function analyze(rows: Row[]) {
         rows.map((r) => grainKey(r, true))
       ).size,
     },
+    duplicate_examples: duplicateExamples,
     sample_row_redacted: rows[0]
       ? Object.fromEntries(Object.entries(rows[0]).map(([k, v]) => [k, redact(v)]))
       : {},
