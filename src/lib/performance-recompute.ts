@@ -167,6 +167,14 @@ export interface RangeMetrics {
   location_tip_rate_pct: number | null;
   location_tip_per_hour: number | null;
   tip_rate_delta_pp: number | null;
+  // Kitchen Speed (Toast Kitchen feed; reported metric, NOT a scored
+  // component). Mirrors the tip shape: own value + location value + delta.
+  // Null for non-kitchen-role employees, kitchen-disabled stores (NOLA), and
+  // windows before each store's Toast go-live.
+  kitchen_tickets: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  location_kitchen_avg_prep_seconds: number | null;
+  kitchen_prep_delta_seconds: number | null;
   // Phase 9 — Customer Service Score (composite). Null composite when fewer
   // than 2 of 3 components are present. Per-component scores + effective
   // weights are kept in `customer_service_score_breakdown` so the dashboard
@@ -270,6 +278,81 @@ async function fetchTipMetrics(
     location_tip_rate_pct: toNum(row.location_avg_tip_rate_pct),
     location_tip_per_hour: toNum(row.location_avg_tip_per_hour),
     tip_rate_delta_pp: toNum(row.tip_rate_delta_pp),
+  };
+}
+
+/**
+ * Per-employee Kitchen Speed over a date window, via the
+ * `compute_kitchen_speed` / `compute_location_kitchen_speed` SQL functions
+ * (migration 041). Attribution happens inside the employee function: rows
+ * count only while the employee was on shift at ticket-fired time under an
+ * is_kitchen role, with NO worked_that_day fallback — so a cashier (or an
+ * empty kitchen_role_config) yields 0 tickets, which this helper maps to
+ * all-null so non-kitchen employees never carry a kitchen number (§8 check).
+ */
+async function fetchKitchenMetrics(
+  supabase: SupabaseClient,
+  employeeId: string,
+  locationId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<{
+  kitchen_tickets: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  location_kitchen_avg_prep_seconds: number | null;
+  kitchen_prep_delta_seconds: number | null;
+}> {
+  const nullKitchen = {
+    kitchen_tickets: null,
+    kitchen_avg_prep_seconds: null,
+    location_kitchen_avg_prep_seconds: null,
+    kitchen_prep_delta_seconds: null,
+  };
+
+  const toNum = (v: number | string | null | undefined): number | null => {
+    if (v === null || v === undefined) return null;
+    const n = typeof v === "string" ? Number(v) : v;
+    return Number.isNaN(n) ? null : n;
+  };
+  const firstRow = (data: unknown) =>
+    (Array.isArray(data) ? data[0] : data) as
+      | { tickets: number | string | null; avg_prep_seconds: number | string | null }
+      | null
+      | undefined;
+
+  const { data: empData, error: empError } = await supabase.rpc("compute_kitchen_speed", {
+    p_employee_id: employeeId,
+    p_location_id: locationId,
+    p_start: periodStart,
+    p_end: periodEnd,
+  });
+  if (empError) {
+    console.error("[performance-recompute] kitchen metrics error:", empError.message);
+    return nullKitchen;
+  }
+  const emp = firstRow(empData);
+  const empTickets = toNum(emp?.tickets) ?? 0;
+  const empAvg = toNum(emp?.avg_prep_seconds);
+  // No attributed tickets = not a kitchen-role employee (or no kitchen data in
+  // the window) — the whole block stays null rather than pinning a store
+  // average on someone the metric doesn't apply to.
+  if (empTickets === 0 || empAvg === null) return nullKitchen;
+
+  const { data: locData, error: locError } = await supabase.rpc(
+    "compute_location_kitchen_speed",
+    { p_location_id: locationId, p_start: periodStart, p_end: periodEnd }
+  );
+  if (locError) {
+    console.error("[performance-recompute] location kitchen error:", locError.message);
+    return nullKitchen;
+  }
+  const locAvg = toNum(firstRow(locData)?.avg_prep_seconds);
+
+  return {
+    kitchen_tickets: empTickets,
+    kitchen_avg_prep_seconds: empAvg,
+    location_kitchen_avg_prep_seconds: locAvg,
+    kitchen_prep_delta_seconds: locAvg !== null ? empAvg - locAvg : null,
   };
 }
 
@@ -507,6 +590,15 @@ export async function computeMetricsForRange(
     periodEnd
   );
 
+  // ---- Kitchen Speed (reported metric; not scored) ----
+  const kitchen = await fetchKitchenMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   // ---- Customer Service Score (Phase 9) ----
   const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
   const csBreakdown = computeCustomerServiceScoreBreakdown(
@@ -559,6 +651,7 @@ export async function computeMetricsForRange(
       customer_review_quantity,
       customer_service_rating,
       ...tip,
+      ...kitchen,
       customer_service_score: csBreakdown.composite_score,
       customer_service_score_components_count: csBreakdown.components_count,
       customer_service_score_breakdown: csBreakdown,
@@ -825,6 +918,15 @@ export async function recomputePerformanceForQuarter(
     periodEnd
   );
 
+  // ---- Kitchen Speed (reported metric; not scored) ----
+  const kitchen = await fetchKitchenMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   // ---- Customer Service Score (Phase 9) ----
   const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
   const csBreakdown = computeCustomerServiceScoreBreakdown(
@@ -883,6 +985,10 @@ export async function recomputePerformanceForQuarter(
         location_tip_rate_pct: tip.location_tip_rate_pct,
         location_tip_per_hour: tip.location_tip_per_hour,
         tip_rate_delta_pp: tip.tip_rate_delta_pp,
+        kitchen_tickets: kitchen.kitchen_tickets,
+        kitchen_avg_prep_seconds: kitchen.kitchen_avg_prep_seconds,
+        location_kitchen_avg_prep_seconds: kitchen.location_kitchen_avg_prep_seconds,
+        kitchen_prep_delta_seconds: kitchen.kitchen_prep_delta_seconds,
         customer_service_score: csBreakdown.composite_score,
         customer_service_score_components_count: csBreakdown.components_count,
         total_impact_score: tisBreakdown.composite_score,

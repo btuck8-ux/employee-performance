@@ -8,7 +8,8 @@ export type IngestSource =
   | "tattle"
   | "reviews"
   | "toast_sales"
-  | "culture_pulse";
+  | "culture_pulse"
+  | "toast_kitchen";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {

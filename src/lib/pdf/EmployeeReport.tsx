@@ -36,7 +36,11 @@ import {
 // POS data still produce a clean report without empty tip rows.
 // 1.4.0 (Phase 9) adds the Customer Service Score composite row + breakdown
 // sub-section; the row + sub-section auto-hide when the composite is null.
-export const TEMPLATE_VERSION = "1.4.0";
+// 1.5.0 adds the Kitchen Speed block (Toast Kitchen feed) — avg prep time vs
+// the store average + attributed ticket count. Reported metric, NOT a scored
+// component (CS/TIS weights unchanged); rows render only at >= 25 attributed
+// tickets so a thin sample never prints as a number.
+export const TEMPLATE_VERSION = "1.5.0";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -215,6 +219,13 @@ export interface MetricSnapshot {
   // in that case.
   customer_service_score: number | null;
   customer_service_score_components_count: number | null;
+  // 1.5.0: Kitchen Speed (Toast Kitchen feed). All four null when the
+  // employee had no attributed kitchen tickets in the window (non-kitchen
+  // role, kitchen-disabled store, or pre-Toast-go-live period).
+  kitchen_tickets: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  location_kitchen_avg_prep_seconds: number | null;
+  kitchen_prep_delta_seconds: number | null;
 }
 
 export interface TrailingQuarter {
@@ -260,7 +271,15 @@ export interface ReportData {
 
 // ---- Metric kind table ----
 
-type MetricKind = "pct" | "rating" | "count" | "money" | "delta_pp" | "score_100";
+type MetricKind =
+  | "pct"
+  | "rating"
+  | "count"
+  | "money"
+  | "delta_pp"
+  | "score_100"
+  | "duration"
+  | "delta_duration";
 
 interface MetricDef {
   key: keyof MetricSnapshot;
@@ -288,8 +307,19 @@ interface MetricDef {
 /** Neutral band for the tip-rate vs location-average classifier. */
 const TIP_DELTA_NEUTRAL_PP = 0.25;
 
+/** Neutral band (seconds) for the prep-time vs store-average classifier. */
+const KITCHEN_DELTA_NEUTRAL_SECONDS = 15;
+
+/** Below this many attributed tickets an individual average is noise (§7). */
+const KITCHEN_MIN_TICKETS = 25;
+
 const hasTipData = (s: MetricSnapshot) =>
   s.tip_rate_pct !== null || s.tip_per_hour !== null;
+
+const hasKitchenData = (s: MetricSnapshot) =>
+  s.kitchen_tickets !== null &&
+  s.kitchen_tickets >= KITCHEN_MIN_TICKETS &&
+  s.kitchen_avg_prep_seconds !== null;
 
 // Order matches the existing on-page table.
 const METRIC_DEFS: MetricDef[] = [
@@ -328,6 +358,40 @@ const METRIC_DEFS: MetricDef[] = [
       if (value < -TIP_DELTA_NEUTRAL_PP) return "Below Expectations";
       return "Meets Expectations";
     },
+  },
+  // ---- 1.5.0: Kitchen Speed block, suppressed below the ticket minimum ----
+  // Mirrors the tip pattern: own value + store average + delta. Reported
+  // metric only — deliberately NOT a CS/TIS component.
+  {
+    key: "kitchen_avg_prep_seconds",
+    name: "Kitchen — Your Avg Prep Time",
+    kind: "duration",
+    showIf: hasKitchenData,
+  },
+  {
+    key: "location_kitchen_avg_prep_seconds",
+    name: "Kitchen — Store Avg Prep Time",
+    kind: "duration",
+    showIf: hasKitchenData,
+  },
+  {
+    key: "kitchen_prep_delta_seconds",
+    name: "Kitchen — vs Store Avg",
+    kind: "delta_duration",
+    showIf: hasKitchenData,
+    // Negative delta = faster than the store = good.
+    classifyValue: (value) => {
+      if (value === null) return null;
+      if (value < -KITCHEN_DELTA_NEUTRAL_SECONDS) return "Exceeds Expectations";
+      if (value > KITCHEN_DELTA_NEUTRAL_SECONDS) return "Below Expectations";
+      return "Meets Expectations";
+    },
+  },
+  {
+    key: "kitchen_tickets",
+    name: "Kitchen — Tickets While On Shift",
+    kind: "count",
+    showIf: hasKitchenData,
   },
   // ---- Phase 9: composite customer service score, auto-hidden when null ----
   {
@@ -380,15 +444,28 @@ function formatDelta(
   const eps = 0.001;
   if (Math.abs(diff) < eps) return { text: "0", color: COLORS.muted };
   const sign = diff > 0 ? "+" : "-"; // ASCII hyphen-minus, not the unicode minus
-  const color = diff > 0 ? COLORS.positive : COLORS.negative;
+  // Prep times improve DOWNWARD — a shrinking duration is the green direction.
+  const goodIsDown = kind === "duration" || kind === "delta_duration";
+  const improved = goodIsDown ? diff < 0 : diff > 0;
+  const color = improved ? COLORS.positive : COLORS.negative;
   const abs = Math.abs(diff);
   let body: string;
   if (kind === "pct" || kind === "delta_pp") body = `${abs.toFixed(2)}pp`;
   else if (kind === "rating") body = abs.toFixed(2);
   else if (kind === "money") body = `$${abs.toFixed(2)}`;
   else if (kind === "score_100") body = `${Math.round(abs)}`;
+  else if (kind === "duration" || kind === "delta_duration") body = formatDuration(abs);
   else body = Math.round(abs).toString();
   return { text: `${sign}${body}`, color };
+}
+
+/** Seconds -> "6m 12s" (or "42s" under a minute). ASCII only for Helvetica. */
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  const s = Math.round(Math.abs(seconds));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}m ${String(r).padStart(2, "0")}s` : `${r}s`;
 }
 
 // ---- Metric row ----
@@ -658,6 +735,16 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
                 // Composite score rounds to whole numbers per the Phase 9 spec.
                 display =
                   current === null ? "—" : `${formatCustomerServiceScore(current)} / 100`;
+              } else if (def.kind === "duration") {
+                display = formatDuration(current);
+              } else if (def.kind === "delta_duration") {
+                // Negative = faster than the store average. ASCII +/- only.
+                display =
+                  current === null
+                    ? "—"
+                    : current === 0
+                      ? "0s"
+                      : `${current < 0 ? "-" : "+"}${formatDuration(current)} (${current < 0 ? "faster" : "slower"})`;
               } else {
                 display = formatQuantity(current);
               }

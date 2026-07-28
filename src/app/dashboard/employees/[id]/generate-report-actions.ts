@@ -75,6 +75,7 @@ export async function renderAndStorePerformanceReport(
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
        tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
+       kitchen_tickets, kitchen_avg_prep_seconds, location_kitchen_avg_prep_seconds, kitchen_prep_delta_seconds,
        customer_service_score, customer_service_score_components_count,
        employees(employee_name, employee_code, hire_date),
        locations(name),
@@ -114,6 +115,7 @@ export async function renderAndStorePerformanceReport(
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
        tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
+       kitchen_tickets, kitchen_avg_prep_seconds, location_kitchen_avg_prep_seconds, kitchen_prep_delta_seconds,
        customer_service_score, customer_service_score_components_count,
        report_periods!inner(label, period_start)`
     )
@@ -143,6 +145,10 @@ export async function renderAndStorePerformanceReport(
     location_tip_rate_pct: number | string | null;
     location_tip_per_hour: number | string | null;
     tip_rate_delta_pp: number | string | null;
+    kitchen_tickets: number | null;
+    kitchen_avg_prep_seconds: number | string | null;
+    location_kitchen_avg_prep_seconds: number | string | null;
+    kitchen_prep_delta_seconds: number | string | null;
     customer_service_score: number | string | null;
     customer_service_score_components_count: number | null;
     report_periods: { label: string; period_start: string } | null;
@@ -178,6 +184,10 @@ export async function renderAndStorePerformanceReport(
       location_tip_rate_pct: num(r.location_tip_rate_pct),
       location_tip_per_hour: num(r.location_tip_per_hour),
       tip_rate_delta_pp: num(r.tip_rate_delta_pp),
+      kitchen_tickets: r.kitchen_tickets,
+      kitchen_avg_prep_seconds: num(r.kitchen_avg_prep_seconds),
+      location_kitchen_avg_prep_seconds: num(r.location_kitchen_avg_prep_seconds),
+      kitchen_prep_delta_seconds: num(r.kitchen_prep_delta_seconds),
       customer_service_score: num(r.customer_service_score),
       customer_service_score_components_count:
         r.customer_service_score_components_count ?? null,
@@ -218,6 +228,10 @@ export async function renderAndStorePerformanceReport(
       location_tip_rate_pct: num(pr.location_tip_rate_pct),
       location_tip_per_hour: num(pr.location_tip_per_hour),
       tip_rate_delta_pp: num(pr.tip_rate_delta_pp),
+      kitchen_tickets: pr.kitchen_tickets as number | null,
+      kitchen_avg_prep_seconds: num(pr.kitchen_avg_prep_seconds),
+      location_kitchen_avg_prep_seconds: num(pr.location_kitchen_avg_prep_seconds),
+      kitchen_prep_delta_seconds: num(pr.kitchen_prep_delta_seconds),
       customer_service_score: num(pr.customer_service_score),
       customer_service_score_components_count:
         (pr.customer_service_score_components_count as number | null) ?? null,
