@@ -29,7 +29,12 @@ import { toastGet, toastGetWithStatus } from "@/lib/ingest/toast/client";
  */
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// First COS run outlived 60s without a byte back from the Kitchen export; the
+// wider ceiling plus the in-route race below distinguishes "slow" from "hung".
+export const maxDuration = 300;
+
+/** Give the Kitchen call this long, then report the hang as data. */
+const KITCHEN_FETCH_TIMEOUT_MS = 240_000;
 
 const KITCHEN_PATH = "/kitchen/v1/export/itemFulfillments";
 
@@ -286,7 +291,20 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Pass ?businessDate=YYYYMMDD" }, { status: 400 });
     }
 
-    const res = await toastGetWithStatus<Row[]>(guid, KITCHEN_PATH, { businessDate });
+    const res = await Promise.race([
+      toastGetWithStatus<Row[]>(guid, KITCHEN_PATH, { businessDate }),
+      new Promise<{ status: number; body: null; error_body: string }>((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              status: 0,
+              body: null,
+              error_body: `kitchen export produced no response within ${KITCHEN_FETCH_TIMEOUT_MS / 1000}s (hang, not an HTTP error)`,
+            }),
+          KITCHEN_FETCH_TIMEOUT_MS
+        )
+      ),
+    ]);
 
     if (res.status === 204) {
       return NextResponse.json({
