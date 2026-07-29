@@ -15,6 +15,7 @@
  */
 
 import { getAll } from "./client";
+import { rolesForCompany } from "./roles";
 import { utcToLocalWallClock, timezoneForLocationCode } from "./tz";
 import { distinctQuarters, runRecomputeJobs, type RecomputeJob } from "./recompute";
 import type { AdminClient, LocationCrosswalk } from "./crosswalk";
@@ -26,10 +27,11 @@ interface TimePunchBreak {
   out?: string | null;
 }
 
-interface TimePunch {
+export interface TimePunch {
   id: number;
   user_id: number;
   location_id: number;
+  role_id?: number | null;
   clocked_in: string | null;
   clocked_out: string | null;
   hourly_wage?: number | null; // cents (calculated)
@@ -38,7 +40,14 @@ interface TimePunch {
   breaks?: TimePunchBreak[] | null;
 }
 
-interface CollapsedEntry {
+/** Per-role accumulation within one (employee, day) — for the dominant-role pick. */
+interface RoleAccum {
+  hours: number;
+  /** Earliest clocked_in (UTC ISO) under this role — the tie-breaker. */
+  earliestIn: string;
+}
+
+export interface CollapsedEntry {
   employee_id: string;
   entry_date: string;
   in_time: string;
@@ -46,6 +55,14 @@ interface CollapsedEntry {
   wage: number | null;
   hours: number;
   pay: number;
+  /**
+   * The day's dominant 7shifts role_id: a person can punch under two roles in
+   * one day; keep the role with the most worked hours, ties breaking toward
+   * the earliest punch. Null when no punch that day carried a role_id.
+   */
+  role_id: number | null;
+  /** Distinct role_ids seen that day (>1 = a multi-role day, counted in detail). */
+  role_count: number;
 }
 
 const MS_PER_HOUR = 1000 * 60 * 60;
@@ -66,6 +83,150 @@ function workedHours(punch: TimePunch): number {
     ms -= bOut - bIn;
   }
   return Math.max(0, ms / MS_PER_HOUR);
+}
+
+export interface CollapseOutcome {
+  entries: CollapsedEntry[];
+  unmatchedUserIds: number[];
+  skippedOpen: number;
+  skippedDeleted: number;
+  /** Days where one person punched under more than one role. */
+  multiRoleDays: number;
+}
+
+/**
+ * Collapse raw punches to one entry per (employee, local business date) —
+ * earliest-in / latest-out, hours + pay summed, dominant role_id resolved.
+ * Shared verbatim by the nightly ingest and the role backfill so the two can
+ * never disagree about which punch wins a day.
+ */
+export function collapsePunches(
+  punches: TimePunch[],
+  userToEmployee: Map<number, string>,
+  tz: string
+): CollapseOutcome {
+  const unmatchedUserIds = new Set<number>();
+  let skippedOpen = 0;
+  let skippedDeleted = 0;
+
+  const collapsed = new Map<string, CollapsedEntry>();
+  const roleAccums = new Map<string, Map<number, RoleAccum>>();
+
+  for (const p of punches) {
+    if (p.deleted) {
+      skippedDeleted += 1;
+      continue;
+    }
+    const employee_id = userToEmployee.get(Number(p.user_id));
+    if (!employee_id) {
+      unmatchedUserIds.add(Number(p.user_id));
+      continue;
+    }
+    const local = utcToLocalWallClock(p.clocked_in, tz);
+    if (!local) {
+      skippedOpen += 1;
+      continue;
+    }
+    if (!p.clocked_out) {
+      // Open / in-progress punch — not a finalized actual yet.
+      skippedOpen += 1;
+      continue;
+    }
+    const outLocal = utcToLocalWallClock(p.clocked_out, tz);
+    const hours = workedHours(p);
+    const wage =
+      p.hourly_wage != null && p.hourly_wage > 0 ? p.hourly_wage / 100 : null;
+    const pay = wage != null ? wage * hours : 0;
+
+    const key = `${employee_id}|${local.date}`;
+    const existing = collapsed.get(key);
+    if (!existing) {
+      collapsed.set(key, {
+        employee_id,
+        entry_date: local.date,
+        in_time: local.time,
+        out_time: outLocal?.time ?? null,
+        wage,
+        hours,
+        pay,
+        role_id: null,
+        role_count: 0,
+      });
+    } else {
+      if (local.time < existing.in_time) existing.in_time = local.time;
+      if (outLocal?.time && (!existing.out_time || outLocal.time > existing.out_time)) {
+        existing.out_time = outLocal.time;
+      }
+      existing.hours += hours;
+      existing.pay += pay;
+      if (existing.wage == null && wage != null) existing.wage = wage;
+    }
+
+    if (p.role_id != null && p.clocked_in) {
+      let accums = roleAccums.get(key);
+      if (!accums) {
+        accums = new Map();
+        roleAccums.set(key, accums);
+      }
+      const roleId = Number(p.role_id);
+      const acc = accums.get(roleId);
+      if (!acc) {
+        accums.set(roleId, { hours, earliestIn: p.clocked_in });
+      } else {
+        acc.hours += hours;
+        if (p.clocked_in < acc.earliestIn) acc.earliestIn = p.clocked_in;
+      }
+    }
+  }
+
+  // Resolve each day's dominant role: most worked hours, ties toward the
+  // earliest punch.
+  let multiRoleDays = 0;
+  for (const [key, entry] of collapsed) {
+    const accums = roleAccums.get(key);
+    if (!accums || accums.size === 0) continue;
+    entry.role_count = accums.size;
+    if (accums.size > 1) multiRoleDays += 1;
+    let bestId: number | null = null;
+    let best: RoleAccum | null = null;
+    for (const [roleId, acc] of accums) {
+      if (
+        best === null ||
+        acc.hours > best.hours ||
+        (acc.hours === best.hours && acc.earliestIn < best.earliestIn)
+      ) {
+        best = acc;
+        bestId = roleId;
+      }
+    }
+    entry.role_id = bestId;
+  }
+
+  return {
+    entries: Array.from(collapsed.values()),
+    unmatchedUserIds: Array.from(unmatchedUserIds),
+    skippedOpen,
+    skippedDeleted,
+    multiRoleDays,
+  };
+}
+
+/** Map 7shifts user_id -> EPD employee_id for one location. */
+export async function employeeMapForLocation(
+  supabase: AdminClient,
+  locationId: string
+): Promise<Map<number, string>> {
+  const { data, error } = await supabase
+    .from("employees")
+    .select("id, seven_shifts_user_id")
+    .eq("location_id", locationId)
+    .not("seven_shifts_user_id", "is", null);
+  if (error) throw new Error(`employee lookup: ${error.message}`);
+  const userToEmployee = new Map<number, string>();
+  for (const e of data ?? []) {
+    userToEmployee.set(Number(e.seven_shifts_user_id), e.id as string);
+  }
+  return userToEmployee;
 }
 
 export async function ingestTimePunches(
@@ -91,16 +252,19 @@ export async function ingestTimePunches(
   try {
     const tz = timezoneForLocationCode(loc.location_code);
 
-    // Map 7shifts user_id -> EPD employee_id for THIS location.
-    const { data: emps, error: empErr } = await supabase
-      .from("employees")
-      .select("id, seven_shifts_user_id")
-      .eq("location_id", loc.id)
-      .not("seven_shifts_user_id", "is", null);
-    if (empErr) throw new Error(`employee lookup: ${empErr.message}`);
-    const userToEmployee = new Map<number, string>();
-    for (const e of emps ?? []) {
-      userToEmployee.set(Number(e.seven_shifts_user_id), e.id as string);
+    const userToEmployee = await employeeMapForLocation(supabase, loc.id);
+
+    // Resolve role_id -> role name. If the lookup fails, do NOT fall back to
+    // writing nulls: the upsert on (employee, date, type) would overwrite roles
+    // already in the DB — the exact regression this fix repairs. Instead the
+    // payloads omit `role` entirely (PostgREST leaves absent columns untouched
+    // on conflict) and the failure is surfaced in the run detail.
+    let roleNames: Map<number, string> | null = null;
+    let rolesLookupError: string | null = null;
+    try {
+      roleNames = await rolesForCompany(loc.company_id);
+    } catch (err) {
+      rolesLookupError = err instanceof Error ? err.message : String(err);
     }
 
     // Pull punches modified since the window start (captures both new punches
@@ -112,81 +276,36 @@ export async function ingestTimePunches(
     });
     base.rows_in = punches.length;
 
-    const unmatchedUserIds = new Set<number>();
-    let skippedOpen = 0;
-    let skippedDeleted = 0;
-
-    // Collapse to one row per (employee, local business date).
-    const collapsed = new Map<string, CollapsedEntry>();
-    for (const p of punches) {
-      if (p.deleted) {
-        skippedDeleted += 1;
-        continue;
-      }
-      const employee_id = userToEmployee.get(Number(p.user_id));
-      if (!employee_id) {
-        unmatchedUserIds.add(Number(p.user_id));
-        continue;
-      }
-      const local = utcToLocalWallClock(p.clocked_in, tz);
-      if (!local) {
-        skippedOpen += 1;
-        continue;
-      }
-      if (!p.clocked_out) {
-        // Open / in-progress punch — not a finalized actual yet.
-        skippedOpen += 1;
-        continue;
-      }
-      const outLocal = utcToLocalWallClock(p.clocked_out, tz);
-      const hours = workedHours(p);
-      const wage =
-        p.hourly_wage != null && p.hourly_wage > 0 ? p.hourly_wage / 100 : null;
-      const pay = wage != null ? wage * hours : 0;
-
-      const key = `${employee_id}|${local.date}`;
-      const existing = collapsed.get(key);
-      if (!existing) {
-        collapsed.set(key, {
-          employee_id,
-          entry_date: local.date,
-          in_time: local.time,
-          out_time: outLocal?.time ?? null,
-          wage,
-          hours,
-          pay,
-        });
-      } else {
-        if (local.time < existing.in_time) existing.in_time = local.time;
-        if (outLocal?.time && (!existing.out_time || outLocal.time > existing.out_time)) {
-          existing.out_time = outLocal.time;
-        }
-        existing.hours += hours;
-        existing.pay += pay;
-        if (existing.wage == null && wage != null) existing.wage = wage;
-      }
-    }
+    const collapse = collapsePunches(punches, userToEmployee, tz);
 
     // Build upsert payloads in the exact time_entries shape the CSV path uses.
-    const payloads = Array.from(collapsed.values()).map((c) => ({
-      employee_id: c.employee_id,
-      location_id: loc.id,
-      entry_date: c.entry_date,
-      entry_type: "worked" as const,
-      in_time: c.in_time,
-      out_time: c.out_time,
-      role: null as string | null,
-      wage: c.wage,
-      regular_hours: c.hours,
-      ot_hours: 0,
-      double_ot_hours: 0,
-      holiday_hours: 0,
-      regular_pay: c.pay,
-      ot_pay: 0,
-      double_ot_pay: 0,
-      holiday_pay: 0,
-      total_pay: c.pay,
-    }));
+    const unmappedRoleIds = new Set<number>();
+    const payloads = collapse.entries.map((c) => {
+      const payload: Record<string, unknown> = {
+        employee_id: c.employee_id,
+        location_id: loc.id,
+        entry_date: c.entry_date,
+        entry_type: "worked" as const,
+        in_time: c.in_time,
+        out_time: c.out_time,
+        wage: c.wage,
+        regular_hours: c.hours,
+        ot_hours: 0,
+        double_ot_hours: 0,
+        holiday_hours: 0,
+        regular_pay: c.pay,
+        ot_pay: 0,
+        double_ot_pay: 0,
+        holiday_pay: 0,
+        total_pay: c.pay,
+      };
+      if (roleNames) {
+        const role = c.role_id != null ? roleNames.get(c.role_id) ?? null : null;
+        if (c.role_id != null && role === null) unmappedRoleIds.add(c.role_id);
+        payload.role = role;
+      }
+      return payload;
+    });
 
     let upserted = 0;
     const UPSERT_BATCH = 500;
@@ -201,8 +320,8 @@ export async function ingestTimePunches(
 
     // Recompute (employee × affected quarter) for the touched employees only —
     // mirrors the time CSV importer (no team-tip rebuild on the time path).
-    const quarters = distinctQuarters(payloads.map((p) => p.entry_date));
-    const touchedEmployees = new Set(payloads.map((p) => p.employee_id));
+    const quarters = distinctQuarters(collapse.entries.map((c) => c.entry_date));
+    const touchedEmployees = new Set(collapse.entries.map((c) => c.employee_id));
     const jobs: RecomputeJob[] = [];
     for (const employee_id of touchedEmployees) {
       for (const q of quarters) jobs.push({ employee_id, year: q.year, quarter: q.quarter });
@@ -217,22 +336,31 @@ export async function ingestTimePunches(
     }
 
     base.rows_upserted = upserted;
-    base.rows_skipped = skippedOpen + skippedDeleted + unmatchedUserIds.size;
+    base.rows_skipped =
+      collapse.skippedOpen + collapse.skippedDeleted + collapse.unmatchedUserIds.length;
     base.detail = {
       punches_fetched: punches.length,
       entries_upserted: upserted,
       employees_touched: touchedEmployees.size,
       quarters_recomputed: quarters.length,
       records_recomputed: rc.recomputed,
-      skipped_open_punches: skippedOpen,
-      skipped_deleted: skippedDeleted,
-      unmatched_seven_shifts_user_ids: Array.from(unmatchedUserIds),
+      skipped_open_punches: collapse.skippedOpen,
+      skipped_deleted: collapse.skippedDeleted,
+      unmatched_seven_shifts_user_ids: collapse.unmatchedUserIds,
+      multi_role_days: collapse.multiRoleDays,
+      unmapped_role_ids: Array.from(unmappedRoleIds),
+      ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
     };
     base.status = upserted > 0 ? "success" : "empty";
-    if (rc.failures.length > 0) {
-      base.error_text = `${rc.failures.length} recompute failure(s); see detail`;
+    const problems: string[] = [];
+    if (rolesLookupError) {
+      problems.push("roles lookup failed — role column left untouched this run");
     }
+    if (rc.failures.length > 0) {
+      problems.push(`${rc.failures.length} recompute failure(s); see detail`);
+    }
+    if (problems.length > 0) base.error_text = problems.join("; ");
     return base;
   } catch (err) {
     base.status = "error";

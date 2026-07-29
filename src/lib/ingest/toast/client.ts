@@ -110,17 +110,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Authenticated GET against one restaurant. Handles the auth handshake, a
- * one-shot re-auth on 401 (stale cached token), and bounded backoff on
- * 429/5xx (honoring Retry-After when Toast sends one).
+ * The shared request loop: auth handshake, one-shot re-auth on 401 (stale
+ * cached token), bounded backoff on 429/5xx (honoring Retry-After when Toast
+ * sends one). Returns the terminal Response; callers decide what non-2xx means.
  */
-export async function toastGet<T>(
-  restaurantGuid: string,
-  path: string,
-  params: QueryParams = {}
-): Promise<T> {
-  const url = buildUrl(path, params);
-
+async function toastFetch(restaurantGuid: string, url: string): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     const token = await getAccessToken();
     const res = await fetch(url, {
@@ -130,8 +124,6 @@ export async function toastGet<T>(
         Accept: "application/json",
       },
     });
-
-    if (res.ok) return (await res.json()) as T;
 
     if (res.status === 401 && attempt < MAX_RETRIES) {
       invalidateToken();
@@ -146,11 +138,43 @@ export async function toastGet<T>(
       continue;
     }
 
-    const body = await res.text().catch(() => "");
-    throw new Error(
-      `Toast ${res.status} ${res.statusText} for ${stripQuery(url)}: ${body.slice(0, 500)}`
-    );
+    return res;
   }
+}
+
+/** Authenticated GET against one restaurant; throws on any non-2xx. */
+export async function toastGet<T>(
+  restaurantGuid: string,
+  path: string,
+  params: QueryParams = {}
+): Promise<T> {
+  const url = buildUrl(path, params);
+  const res = await toastFetch(restaurantGuid, url);
+  if (res.ok) return (await res.json()) as T;
+
+  const body = await res.text().catch(() => "");
+  throw new Error(
+    `Toast ${res.status} ${res.statusText} for ${stripQuery(url)}: ${body.slice(0, 500)}`
+  );
+}
+
+/**
+ * Status-aware GET: hands back { status, body } instead of throwing on non-2xx.
+ * The Kitchen export needs this — its 204 No Content is a meaningful signal
+ * ("no RMS Pro+ subscription"), not an error, and must reach the caller.
+ */
+export async function toastGetWithStatus<T>(
+  restaurantGuid: string,
+  path: string,
+  params: QueryParams = {}
+): Promise<{ status: number; body: T | null; error_body?: string }> {
+  const url = buildUrl(path, params);
+  const res = await toastFetch(restaurantGuid, url);
+  if (res.status === 204) return { status: 204, body: null };
+  if (res.ok) return { status: res.status, body: (await res.json()) as T };
+
+  const text = await res.text().catch(() => "");
+  return { status: res.status, body: null, error_body: text.slice(0, 500) };
 }
 
 /**

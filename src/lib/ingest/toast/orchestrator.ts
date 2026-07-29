@@ -2,12 +2,16 @@
  * Toast sales ingest orchestrator: fan the direct Toast Orders pull out over
  * the stores wired for it (handoff-co-sales-toast-plus-cake-2026-07-26.md §2).
  *
- * The crosswalk is `locations.toast_restaurant_guid IS NOT NULL` — the 6 CO
- * stores and ONLY them. The provisioned credential can see 9 restaurants
- * (CO + Houston + Chico/Kona), but Houston's sales already arrive via the
- * 7shifts pos_receipts nightly (a Toast pull would double-source them) and
- * Chico/Kona are not EPD stores. The GUID column is the enforcement: never
- * iterate "all locations the credential can see".
+ * The crosswalk is the explicit `locations.toast_sales_enabled` flag
+ * (migration 041) — the 6 CO stores and ONLY them. The provisioned credential
+ * can see 9 restaurants (CO + Houston + Chico + a stray second Fort Collins),
+ * but Houston's sales already arrive via the 7shifts pos_receipts nightly (a
+ * Toast pull would double-source them) and the others are not EPD stores.
+ * Before 041 the guard was implicitly "toast_restaurant_guid IS NOT NULL";
+ * the kitchen feed needs HOU's GUID populated, so the flag now carries the
+ * enforcement and the GUID column is pure identity. Never iterate "all
+ * locations the credential can see", and never set toast_sales_enabled for
+ * HOU.
  *
  * Each store gets its own incremental window: lastSuccessfulWindowEnd ->
  * now, with the very first run (or an operator `since` override) floored at
@@ -45,6 +49,9 @@ export async function loadToastCrosswalk(
   const { data, error } = await supabase
     .from("locations")
     .select("id, name, location_code, toast_restaurant_guid, toast_sales_start_date")
+    .eq("toast_sales_enabled", true)
+    // A sales-enabled store must still carry its GUID; the flag is the
+    // authorization, the GUID the address.
     .not("toast_restaurant_guid", "is", null)
     .order("location_code");
   if (error) {

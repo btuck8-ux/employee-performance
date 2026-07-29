@@ -36,7 +36,23 @@ import {
 // POS data still produce a clean report without empty tip rows.
 // 1.4.0 (Phase 9) adds the Customer Service Score composite row + breakdown
 // sub-section; the row + sub-section auto-hide when the composite is null.
-export const TEMPLATE_VERSION = "1.4.0";
+// 1.5.0 adds the Kitchen Speed block (Toast Kitchen feed) — avg prep time vs
+// the store average + attributed ticket count. Reported metric, NOT a scored
+// component (CS/TIS weights unchanged); rows render only at >= 25 attributed
+// tickets so a thin sample never prints as a number.
+// 1.5.1 (043 redesign) reframes Kitchen Speed as a shared shift outcome:
+// attribution is on-the-clock overlap with no role filter, the comparison is
+// the hour-matched residual vs the store's own norm (not a flat store
+// average), and the block leads with "vs norm" — the only hour-fair number.
+// Suppressed below 15 attributed shifts (day-to-day residual SD ~114s).
+// 1.5.2 removes the 15-shift floor as a GATE and retains it as ADVISORY:
+// the block always renders when kitchen data exists, at any shift count —
+// the number is real at every n (SE ~114/sqrt(shifts)), only its precision
+// varies, and thin-sample judgment belongs to the human reader. Below 15
+// shifts the rating badge is withheld (an automated verdict would pass
+// exactly the judgment humans are supposed to withhold) and the footnote
+// flags the figures as directional only.
+export const TEMPLATE_VERSION = "1.5.2";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -215,6 +231,17 @@ export interface MetricSnapshot {
   // in that case.
   customer_service_score: number | null;
   customer_service_score_components_count: number | null;
+  // 1.5.1/1.5.2: Kitchen Speed v2 (043). All null only when the employee had
+  // no attributed items in the window (never on the clock at a
+  // kitchen-enabled store, kitchen-disabled store, or pre-Toast-go-live
+  // period) — present at any shift count otherwise (1.5.2).
+  // baseline = the store's volume-weighted same-hour norm (avg - residual).
+  kitchen_items: number | null;
+  kitchen_tickets: number | null;
+  kitchen_shifts: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  kitchen_baseline_prep_seconds: number | null;
+  kitchen_residual_seconds: number | null;
 }
 
 export interface TrailingQuarter {
@@ -260,7 +287,15 @@ export interface ReportData {
 
 // ---- Metric kind table ----
 
-type MetricKind = "pct" | "rating" | "count" | "money" | "delta_pp" | "score_100";
+type MetricKind =
+  | "pct"
+  | "rating"
+  | "count"
+  | "money"
+  | "delta_pp"
+  | "score_100"
+  | "duration"
+  | "delta_duration";
 
 interface MetricDef {
   key: keyof MetricSnapshot;
@@ -288,8 +323,28 @@ interface MetricDef {
 /** Neutral band for the tip-rate vs location-average classifier. */
 const TIP_DELTA_NEUTRAL_PP = 0.25;
 
+/** Neutral band (seconds) for the residual-vs-store-norm classifier. */
+const KITCHEN_DELTA_NEUTRAL_SECONDS = 15;
+
+/**
+ * ADVISORY reading floor, not a gate (1.5.2 — reversing the 1.5.1 gate by
+ * Tucker's 2026-07-29 decision). Day-to-day residual SD is ~114s, so the SE
+ * on an employee's residual is ~114/sqrt(shifts): 1 shift ≈ ±114s,
+ * 4 ≈ ±57s, 15 ≈ ±29s. The number renders at any n — below this floor the
+ * automated Exceeds/Meets/Below badge is withheld and the footnote marks
+ * the figures directional only; discounting a thin sample is the reader's
+ * job, not the platform's.
+ */
+const KITCHEN_MIN_SHIFTS = 15;
+
 const hasTipData = (s: MetricSnapshot) =>
   s.tip_rate_pct !== null || s.tip_per_hour !== null;
+
+const hasKitchenData = (s: MetricSnapshot) =>
+  s.kitchen_items !== null &&
+  s.kitchen_items > 0 &&
+  s.kitchen_avg_prep_seconds !== null &&
+  s.kitchen_residual_seconds !== null;
 
 // Order matches the existing on-page table.
 const METRIC_DEFS: MetricDef[] = [
@@ -328,6 +383,51 @@ const METRIC_DEFS: MetricDef[] = [
       if (value < -TIP_DELTA_NEUTRAL_PP) return "Below Expectations";
       return "Meets Expectations";
     },
+  },
+  // ---- 1.5.1/1.5.2: Kitchen Speed block, rendered at any shift count ----
+  // "Shifts you worked" framing: two people working identical shifts get
+  // identical numbers — this reflects how the kitchen ran while they were
+  // on, not their individual output. Reported metric only — deliberately
+  // NOT a CS/TIS component. Leads with "vs norm", the only hour-fair
+  // number; the raw average and the hour-matched store norm follow as
+  // context, and the Tickets / Shifts row is how a reader judges whether
+  // to trust the number. Scoring window is 10:00–19:59 local tickets only.
+  {
+    key: "kitchen_residual_seconds",
+    name: "Kitchen — vs Store Norm, Same Hours",
+    kind: "delta_duration",
+    showIf: hasKitchenData,
+    // Negative residual = the kitchen ran faster than the store's own
+    // same-hour norm on their shifts = good. The number always renders;
+    // the badge is withheld below the advisory floor — an automated
+    // verdict on a 1–3 shift sample would pass exactly the judgment
+    // humans are supposed to withhold (1.5.2).
+    classifyValue: (value, s) => {
+      if (value === null) return null;
+      if (s.kitchen_shifts === null || s.kitchen_shifts < KITCHEN_MIN_SHIFTS) return null;
+      if (value < -KITCHEN_DELTA_NEUTRAL_SECONDS) return "Exceeds Expectations";
+      if (value > KITCHEN_DELTA_NEUTRAL_SECONDS) return "Below Expectations";
+      return "Meets Expectations";
+    },
+  },
+  {
+    key: "kitchen_avg_prep_seconds",
+    name: "Kitchen — Avg Fulfillment, Your Shifts",
+    kind: "duration",
+    showIf: hasKitchenData,
+  },
+  {
+    key: "kitchen_baseline_prep_seconds",
+    name: "Kitchen — Store Norm, Same Hours",
+    kind: "duration",
+    showIf: hasKitchenData,
+  },
+  {
+    // Rendered as "tickets / shifts" via the special display below.
+    key: "kitchen_tickets",
+    name: "Kitchen — Tickets / Shifts",
+    kind: "count",
+    showIf: hasKitchenData,
   },
   // ---- Phase 9: composite customer service score, auto-hidden when null ----
   {
@@ -380,15 +480,28 @@ function formatDelta(
   const eps = 0.001;
   if (Math.abs(diff) < eps) return { text: "0", color: COLORS.muted };
   const sign = diff > 0 ? "+" : "-"; // ASCII hyphen-minus, not the unicode minus
-  const color = diff > 0 ? COLORS.positive : COLORS.negative;
+  // Prep times improve DOWNWARD — a shrinking duration is the green direction.
+  const goodIsDown = kind === "duration" || kind === "delta_duration";
+  const improved = goodIsDown ? diff < 0 : diff > 0;
+  const color = improved ? COLORS.positive : COLORS.negative;
   const abs = Math.abs(diff);
   let body: string;
   if (kind === "pct" || kind === "delta_pp") body = `${abs.toFixed(2)}pp`;
   else if (kind === "rating") body = abs.toFixed(2);
   else if (kind === "money") body = `$${abs.toFixed(2)}`;
   else if (kind === "score_100") body = `${Math.round(abs)}`;
+  else if (kind === "duration" || kind === "delta_duration") body = formatDuration(abs);
   else body = Math.round(abs).toString();
   return { text: `${sign}${body}`, color };
+}
+
+/** Seconds -> "6m 12s" (or "42s" under a minute). ASCII only for Helvetica. */
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  const s = Math.round(Math.abs(seconds));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}m ${String(r).padStart(2, "0")}s` : `${r}s`;
 }
 
 // ---- Metric row ----
@@ -640,6 +753,9 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
                   m.survey_engagement_pct !== null
                     ? `${formatPercent(m.survey_engagement_pct)}  (${formatQuantity(m.surveys_completed)} of ${formatQuantity(m.surveys_assigned)})`
                     : "—";
+              } else if (def.key === "kitchen_tickets") {
+                // 1.5.1: combined sample-size row, e.g. "1,847 / 42".
+                display = `${formatQuantity(m.kitchen_tickets)} / ${formatQuantity(m.kitchen_shifts)}`;
               } else if (def.kind === "pct") {
                 display = formatPercent(current);
               } else if (def.kind === "rating") {
@@ -658,6 +774,16 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
                 // Composite score rounds to whole numbers per the Phase 9 spec.
                 display =
                   current === null ? "—" : `${formatCustomerServiceScore(current)} / 100`;
+              } else if (def.kind === "duration") {
+                display = formatDuration(current);
+              } else if (def.kind === "delta_duration") {
+                // Negative = faster than the store average. ASCII +/- only.
+                display =
+                  current === null
+                    ? "—"
+                    : current === 0
+                      ? "0s"
+                      : `${current < 0 ? "-" : "+"}${formatDuration(current)} (${current < 0 ? "faster" : "slower"})`;
               } else {
                 display = formatQuantity(current);
               }
@@ -680,6 +806,18 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
             });
           })()}
         </View>
+
+        {hasKitchenData(m) && (
+          <Text style={[styles.currencyLine, { marginTop: 4 }]}>
+            Kitchen Speed reflects how the kitchen ran during shifts this
+            employee worked (tickets fired 10am–8pm, vs this store&apos;s own
+            same-hour norm for the period) — a shared shift outcome, not a
+            measure of individual output.
+            {m.kitchen_shifts !== null && m.kitchen_shifts < KITCHEN_MIN_SHIFTS
+              ? " Figures based on fewer than 15 shifts are directional only."
+              : ""}
+          </Text>
+        )}
 
         {m.customer_service_score !== null && (
           <CustomerServiceBreakdown

@@ -16,7 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface CategoryCurrencyEntry {
-  key: "labor" | "sales" | "tattle" | "reviews" | "tasks" | "survey";
+  key: "labor" | "sales" | "tattle" | "reviews" | "tasks" | "survey" | "kitchen";
   label: string;
   /** YYYY-MM-DD of the newest source row <= period end, or null if none. */
   data_through: string | null;
@@ -51,15 +51,15 @@ async function maxDate(
 }
 
 /**
- * Compute all six categories' max source dates for (location, <= periodEnd).
- * Six small indexed lookups, run concurrently.
+ * Compute all seven categories' max source dates for (location, <= periodEnd).
+ * Seven small indexed lookups, run concurrently.
  */
 export async function getCategoryCurrency(
   supabase: SupabaseClient,
   locationId: string,
   periodEnd: string // YYYY-MM-DD
 ): Promise<CategoryCurrencyEntry[]> {
-  const [labor, sales, tattle, reviews, tasks, survey] = await Promise.all([
+  const [labor, sales, tattle, reviews, tasks, survey, kitchen] = await Promise.all([
     maxDate(supabase, "time_entries", "entry_date", locationId, periodEnd, {
       column: "entry_type",
       value: "worked",
@@ -76,6 +76,10 @@ export async function getCategoryCurrency(
       column: "source",
       value: "culture_pulse",
     }),
+    // Kitchen history begins at each store's Toast go-live (2026-07), so any
+    // earlier period — and every kitchen-disabled store (NOLA) — has no rows
+    // and renders the by-design "—", exactly like NOLA's sales.
+    maxDate(supabase, "toast_item_fulfillments", "fired_local_date", locationId, periodEnd),
   ]);
 
   return [
@@ -85,6 +89,7 @@ export async function getCategoryCurrency(
     { key: "reviews", label: "Reviews", data_through: reviews },
     { key: "tasks", label: "Tasks", data_through: tasks },
     { key: "survey", label: "Survey", data_through: survey },
+    { key: "kitchen", label: "Kitchen", data_through: kitchen },
   ];
 }
 

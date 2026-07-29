@@ -20,6 +20,10 @@
     {
       "path": "/api/cron/sync-cp-surveys",
       "schedule": "45 9 * * *"
+    },
+    {
+      "path": "/api/cron/ingest-toast-kitchen",
+      "schedule": "0 10 * * *"
     }
   ]
 }

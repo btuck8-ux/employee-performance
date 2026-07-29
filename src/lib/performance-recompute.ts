@@ -167,6 +167,25 @@ export interface RangeMetrics {
   location_tip_rate_pct: number | null;
   location_tip_per_hour: number | null;
   tip_rate_delta_pp: number | null;
+  // Kitchen Speed v2 (043; reported metric, NOT a scored component).
+  // Attribution is on-the-clock overlap only — no role filter — so this is a
+  // shared shift outcome, not an individual skill. residual = the employee's
+  // avg prep minus the store's same-hour baseline (negative = faster).
+  // Always stored whenever attributed items exist, at ANY shift count
+  // (2026-07-29 amendment): the number is real at every n — only its
+  // precision varies — and thin-sample judgment belongs to the human reading
+  // it, not a gate in the code. All null only when NO data exists: never on
+  // the clock at a kitchen-enabled store (NOLA) or pre-Toast-go-live.
+  kitchen_items: number | null;
+  kitchen_tickets: number | null;
+  kitchen_shifts: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  // Volume-weighted store baseline over the employee's same items/hours.
+  // Not persisted (derivable as avg - residual); custom-range reports use it
+  // directly.
+  kitchen_baseline_prep_seconds: number | null;
+  location_kitchen_avg_prep_seconds: number | null;
+  kitchen_residual_seconds: number | null;
   // Phase 9 — Customer Service Score (composite). Null composite when fewer
   // than 2 of 3 components are present. Per-component scores + effective
   // weights are kept in `customer_service_score_breakdown` so the dashboard
@@ -270,6 +289,109 @@ async function fetchTipMetrics(
     location_tip_rate_pct: toNum(row.location_avg_tip_rate_pct),
     location_tip_per_hour: toNum(row.location_avg_tip_per_hour),
     tip_rate_delta_pp: toNum(row.tip_rate_delta_pp),
+  };
+}
+
+/**
+ * Per-employee Kitchen Speed v2 over a date window, via the
+ * `compute_kitchen_speed` / `compute_location_kitchen_speed` SQL functions
+ * (migration 043). Attribution happens inside the employee function: an item
+ * counts iff the employee was on the clock at that location when the ticket
+ * fired — NO role filter (the CO role vocabulary is a scheduling hierarchy,
+ * not stations) and NO worked_that_day fallback. The metric is the mean
+ * residual vs the store's own per-hour baseline over the same period, so it
+ * measures within-store relative standing (never describe it as
+ * "improvement" — absolute change lives on the location aggregate).
+ *
+ * The residual is stored at ANY shift count (2026-07-29 amendment reversing
+ * the v2 §3 floor). Measured day-to-day residual SD is ~114s, so the SE on
+ * an employee's residual is ~114/sqrt(shifts): 1 shift ≈ ±114s, 4 ≈ ±57s,
+ * 15 ≈ ±29s, 60 ≈ ±15s. The number is real at every n — only its precision
+ * varies; a 1-shift residual truly measures that shift, it just shouldn't be
+ * read as a trait. That's a human-judgment matter: ~15 shifts remains the
+ * best-practice reading floor (advisory only — the PDF gates the rating
+ * badge and adds a "directional only" footnote below it, nothing suppresses
+ * the number itself).
+ */
+async function fetchKitchenMetrics(
+  supabase: SupabaseClient,
+  employeeId: string,
+  locationId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<{
+  kitchen_items: number | null;
+  kitchen_tickets: number | null;
+  kitchen_shifts: number | null;
+  kitchen_avg_prep_seconds: number | null;
+  kitchen_baseline_prep_seconds: number | null;
+  location_kitchen_avg_prep_seconds: number | null;
+  kitchen_residual_seconds: number | null;
+}> {
+  const nullKitchen = {
+    kitchen_items: null,
+    kitchen_tickets: null,
+    kitchen_shifts: null,
+    kitchen_avg_prep_seconds: null,
+    kitchen_baseline_prep_seconds: null,
+    location_kitchen_avg_prep_seconds: null,
+    kitchen_residual_seconds: null,
+  };
+
+  const toNum = (v: number | string | null | undefined): number | null => {
+    if (v === null || v === undefined) return null;
+    const n = typeof v === "string" ? Number(v) : v;
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const { data: empData, error: empError } = await supabase.rpc("compute_kitchen_speed", {
+    p_employee_id: employeeId,
+    p_location_id: locationId,
+    p_start: periodStart,
+    p_end: periodEnd,
+  });
+  if (empError) {
+    console.error("[performance-recompute] kitchen metrics error:", empError.message);
+    return nullKitchen;
+  }
+  const emp = (Array.isArray(empData) ? empData[0] : empData) as
+    | {
+        items: number | string | null;
+        tickets: number | string | null;
+        shifts: number | string | null;
+        avg_prep_seconds: number | string | null;
+        baseline_prep_seconds: number | string | null;
+        residual_seconds: number | string | null;
+      }
+    | null
+    | undefined;
+  const empItems = toNum(emp?.items) ?? 0;
+  const empAvg = toNum(emp?.avg_prep_seconds);
+  // No attributed items = never on the clock at a kitchen-enabled store in
+  // the window (or no kitchen data yet) — the whole block stays null.
+  if (empItems === 0 || empAvg === null) return nullKitchen;
+
+  const { data: locData, error: locError } = await supabase.rpc(
+    "compute_location_kitchen_speed",
+    { p_location_id: locationId, p_start: periodStart, p_end: periodEnd }
+  );
+  if (locError) {
+    console.error("[performance-recompute] location kitchen error:", locError.message);
+    return nullKitchen;
+  }
+  const locRow = (Array.isArray(locData) ? locData[0] : locData) as
+    | { avg_prep_seconds: number | string | null }
+    | null
+    | undefined;
+
+  return {
+    kitchen_items: empItems,
+    kitchen_tickets: toNum(emp?.tickets),
+    kitchen_shifts: toNum(emp?.shifts) ?? 0,
+    kitchen_avg_prep_seconds: empAvg,
+    kitchen_baseline_prep_seconds: toNum(emp?.baseline_prep_seconds),
+    location_kitchen_avg_prep_seconds: toNum(locRow?.avg_prep_seconds),
+    kitchen_residual_seconds: toNum(emp?.residual_seconds),
   };
 }
 
@@ -507,6 +629,15 @@ export async function computeMetricsForRange(
     periodEnd
   );
 
+  // ---- Kitchen Speed (reported metric; not scored) ----
+  const kitchen = await fetchKitchenMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   // ---- Customer Service Score (Phase 9) ----
   const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
   const csBreakdown = computeCustomerServiceScoreBreakdown(
@@ -559,6 +690,7 @@ export async function computeMetricsForRange(
       customer_review_quantity,
       customer_service_rating,
       ...tip,
+      ...kitchen,
       customer_service_score: csBreakdown.composite_score,
       customer_service_score_components_count: csBreakdown.components_count,
       customer_service_score_breakdown: csBreakdown,
@@ -825,6 +957,15 @@ export async function recomputePerformanceForQuarter(
     periodEnd
   );
 
+  // ---- Kitchen Speed (reported metric; not scored) ----
+  const kitchen = await fetchKitchenMetrics(
+    supabase,
+    employeeId,
+    locationId,
+    periodStart,
+    periodEnd
+  );
+
   // ---- Customer Service Score (Phase 9) ----
   const csWeights = opts?.csWeights ?? (await fetchCustomerServiceWeights(supabase));
   const csBreakdown = computeCustomerServiceScoreBreakdown(
@@ -883,6 +1024,15 @@ export async function recomputePerformanceForQuarter(
         location_tip_rate_pct: tip.location_tip_rate_pct,
         location_tip_per_hour: tip.location_tip_per_hour,
         tip_rate_delta_pp: tip.tip_rate_delta_pp,
+        // kitchen_prep_delta_seconds (flat-average delta) is superseded by
+        // kitchen_residual_seconds as of 043 and deliberately not written.
+        // kitchen_baseline_prep_seconds is not persisted (= avg - residual).
+        kitchen_items: kitchen.kitchen_items,
+        kitchen_tickets: kitchen.kitchen_tickets,
+        kitchen_shifts: kitchen.kitchen_shifts,
+        kitchen_avg_prep_seconds: kitchen.kitchen_avg_prep_seconds,
+        location_kitchen_avg_prep_seconds: kitchen.location_kitchen_avg_prep_seconds,
+        kitchen_residual_seconds: kitchen.kitchen_residual_seconds,
         customer_service_score: csBreakdown.composite_score,
         customer_service_score_components_count: csBreakdown.components_count,
         total_impact_score: tisBreakdown.composite_score,
