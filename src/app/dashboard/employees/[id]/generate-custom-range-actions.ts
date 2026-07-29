@@ -156,12 +156,18 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
       location_tip_rate_pct: m.location_tip_rate_pct,
       location_tip_per_hour: m.location_tip_per_hour,
       tip_rate_delta_pp: m.tip_rate_delta_pp,
-      // Kitchen Speed, freshly computed over the custom range by
-      // compute_kitchen_speed (on-shift kitchen-role attribution only).
+      // Kitchen Speed v2, freshly computed over the custom range by
+      // compute_kitchen_speed (on-the-clock attribution, no role filter;
+      // hour-matched residual vs the store's own norm). Ranges shorter than
+      // ~a quarter naturally fall below the 15-shift floor, which nulls the
+      // residual so the PDF renders the block as absent rather than a
+      // small-sample number.
+      kitchen_items: m.kitchen_items,
       kitchen_tickets: m.kitchen_tickets,
+      kitchen_shifts: m.kitchen_shifts,
       kitchen_avg_prep_seconds: m.kitchen_avg_prep_seconds,
-      location_kitchen_avg_prep_seconds: m.location_kitchen_avg_prep_seconds,
-      kitchen_prep_delta_seconds: m.kitchen_prep_delta_seconds,
+      kitchen_baseline_prep_seconds: m.kitchen_baseline_prep_seconds,
+      kitchen_residual_seconds: m.kitchen_residual_seconds,
       customer_service_score: m.customer_service_score,
       customer_service_score_components_count: m.customer_service_score_components_count,
     },
