@@ -170,10 +170,12 @@ export interface RangeMetrics {
   // Kitchen Speed v2 (043; reported metric, NOT a scored component).
   // Attribution is on-the-clock overlap only — no role filter — so this is a
   // shared shift outcome, not an individual skill. residual = the employee's
-  // avg prep minus the store's same-hour baseline (negative = faster);
-  // nulled below KITCHEN_MIN_SHIFTS because the day-to-day residual SD
-  // (~114s) makes smaller samples noise. All null for kitchen-disabled
-  // stores (NOLA) and windows before each store's Toast go-live.
+  // avg prep minus the store's same-hour baseline (negative = faster).
+  // Always stored whenever attributed items exist, at ANY shift count
+  // (2026-07-29 amendment): the number is real at every n — only its
+  // precision varies — and thin-sample judgment belongs to the human reading
+  // it, not a gate in the code. All null only when NO data exists: never on
+  // the clock at a kitchen-enabled store (NOLA) or pre-Toast-go-live.
   kitchen_items: number | null;
   kitchen_tickets: number | null;
   kitchen_shifts: number | null;
@@ -291,15 +293,6 @@ async function fetchTipMetrics(
 }
 
 /**
- * Below this many distinct worked days with attributed items, the residual is
- * suppressed (stored as null): the measured day-to-day residual SD is ~114s,
- * so resolving even a 60s effect takes ~15 shifts. Mirrored by
- * KITCHEN_MIN_SHIFTS in pdf/EmployeeReport.tsx, which hides the whole block
- * below the floor.
- */
-const KITCHEN_MIN_SHIFTS = 15;
-
-/**
  * Per-employee Kitchen Speed v2 over a date window, via the
  * `compute_kitchen_speed` / `compute_location_kitchen_speed` SQL functions
  * (migration 043). Attribution happens inside the employee function: an item
@@ -309,6 +302,16 @@ const KITCHEN_MIN_SHIFTS = 15;
  * residual vs the store's own per-hour baseline over the same period, so it
  * measures within-store relative standing (never describe it as
  * "improvement" — absolute change lives on the location aggregate).
+ *
+ * The residual is stored at ANY shift count (2026-07-29 amendment reversing
+ * the v2 §3 floor). Measured day-to-day residual SD is ~114s, so the SE on
+ * an employee's residual is ~114/sqrt(shifts): 1 shift ≈ ±114s, 4 ≈ ±57s,
+ * 15 ≈ ±29s, 60 ≈ ±15s. The number is real at every n — only its precision
+ * varies; a 1-shift residual truly measures that shift, it just shouldn't be
+ * read as a trait. That's a human-judgment matter: ~15 shifts remains the
+ * best-practice reading floor (advisory only — the PDF gates the rating
+ * badge and adds a "directional only" footnote below it, nothing suppresses
+ * the number itself).
  */
 async function fetchKitchenMetrics(
   supabase: SupabaseClient,
@@ -381,19 +384,14 @@ async function fetchKitchenMetrics(
     | null
     | undefined;
 
-  const shifts = toNum(emp?.shifts) ?? 0;
-  // Below the shift floor the counts and raw average still store (they're
-  // facts), but the norm comparison is suppressed — it would be noise.
-  const aboveFloor = shifts >= KITCHEN_MIN_SHIFTS;
-
   return {
     kitchen_items: empItems,
     kitchen_tickets: toNum(emp?.tickets),
-    kitchen_shifts: shifts,
+    kitchen_shifts: toNum(emp?.shifts) ?? 0,
     kitchen_avg_prep_seconds: empAvg,
-    kitchen_baseline_prep_seconds: aboveFloor ? toNum(emp?.baseline_prep_seconds) : null,
+    kitchen_baseline_prep_seconds: toNum(emp?.baseline_prep_seconds),
     location_kitchen_avg_prep_seconds: toNum(locRow?.avg_prep_seconds),
-    kitchen_residual_seconds: aboveFloor ? toNum(emp?.residual_seconds) : null,
+    kitchen_residual_seconds: toNum(emp?.residual_seconds),
   };
 }
 

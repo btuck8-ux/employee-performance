@@ -45,7 +45,14 @@ import {
 // the hour-matched residual vs the store's own norm (not a flat store
 // average), and the block leads with "vs norm" — the only hour-fair number.
 // Suppressed below 15 attributed shifts (day-to-day residual SD ~114s).
-export const TEMPLATE_VERSION = "1.5.1";
+// 1.5.2 removes the 15-shift floor as a GATE and retains it as ADVISORY:
+// the block always renders when kitchen data exists, at any shift count —
+// the number is real at every n (SE ~114/sqrt(shifts)), only its precision
+// varies, and thin-sample judgment belongs to the human reader. Below 15
+// shifts the rating badge is withheld (an automated verdict would pass
+// exactly the judgment humans are supposed to withhold) and the footnote
+// flags the figures as directional only.
+export const TEMPLATE_VERSION = "1.5.2";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -224,10 +231,10 @@ export interface MetricSnapshot {
   // in that case.
   customer_service_score: number | null;
   customer_service_score_components_count: number | null;
-  // 1.5.1: Kitchen Speed v2 (043). All null when the employee had no
-  // attributed items in the window (never on the clock at a kitchen-enabled
-  // store, kitchen-disabled store, or pre-Toast-go-live period). The
-  // residual/baseline pair is additionally null below the 15-shift floor.
+  // 1.5.1/1.5.2: Kitchen Speed v2 (043). All null only when the employee had
+  // no attributed items in the window (never on the clock at a
+  // kitchen-enabled store, kitchen-disabled store, or pre-Toast-go-live
+  // period) — present at any shift count otherwise (1.5.2).
   // baseline = the store's volume-weighted same-hour norm (avg - residual).
   kitchen_items: number | null;
   kitchen_tickets: number | null;
@@ -320,11 +327,13 @@ const TIP_DELTA_NEUTRAL_PP = 0.25;
 const KITCHEN_DELTA_NEUTRAL_SECONDS = 15;
 
 /**
- * Below this many attributed shifts the residual is noise (day-to-day SD
- * ~114s; resolving a 60s effect takes ~15 shifts) and the whole block is
- * suppressed — a small-sample number starts an argument the data can't win.
- * Mirrors KITCHEN_MIN_SHIFTS in performance-recompute.ts, which nulls the
- * stored residual below the same floor.
+ * ADVISORY reading floor, not a gate (1.5.2 — reversing the 1.5.1 gate by
+ * Tucker's 2026-07-29 decision). Day-to-day residual SD is ~114s, so the SE
+ * on an employee's residual is ~114/sqrt(shifts): 1 shift ≈ ±114s,
+ * 4 ≈ ±57s, 15 ≈ ±29s. The number renders at any n — below this floor the
+ * automated Exceeds/Meets/Below badge is withheld and the footnote marks
+ * the figures directional only; discounting a thin sample is the reader's
+ * job, not the platform's.
  */
 const KITCHEN_MIN_SHIFTS = 15;
 
@@ -333,8 +342,7 @@ const hasTipData = (s: MetricSnapshot) =>
 
 const hasKitchenData = (s: MetricSnapshot) =>
   s.kitchen_items !== null &&
-  s.kitchen_shifts !== null &&
-  s.kitchen_shifts >= KITCHEN_MIN_SHIFTS &&
+  s.kitchen_items > 0 &&
   s.kitchen_avg_prep_seconds !== null &&
   s.kitchen_residual_seconds !== null;
 
@@ -376,22 +384,27 @@ const METRIC_DEFS: MetricDef[] = [
       return "Meets Expectations";
     },
   },
-  // ---- 1.5.1: Kitchen Speed block, suppressed below the shift floor ----
+  // ---- 1.5.1/1.5.2: Kitchen Speed block, rendered at any shift count ----
   // "Shifts you worked" framing: two people working identical shifts get
   // identical numbers — this reflects how the kitchen ran while they were
   // on, not their individual output. Reported metric only — deliberately
   // NOT a CS/TIS component. Leads with "vs norm", the only hour-fair
   // number; the raw average and the hour-matched store norm follow as
-  // context. Scoring window is 10:00–19:59 local tickets only.
+  // context, and the Tickets / Shifts row is how a reader judges whether
+  // to trust the number. Scoring window is 10:00–19:59 local tickets only.
   {
     key: "kitchen_residual_seconds",
     name: "Kitchen — vs Store Norm, Same Hours",
     kind: "delta_duration",
     showIf: hasKitchenData,
     // Negative residual = the kitchen ran faster than the store's own
-    // same-hour norm on their shifts = good.
-    classifyValue: (value) => {
+    // same-hour norm on their shifts = good. The number always renders;
+    // the badge is withheld below the advisory floor — an automated
+    // verdict on a 1–3 shift sample would pass exactly the judgment
+    // humans are supposed to withhold (1.5.2).
+    classifyValue: (value, s) => {
       if (value === null) return null;
+      if (s.kitchen_shifts === null || s.kitchen_shifts < KITCHEN_MIN_SHIFTS) return null;
       if (value < -KITCHEN_DELTA_NEUTRAL_SECONDS) return "Exceeds Expectations";
       if (value > KITCHEN_DELTA_NEUTRAL_SECONDS) return "Below Expectations";
       return "Meets Expectations";
@@ -800,6 +813,9 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
             employee worked (tickets fired 10am–8pm, vs this store's own
             same-hour norm for the period) — a shared shift outcome, not a
             measure of individual output.
+            {m.kitchen_shifts !== null && m.kitchen_shifts < KITCHEN_MIN_SHIFTS
+              ? " Figures based on fewer than 15 shifts are directional only."
+              : ""}
           </Text>
         )}
 
