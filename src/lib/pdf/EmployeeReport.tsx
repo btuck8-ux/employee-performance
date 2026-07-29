@@ -810,7 +810,7 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
         {hasKitchenData(m) && (
           <Text style={[styles.currencyLine, { marginTop: 4 }]}>
             Kitchen Speed reflects how the kitchen ran during shifts this
-            employee worked (tickets fired 10am–8pm, vs this store's own
+            employee worked (tickets fired 10am–8pm, vs this store&apos;s own
             same-hour norm for the period) — a shared shift outcome, not a
             measure of individual output.
             {m.kitchen_shifts !== null && m.kitchen_shifts < KITCHEN_MIN_SHIFTS
