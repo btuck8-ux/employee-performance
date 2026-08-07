@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 export const maxDuration = 300;
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImportErrorBanner, ImportSummaryBanner } from "@/components/import-summary-banner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/components/ui/submit-button";
@@ -237,34 +238,24 @@ export default async function LocationDetailPage({
         </div>
       </div>
 
-      {importError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Import failed:</strong> {importError}
-        </div>
-      )}
+      <ImportErrorBanner label="Import failed" error={importError} />
 
-      {showImportSummary && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Import complete.</strong>{" "}
-          {inserted > 0 && <>Added {inserted} new employee{inserted === 1 ? "" : "s"}. </>}
-          {updated > 0 && <>Updated {updated} existing employee{updated === 1 ? "" : "s"}. </>}
-          {inactiveSkipped > 0 && (
-            <>Skipped {inactiveSkipped} inactive row{inactiveSkipped === 1 ? "" : "s"}. </>
-          )}
-          {skippedOtherLocation > 0 && (
-            <>Skipped {skippedOtherLocation} row{skippedOtherLocation === 1 ? "" : "s"} tagged for other locations. </>
-          )}
-          {failed > 0 && (
-            <span className="text-red-700">
-              {failed} row{failed === 1 ? "" : "s"} failed
-              {failureDetail ? `: ${failureDetail}` : "."}
-            </span>
-          )}
-          {warnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {warnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner show={showImportSummary} title="Import complete." warnings={warnings}>
+        {inserted > 0 && <>Added {inserted} new employee{inserted === 1 ? "" : "s"}. </>}
+        {updated > 0 && <>Updated {updated} existing employee{updated === 1 ? "" : "s"}. </>}
+        {inactiveSkipped > 0 && (
+          <>Skipped {inactiveSkipped} inactive row{inactiveSkipped === 1 ? "" : "s"}. </>
+        )}
+        {skippedOtherLocation > 0 && (
+          <>Skipped {skippedOtherLocation} row{skippedOtherLocation === 1 ? "" : "s"} tagged for other locations. </>
+        )}
+        {failed > 0 && (
+          <span className="text-red-700">
+            {failed} row{failed === 1 ? "" : "s"} failed
+            {failureDetail ? `: ${failureDetail}` : "."}
+          </span>
+        )}
+      </ImportSummaryBanner>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
@@ -334,50 +325,42 @@ export default async function LocationDetailPage({
         </Card>
       </div>
 
-      {timeError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Time data import failed:</strong> {timeError}
-        </div>
-      )}
+      <ImportErrorBanner label="Time data import failed" error={timeError} />
 
-      {showTimeSummary && !timeError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Time data imported.</strong>{" "}
-          Scheduled: {schedIn} new, {schedUp} updated · Worked: {workIn} new, {workUp} updated.
-          {" "}
-          Recomputed performance for {recomputed} {recomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-          {unknownEmps && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped (no matching active employee): {unknownEmps}
-            </p>
-          )}
-          {inactiveTimeEmps && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped (employee inactive): {inactiveTimeEmps}
-            </p>
-          )}
-          {timeSkippedOtherLocation > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {timeSkippedOtherLocation} row{timeSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
-            </p>
-          )}
-          {timeDerivedCreated > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Auto-created {timeDerivedCreated} employee{timeDerivedCreated === 1 ? "" : "s"} from time data
-              {timeDerivedFailed > 0 && (
-                <> ({timeDerivedFailed} failed)</>
-              )}
-              .
-            </p>
-          )}
-          {timeFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {timeFailures}</p>
-          )}
-          {timeWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {timeWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showTimeSummary && !timeError}
+        title="Time data imported."
+        failures={timeFailures}
+        warnings={timeWarnings}
+      >
+        Scheduled: {schedIn} new, {schedUp} updated · Worked: {workIn} new, {workUp} updated.
+        {" "}
+        Recomputed performance for {recomputed} {recomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+        {unknownEmps && (
+          <p className="mt-1 text-xs text-emerald-800/80">
+            Skipped (no matching active employee): {unknownEmps}
+          </p>
+        )}
+        {inactiveTimeEmps && (
+          <p className="mt-1 text-xs text-emerald-800/80">
+            Skipped (employee inactive): {inactiveTimeEmps}
+          </p>
+        )}
+        {timeSkippedOtherLocation > 0 && (
+          <p className="mt-1 text-xs text-emerald-800/80">
+            Skipped {timeSkippedOtherLocation} row{timeSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
+          </p>
+        )}
+        {timeDerivedCreated > 0 && (
+          <p className="mt-1 text-xs text-emerald-800/80">
+            Auto-created {timeDerivedCreated} employee{timeDerivedCreated === 1 ? "" : "s"} from time data
+            {timeDerivedFailed > 0 && (
+              <> ({timeDerivedFailed} failed)</>
+            )}
+            .
+          </p>
+        )}
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>
@@ -440,32 +423,24 @@ export default async function LocationDetailPage({
         </CardContent>
       </Card>
 
-      {tattleError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Tattle import failed:</strong> {tattleError}
-        </div>
-      )}
+      <ImportErrorBanner label="Tattle import failed" error={tattleError} />
 
-      {showTattleSummary && !tattleError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Tattle data imported.</strong>{" "}
-          Surveys: {tattleIn} new, {tattleUp} updated · Responses upserted: {tattleResp} ·
-          Attributions written: {tattleAtt} ({tattleOnshift} on shift, {tattleWorkday} worked-that-day, {tattleUnatt} unattributed).
-          {" "}
-          Recomputed performance for {tattleRecomputed} {tattleRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-          {tattleSkippedOtherLocation > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {tattleSkippedOtherLocation} survey{tattleSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
-            </p>
-          )}
-          {tattleFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {tattleFailures}</p>
-          )}
-          {tattleWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {tattleWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showTattleSummary && !tattleError}
+        title="Tattle data imported."
+        skippedNote={
+          tattleSkippedOtherLocation > 0
+            ? `Skipped ${tattleSkippedOtherLocation} survey${tattleSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.`
+            : null
+        }
+        failures={tattleFailures}
+        warnings={tattleWarnings}
+      >
+        Surveys: {tattleIn} new, {tattleUp} updated · Responses upserted: {tattleResp} ·
+        Attributions written: {tattleAtt} ({tattleOnshift} on shift, {tattleWorkday} worked-that-day, {tattleUnatt} unattributed).
+        {" "}
+        Recomputed performance for {tattleRecomputed} {tattleRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>
@@ -501,31 +476,23 @@ export default async function LocationDetailPage({
         </CardContent>
       </Card>
 
-      {reviewError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Review import failed:</strong> {reviewError}
-        </div>
-      )}
+      <ImportErrorBanner label="Review import failed" error={reviewError} />
 
-      {showReviewSummary && !reviewError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Customer reviews imported.</strong>{" "}
-          Reviews: {reviewIn} new, {reviewUp} updated · Attributions written: {reviewAtt} ({reviewOnshift} on shift, {reviewWorkday} worked-that-day, {reviewUnatt} unattributed).
-          {" "}
-          Recomputed performance for {reviewRecomputed} {reviewRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-          {reviewSkippedOtherLocation > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {reviewSkippedOtherLocation} review{reviewSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
-            </p>
-          )}
-          {reviewFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {reviewFailures}</p>
-          )}
-          {reviewWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {reviewWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showReviewSummary && !reviewError}
+        title="Customer reviews imported."
+        skippedNote={
+          reviewSkippedOtherLocation > 0
+            ? `Skipped ${reviewSkippedOtherLocation} review${reviewSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.`
+            : null
+        }
+        failures={reviewFailures}
+        warnings={reviewWarnings}
+      >
+        Reviews: {reviewIn} new, {reviewUp} updated · Attributions written: {reviewAtt} ({reviewOnshift} on shift, {reviewWorkday} worked-that-day, {reviewUnatt} unattributed).
+        {" "}
+        Recomputed performance for {reviewRecomputed} {reviewRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>
@@ -560,44 +527,36 @@ export default async function LocationDetailPage({
         </CardContent>
       </Card>
 
-      {surveyError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Survey import failed:</strong> {surveyError}
-        </div>
-      )}
+      <ImportErrorBanner label="Survey import failed" error={surveyError} />
 
-      {showSurveySummary && !surveyError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Survey data imported.</strong>{" "}
-          Surveys: {surveyIn} new, {surveyUp} updated · Assignments: {assnIn} new, {assnUp} updated · Matched completions: {surveyMatches} · Recomputed performance for {surveyRecomputed} {surveyRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-          {matchBreakdown && (
-            <p className="mt-1 text-xs text-emerald-800/80 font-mono">
-              Match confidence: {matchBreakdown}
-            </p>
-          )}
-          {surveyInactiveSkipped > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {surveyInactiveSkipped} time-entry{surveyInactiveSkipped === 1 ? "" : " entries"} from currently-inactive employees (excluded from the engagement pool).
-            </p>
-          )}
-          {surveyUnmatched && (
-            <p className="mt-1 text-xs text-amber-800">
-              Unmatched typed names (no candidate close enough): {surveyUnmatched}
-            </p>
-          )}
-          {surveyAmbiguous && (
-            <p className="mt-1 text-xs text-amber-800">
-              Ambiguous matches (skipped — please disambiguate): {surveyAmbiguous}
-            </p>
-          )}
-          {surveyFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {surveyFailures}</p>
-          )}
-          {surveyWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {surveyWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showSurveySummary && !surveyError}
+        title="Survey data imported."
+        failures={surveyFailures}
+        warnings={surveyWarnings}
+      >
+        Surveys: {surveyIn} new, {surveyUp} updated · Assignments: {assnIn} new, {assnUp} updated · Matched completions: {surveyMatches} · Recomputed performance for {surveyRecomputed} {surveyRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+        {matchBreakdown && (
+          <p className="mt-1 text-xs text-emerald-800/80 font-mono">
+            Match confidence: {matchBreakdown}
+          </p>
+        )}
+        {surveyInactiveSkipped > 0 && (
+          <p className="mt-1 text-xs text-emerald-800/80">
+            Skipped {surveyInactiveSkipped} time-entry{surveyInactiveSkipped === 1 ? "" : " entries"} from currently-inactive employees (excluded from the engagement pool).
+          </p>
+        )}
+        {surveyUnmatched && (
+          <p className="mt-1 text-xs text-amber-800">
+            Unmatched typed names (no candidate close enough): {surveyUnmatched}
+          </p>
+        )}
+        {surveyAmbiguous && (
+          <p className="mt-1 text-xs text-amber-800">
+            Ambiguous matches (skipped — please disambiguate): {surveyAmbiguous}
+          </p>
+        )}
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>
@@ -632,31 +591,23 @@ export default async function LocationDetailPage({
         </CardContent>
       </Card>
 
-      {taskError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>Tasks import failed:</strong> {taskError}
-        </div>
-      )}
+      <ImportErrorBanner label="Tasks import failed" error={taskError} />
 
-      {showTaskSummary && !taskError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Tasks imported.</strong>{" "}
-          Tasks: {taskIn} new, {taskUp} updated ({taskDone} complete, {taskUndone} incomplete) ·
-          Accountability rows: {taskAcct} ·
-          Recomputed performance for {taskRecomputed} {taskRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-          {taskSkippedOtherLocation > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {taskSkippedOtherLocation} task row{taskSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
-            </p>
-          )}
-          {taskFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {taskFailures}</p>
-          )}
-          {taskWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {taskWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showTaskSummary && !taskError}
+        title="Tasks imported."
+        skippedNote={
+          taskSkippedOtherLocation > 0
+            ? `Skipped ${taskSkippedOtherLocation} task row${taskSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.`
+            : null
+        }
+        failures={taskFailures}
+        warnings={taskWarnings}
+      >
+        Tasks: {taskIn} new, {taskUp} updated ({taskDone} complete, {taskUndone} incomplete) ·
+        Accountability rows: {taskAcct} ·
+        Recomputed performance for {taskRecomputed} {taskRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>
@@ -692,34 +643,26 @@ export default async function LocationDetailPage({
         </CardContent>
       </Card>
 
-      {posError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <strong>POS sales import failed:</strong> {posError}
-        </div>
-      )}
+      <ImportErrorBanner label="POS sales import failed" error={posError} />
 
-      {showPosSummary && !posError && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>POS sales imported.</strong>{" "}
-          Receipts: {posIn} new, {posUp} updated · Split-tender: {posSplit} · Refunds: {posRefunds} ·
-          Recomputed performance for {posRecomputed} {posRecomputed === 1 ? "employee-quarter" : "employee-quarters"}
-          {posQuarters > 0 && ` across ${posQuarters} ${posQuarters === 1 ? "quarter" : "quarters"}`}.
-          {posTeams > 0 && (
-            <> Refreshed {posTeams} co-presence team{posTeams === 1 ? "" : "s"} for the Teams view.</>
-          )}
-          {posSkippedOtherLocation > 0 && (
-            <p className="mt-1 text-xs text-emerald-800/80">
-              Skipped {posSkippedOtherLocation} row{posSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.
-            </p>
-          )}
-          {posFailures && (
-            <p className="mt-1 text-xs text-red-700">Failures: {posFailures}</p>
-          )}
-          {posWarnings && (
-            <p className="mt-1 text-xs text-emerald-800/80">Warnings: {posWarnings}</p>
-          )}
-        </div>
-      )}
+      <ImportSummaryBanner
+        show={showPosSummary && !posError}
+        title="POS sales imported."
+        skippedNote={
+          posSkippedOtherLocation > 0
+            ? `Skipped ${posSkippedOtherLocation} row${posSkippedOtherLocation === 1 ? "" : "s"} tagged for other locations.`
+            : null
+        }
+        failures={posFailures}
+        warnings={posWarnings}
+      >
+        Receipts: {posIn} new, {posUp} updated · Split-tender: {posSplit} · Refunds: {posRefunds} ·
+        Recomputed performance for {posRecomputed} {posRecomputed === 1 ? "employee-quarter" : "employee-quarters"}
+        {posQuarters > 0 && ` across ${posQuarters} ${posQuarters === 1 ? "quarter" : "quarters"}`}.
+        {posTeams > 0 && (
+          <> Refreshed {posTeams} co-presence team{posTeams === 1 ? "" : "s"} for the Teams view.</>
+        )}
+      </ImportSummaryBanner>
 
       <Card>
         <CardHeader>

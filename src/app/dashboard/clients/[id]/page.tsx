@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImportSummaryBanner } from "@/components/import-summary-banner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -227,23 +228,23 @@ export default async function ClientDetailPage({
               <strong>Employees bulk upload failed:</strong> {bulkError}
             </div>
           )}
-          {showBulkEmployees && !bulkError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Employees imported across {bulkLocations} location{bulkLocations === 1 ? "" : "s"}.</strong>{" "}
-              {bulkInserted > 0 && <>Added {bulkInserted}. </>}
-              {bulkUpdated > 0 && <>Updated {bulkUpdated}. </>}
-              {bulkInactiveSkipped > 0 && <>Skipped {bulkInactiveSkipped} inactive. </>}
-              {bulkUnmatched > 0 && <>Skipped {bulkUnmatched} for other clients. </>}
-              {bulkFailed > 0 && (
-                <span className="text-red-700">{bulkFailed} failed.</span>
-              )}
-              {bulkBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">
-                  Breakdown: {bulkBreakdown}
-                </p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkEmployees && !bulkError}
+            title={`Employees imported across ${bulkLocations} location${bulkLocations === 1 ? "" : "s"}.`}
+          >
+            {bulkInserted > 0 && <>Added {bulkInserted}. </>}
+            {bulkUpdated > 0 && <>Updated {bulkUpdated}. </>}
+            {bulkInactiveSkipped > 0 && <>Skipped {bulkInactiveSkipped} inactive. </>}
+            {bulkUnmatched > 0 && <>Skipped {bulkUnmatched} for other clients. </>}
+            {bulkFailed > 0 && (
+              <span className="text-red-700">{bulkFailed} failed.</span>
+            )}
+            {bulkBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">
+                Breakdown: {bulkBreakdown}
+              </p>
+            )}
+          </ImportSummaryBanner>
 
           <Card>
             <CardHeader>
@@ -284,33 +285,33 @@ export default async function ClientDetailPage({
               <strong>Time bulk upload failed:</strong> {bulkTimeError}
             </div>
           )}
-          {showBulkTime && !bulkTimeError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Time data imported across {bulkTimeLocations} location{bulkTimeLocations === 1 ? "" : "s"}.</strong>{" "}
-              Scheduled: {bulkSchedIn} new, {bulkSchedUp} updated · Worked: {bulkWorkIn} new, {bulkWorkUp} updated.
-              {" "}
-              Recomputed performance for {bulkRecomputed} {bulkRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkDerivedCreated > 0 && (
-                <p className="mt-1 text-xs text-emerald-800/80">
-                  Auto-created {bulkDerivedCreated} employee{bulkDerivedCreated === 1 ? "" : "s"} from time data
-                  {bulkDerivedFailed > 0 && (
-                    <> ({bulkDerivedFailed} failed)</>
-                  )}
-                  .
-                </p>
-              )}
-              {bulkUnknown && (
-                <p className="mt-1 text-xs text-amber-800">
-                  Unknown employees (not in any of this client&apos;s rosters): {bulkUnknown}
-                </p>
-              )}
-              {bulkTimeBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">
-                  Breakdown: {bulkTimeBreakdown}
-                </p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkTime && !bulkTimeError}
+            title={`Time data imported across ${bulkTimeLocations} location${bulkTimeLocations === 1 ? "" : "s"}.`}
+          >
+            Scheduled: {bulkSchedIn} new, {bulkSchedUp} updated · Worked: {bulkWorkIn} new, {bulkWorkUp} updated.
+            {" "}
+            Recomputed performance for {bulkRecomputed} {bulkRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkDerivedCreated > 0 && (
+              <p className="mt-1 text-xs text-emerald-800/80">
+                Auto-created {bulkDerivedCreated} employee{bulkDerivedCreated === 1 ? "" : "s"} from time data
+                {bulkDerivedFailed > 0 && (
+                  <> ({bulkDerivedFailed} failed)</>
+                )}
+                .
+              </p>
+            )}
+            {bulkUnknown && (
+              <p className="mt-1 text-xs text-amber-800">
+                Unknown employees (not in any of this client&apos;s rosters): {bulkUnknown}
+              </p>
+            )}
+            {bulkTimeBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">
+                Breakdown: {bulkTimeBreakdown}
+              </p>
+            )}
+          </ImportSummaryBanner>
 
           <Card>
             <CardHeader>
@@ -374,27 +375,25 @@ export default async function ClientDetailPage({
               <strong>Tattle bulk upload failed:</strong> {bulkTattleError}
             </div>
           )}
-          {showBulkTattle && !bulkTattleError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Tattle data imported across {bulkTattleLocations} location{bulkTattleLocations === 1 ? "" : "s"}.</strong>{" "}
-              Surveys: {bulkTattleIn} new, {bulkTattleUp} updated · Attributions: {bulkTattleAtt} ({bulkTattleOnshift} on shift, {bulkTattleWorkday} worked-that-day, {bulkTattleUnatt} unattributed).
-              {" "}
-              Recomputed performance for {bulkTattleRecomputed} {bulkTattleRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkTattleUnmatched > 0 && (
-                <p className="mt-1 text-xs text-amber-800">
-                  Skipped {bulkTattleUnmatched} survey{bulkTattleUnmatched === 1 ? "" : "s"} tagged for other clients.
-                </p>
-              )}
-              {bulkTattleBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">
-                  Breakdown: {bulkTattleBreakdown}
-                </p>
-              )}
-              {bulkTattleFailures && (
-                <p className="mt-1 text-xs text-red-700">Failures: {bulkTattleFailures}</p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkTattle && !bulkTattleError}
+            title={`Tattle data imported across ${bulkTattleLocations} location${bulkTattleLocations === 1 ? "" : "s"}.`}
+            failures={bulkTattleFailures}
+          >
+            Surveys: {bulkTattleIn} new, {bulkTattleUp} updated · Attributions: {bulkTattleAtt} ({bulkTattleOnshift} on shift, {bulkTattleWorkday} worked-that-day, {bulkTattleUnatt} unattributed).
+            {" "}
+            Recomputed performance for {bulkTattleRecomputed} {bulkTattleRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkTattleUnmatched > 0 && (
+              <p className="mt-1 text-xs text-amber-800">
+                Skipped {bulkTattleUnmatched} survey{bulkTattleUnmatched === 1 ? "" : "s"} tagged for other clients.
+              </p>
+            )}
+            {bulkTattleBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">
+                Breakdown: {bulkTattleBreakdown}
+              </p>
+            )}
+          </ImportSummaryBanner>
 
           <Card>
             <CardHeader>
@@ -438,15 +437,15 @@ export default async function ClientDetailPage({
               <strong>Reviews bulk upload failed:</strong> {bulkReviewError}
             </div>
           )}
-          {showBulkReview && !bulkReviewError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Customer reviews imported across {bulkReviewLocations} location{bulkReviewLocations === 1 ? "" : "s"}.</strong>{" "}
-              Reviews: {bulkReviewIn} new, {bulkReviewUp} updated · Attributions: {bulkReviewAtt}. Recomputed performance for {bulkReviewRecomputed} {bulkReviewRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkReviewBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkReviewBreakdown}</p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkReview && !bulkReviewError}
+            title={`Customer reviews imported across ${bulkReviewLocations} location${bulkReviewLocations === 1 ? "" : "s"}.`}
+          >
+            Reviews: {bulkReviewIn} new, {bulkReviewUp} updated · Attributions: {bulkReviewAtt}. Recomputed performance for {bulkReviewRecomputed} {bulkReviewRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkReviewBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkReviewBreakdown}</p>
+            )}
+          </ImportSummaryBanner>
           <Card>
             <CardHeader>
               <CardTitle>Bulk upload — customer reviews</CardTitle>
@@ -488,15 +487,15 @@ export default async function ClientDetailPage({
               <strong>Survey bulk upload failed:</strong> {bulkSurveyError}
             </div>
           )}
-          {showBulkSurvey && !bulkSurveyError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Survey data imported across {bulkSurveyLocations} location{bulkSurveyLocations === 1 ? "" : "s"}.</strong>{" "}
-              Surveys: {bulkSurveyIn} new, {bulkSurveyUp} updated · Assignments: {bulkAssnIn} new, {bulkAssnUp} updated · Matched completions: {bulkSurveyMatches}. Recomputed performance for {bulkSurveyRecomputed} {bulkSurveyRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkSurveyBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkSurveyBreakdown}</p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkSurvey && !bulkSurveyError}
+            title={`Survey data imported across ${bulkSurveyLocations} location${bulkSurveyLocations === 1 ? "" : "s"}.`}
+          >
+            Surveys: {bulkSurveyIn} new, {bulkSurveyUp} updated · Assignments: {bulkAssnIn} new, {bulkAssnUp} updated · Matched completions: {bulkSurveyMatches}. Recomputed performance for {bulkSurveyRecomputed} {bulkSurveyRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkSurveyBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkSurveyBreakdown}</p>
+            )}
+          </ImportSummaryBanner>
           <Card>
             <CardHeader>
               <CardTitle>Bulk upload — survey responses</CardTitle>
@@ -538,20 +537,20 @@ export default async function ClientDetailPage({
               <strong>Task bulk upload failed:</strong> {bulkTaskError}
             </div>
           )}
-          {showBulkTask && !bulkTaskError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>Task data imported across {bulkTaskLocations} location{bulkTaskLocations === 1 ? "" : "s"}.</strong>{" "}
-              Tasks: {bulkTaskIn} new, {bulkTaskUp} updated · Accountability rows: {bulkTaskAcct} · Owner rows: {bulkTaskOwners}. Recomputed performance for {bulkTaskRecomputed} {bulkTaskRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkTaskUnmatched > 0 && (
-                <p className="mt-1 text-xs text-amber-800">
-                  Skipped {bulkTaskUnmatched} task row{bulkTaskUnmatched === 1 ? "" : "s"} tagged for other clients.
-                </p>
-              )}
-              {bulkTaskBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkTaskBreakdown}</p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkTask && !bulkTaskError}
+            title={`Task data imported across ${bulkTaskLocations} location${bulkTaskLocations === 1 ? "" : "s"}.`}
+          >
+            Tasks: {bulkTaskIn} new, {bulkTaskUp} updated · Accountability rows: {bulkTaskAcct} · Owner rows: {bulkTaskOwners}. Recomputed performance for {bulkTaskRecomputed} {bulkTaskRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkTaskUnmatched > 0 && (
+              <p className="mt-1 text-xs text-amber-800">
+                Skipped {bulkTaskUnmatched} task row{bulkTaskUnmatched === 1 ? "" : "s"} tagged for other clients.
+              </p>
+            )}
+            {bulkTaskBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkTaskBreakdown}</p>
+            )}
+          </ImportSummaryBanner>
           <Card>
             <CardHeader>
               <CardTitle>Bulk upload — tasks (7tasks)</CardTitle>
@@ -595,20 +594,20 @@ export default async function ClientDetailPage({
               <strong>POS bulk upload failed:</strong> {bulkPosError}
             </div>
           )}
-          {showBulkPos && !bulkPosError && (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <strong>POS sales imported across {bulkPosLocations} location{bulkPosLocations === 1 ? "" : "s"}.</strong>{" "}
-              Receipts: {bulkPosIn} new, {bulkPosUp} updated · Split-tender: {bulkPosSplit} · Refunds: {bulkPosRefunds}. Recomputed performance for {bulkPosRecomputed} {bulkPosRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
-              {bulkPosUnmatched > 0 && (
-                <p className="mt-1 text-xs text-amber-800">
-                  Skipped {bulkPosUnmatched} row{bulkPosUnmatched === 1 ? "" : "s"} tagged for other clients.
-                </p>
-              )}
-              {bulkPosBreakdown && (
-                <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkPosBreakdown}</p>
-              )}
-            </div>
-          )}
+          <ImportSummaryBanner
+            show={showBulkPos && !bulkPosError}
+            title={`POS sales imported across ${bulkPosLocations} location${bulkPosLocations === 1 ? "" : "s"}.`}
+          >
+            Receipts: {bulkPosIn} new, {bulkPosUp} updated · Split-tender: {bulkPosSplit} · Refunds: {bulkPosRefunds}. Recomputed performance for {bulkPosRecomputed} {bulkPosRecomputed === 1 ? "employee-quarter" : "employee-quarters"}.
+            {bulkPosUnmatched > 0 && (
+              <p className="mt-1 text-xs text-amber-800">
+                Skipped {bulkPosUnmatched} row{bulkPosUnmatched === 1 ? "" : "s"} tagged for other clients.
+              </p>
+            )}
+            {bulkPosBreakdown && (
+              <p className="mt-1 text-xs text-emerald-800/80">Breakdown: {bulkPosBreakdown}</p>
+            )}
+          </ImportSummaryBanner>
           <Card>
             <CardHeader>
               <CardTitle>Bulk upload — POS sales</CardTitle>
