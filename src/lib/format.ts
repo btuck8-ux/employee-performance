@@ -39,33 +39,61 @@ function ordinalSuffix(n: number): string {
   return s[(v - 20) % 10] || s[v] || s[0];
 }
 
-function toNum(value: number | string | null | undefined): number | null {
+/** Display-oriented parse: null/undefined/""/NaN -> null (formatters below). */
+function displayNum(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined || value === "") return null;
   const n = typeof value === "string" ? Number(value) : value;
   return Number.isNaN(n) ? null : n;
 }
 
+/**
+ * Shared DB-numeric coercions (numeric columns arrive as strings from
+ * PostgREST). Three deliberate variants — pick the one matching the call
+ * site's null semantics; they are NOT interchangeable:
+ */
+
+/** Aggregation default: null/undefined -> 0, NaN -> 0. */
+export function toNum(v: number | string | null | undefined): number {
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === "string" ? Number(v) : v;
+  return Number.isNaN(n) ? 0 : n;
+}
+
+/** Null-propagating: null/undefined -> null, NaN -> null. */
+export function numOrNull(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "string" ? Number(v) : v;
+  return Number.isNaN(n) ? null : n;
+}
+
+/** Strict: null/undefined -> null, non-finite (NaN/±Infinity) -> null. */
+export function finiteOrNull(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "string" ? Number(v) : v;
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Format a number as a percentage with two decimals, e.g. "89.86%". */
 export function formatPercent(value: number | string | null | undefined): string {
-  const n = toNum(value);
+  const n = displayNum(value);
   return n === null ? "—" : n.toFixed(2) + "%";
 }
 
 /** Format a rating with two decimals, e.g. "4.50". */
 export function formatRating(value: number | string | null | undefined): string {
-  const n = toNum(value);
+  const n = displayNum(value);
   return n === null ? "—" : n.toFixed(2);
 }
 
 /** Format a count as a whole number. */
 export function formatQuantity(value: number | string | null | undefined): string {
-  const n = toNum(value);
+  const n = displayNum(value);
   return n === null ? "—" : Math.round(n).toString();
 }
 
 /** Format a dollar amount with two decimals, e.g. "$14.17". */
 export function formatMoney(value: number | string | null | undefined): string {
-  const n = toNum(value);
+  const n = displayNum(value);
   if (n === null) return "—";
   const sign = n < 0 ? "-" : "";
   return `${sign}$${Math.abs(n).toFixed(2)}`;
@@ -73,7 +101,7 @@ export function formatMoney(value: number | string | null | undefined): string {
 
 /** Signed percentage-points, e.g. "+0.13pp" or "-0.42pp". */
 export function formatDeltaPP(value: number | string | null | undefined): string {
-  const n = toNum(value);
+  const n = displayNum(value);
   if (n === null) return "—";
   const sign = n > 0 ? "+" : n < 0 ? "−" : "";
   return `${sign}${Math.abs(n).toFixed(2)}pp`;

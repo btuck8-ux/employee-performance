@@ -11,6 +11,7 @@
  */
 import { createClient } from "@/lib/supabase/server";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
+import { finiteOrNull } from "@/lib/format";
 import {
   fetchAllTimeWorkedHours,
   fetchTotalImpactWeights,
@@ -89,11 +90,6 @@ export async function fetchRankingsAction(params: {
       platform_rank: number | null;
       platform_total: number | null;
     };
-    const toNum = (v: number | string | null | undefined): number | null => {
-      if (v === null || v === undefined) return null;
-      const n = typeof v === "string" ? Number(v) : v;
-      return Number.isFinite(n) ? n : null;
-    };
 
     let rows = ((data ?? []) as Row[]).map((r) => {
       const scope_rank =
@@ -116,9 +112,9 @@ export async function fetchRankingsAction(params: {
         client_id: r.client_id,
         client_name: r.client_name,
         active: r.active,
-        total_impact_score: toNum(r.total_impact_score),
+        total_impact_score: finiteOrNull(r.total_impact_score),
         components_count: r.components_count ?? 0,
-        all_time_hours_worked: toNum(r.all_time_hours_worked) ?? 0,
+        all_time_hours_worked: finiteOrNull(r.all_time_hours_worked) ?? 0,
         eligible: r.eligible,
         scope_rank,
         scope_total,

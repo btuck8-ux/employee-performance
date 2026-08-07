@@ -1,5 +1,6 @@
 "use server";
 import { createClient } from "@/lib/supabase/server";
+import { numOrNull, toNum } from "@/lib/format";
 
 export interface CohortDailyRow {
   day: string; // YYYY-MM-DD
@@ -54,16 +55,6 @@ export async function fetchCohortTimelineAction(
     return { ok: false, error: error.message };
   }
 
-  const toNum = (v: number | string | null | undefined): number => {
-    if (v === null || v === undefined) return 0;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? 0 : n;
-  };
-  const toNumOrNull = (v: number | string | null | undefined): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
   type RawRow = {
     day: string;
     cohort_sales: number | string | null;
@@ -77,10 +68,10 @@ export async function fetchCohortTimelineAction(
     day: r.day,
     cohort_sales: toNum(r.cohort_sales),
     cohort_tips: toNum(r.cohort_tips),
-    cohort_tip_rate_pct: toNumOrNull(r.cohort_tip_rate_pct),
+    cohort_tip_rate_pct: numOrNull(r.cohort_tip_rate_pct),
     location_sales: toNum(r.location_sales),
     location_tips: toNum(r.location_tips),
-    location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
+    location_tip_rate_pct: numOrNull(r.location_tip_rate_pct),
   }));
   return { ok: true, rows };
 }

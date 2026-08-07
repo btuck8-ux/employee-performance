@@ -16,6 +16,7 @@
  */
 import { createClient } from "@/lib/supabase/server";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
+import { finiteOrNull } from "@/lib/format";
 import {
   computeTotalImpactScoreBreakdown,
   fetchAllTimeWorkedHours,
@@ -55,11 +56,6 @@ export interface TisRanks {
   platform_total: number;
 }
 
-function toNum(v: number | string | null | undefined): number | null {
-  if (v === null || v === undefined) return null;
-  const n = typeof v === "string" ? Number(v) : v;
-  return Number.isFinite(n) ? n : null;
-}
 
 /**
  * Snapshot the TIS composite + per-component values for one employee over a
@@ -89,11 +85,11 @@ export async function fetchTisRangeSnapshotAction(
       .eq("report_period_id", quarter_id)
       .maybeSingle();
 
-    const cs = toNum(data?.customer_service_score ?? null);
-    const att = toNum(data?.attendance_pct ?? null);
-    const on = toNum(data?.on_time_grace_pct ?? null);
-    const tasks = toNum(data?.avg_task_list_completion_pct ?? null);
-    const survey = toNum(data?.survey_engagement_pct ?? null);
+    const cs = finiteOrNull(data?.customer_service_score ?? null);
+    const att = finiteOrNull(data?.attendance_pct ?? null);
+    const on = finiteOrNull(data?.on_time_grace_pct ?? null);
+    const tasks = finiteOrNull(data?.avg_task_list_completion_pct ?? null);
+    const survey = finiteOrNull(data?.survey_engagement_pct ?? null);
     const breakdown = computeTotalImpactScoreBreakdown(cs, att, on, tasks, survey, weights);
 
     return {
