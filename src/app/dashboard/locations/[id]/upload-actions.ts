@@ -1,11 +1,16 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { parseEmployeeCsv, type ImportResult } from "@/lib/employee-import";
 import { rowMatchesLocation } from "@/lib/location-match";
-import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
+import {
+  runSingleUpload,
+  runBulkUpload,
+  countTrulyUnmatched,
+} from "@/lib/upload-action-kit";
+
+type Supabase = Awaited<ReturnType<typeof createClient>>;
 
 interface IngestStats {
   inserted: number;
@@ -95,92 +100,33 @@ async function ingestEmployeesForLocation(
   return stats;
 }
 
-/**
- * Resolve the list of locations a bulk upload should target.
- *  - scope=client → all locations under the given client_id
- *  - scope=all    → all locations system-wide
- */
-async function resolveBulkTargetLocations(
-  supabase: SupabaseClient,
-  scope: "client" | "all",
-  client_id: string | null
-): Promise<Array<{ id: string; name: string; csv_aliases: string[] | null }>> {
-  let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
-  if (scope === "client" && client_id) q = q.eq("client_id", client_id);
-  const { data } = await q;
-  return ((data ?? []) as Array<{ id: string; name: string; csv_aliases: string[] | null }>);
-}
-
 export async function uploadEmployeesCsvAction(formData: FormData) {
-  const location_id = String(formData.get("location_id") ?? "");
-  const storagePath = String(formData.get("file_path") ?? "");
+  await runSingleUpload({
+    formData,
+    errorParam: "import_error",
+    parse: parseEmployeeCsv,
+    fatalParseError: (parsed) =>
+      parsed.errors.length > 0 && parsed.records.length === 0 ? parsed.errors.join("; ") : null,
+    run: async (supabase: Supabase, parsed, location) => {
+      const stats = await ingestEmployeesForLocation(supabase, parsed, location);
 
-  if (!location_id) {
-    redirect(`/dashboard/locations?import_error=${encodeURIComponent("Missing location.")}`);
-  }
-  if (!storagePath) {
-    redirect(
-      `/dashboard/locations/${location_id}?import_error=${encodeURIComponent("No file uploaded.")}`
-    );
-  }
+      revalidatePath(`/dashboard/locations/${location.id}`);
+      revalidatePath("/dashboard/employees");
 
-  const supabase = await createClient();
-
-  let text: string;
-  try {
-    text = await readCsvFromStorage(supabase, storagePath);
-  } catch (err) {
-    await deleteCsvFromStorage(supabase, storagePath);
-    redirect(
-      `/dashboard/locations/${location_id}?import_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Failed to read uploaded file."
-      )}`
-    );
-  }
-
-  try {
-    const parsed = parseEmployeeCsv(text);
-
-    if (parsed.errors.length > 0 && parsed.records.length === 0) {
-      redirect(
-        `/dashboard/locations/${location_id}?import_error=${encodeURIComponent(
-          parsed.errors.join("; ")
-        )}`
-      );
-    }
-
-    const { data: locRow } = await supabase
-      .from("locations")
-      .select("id, name, csv_aliases")
-      .eq("id", location_id)
-      .single();
-    const location = (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
-      id: location_id,
-      name: "",
-      csv_aliases: null,
-    };
-
-    const stats = await ingestEmployeesForLocation(supabase, parsed, location);
-
-    revalidatePath(`/dashboard/locations/${location_id}`);
-    revalidatePath("/dashboard/employees");
-
-    const params = new URLSearchParams();
-    params.set("inserted", String(stats.inserted));
-    params.set("updated", String(stats.updated));
-    params.set("inactive_skipped", String(parsed.inactive_skipped));
-    if (stats.skipped_other_location > 0)
-      params.set("skipped_other_location", String(stats.skipped_other_location));
-    if (stats.failed > 0) params.set("failed", String(stats.failed));
-    if (parsed.warnings.length > 0)
-      params.set("warnings", parsed.warnings.slice(0, 3).join(" | "));
-    if (stats.failures.length > 0)
-      params.set("failure_detail", stats.failures.slice(0, 3).join(" | "));
-
-    redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
-  } finally {
-    await deleteCsvFromStorage(supabase, storagePath);
-  }
+      const params = new URLSearchParams();
+      params.set("inserted", String(stats.inserted));
+      params.set("updated", String(stats.updated));
+      params.set("inactive_skipped", String(parsed.inactive_skipped));
+      if (stats.skipped_other_location > 0)
+        params.set("skipped_other_location", String(stats.skipped_other_location));
+      if (stats.failed > 0) params.set("failed", String(stats.failed));
+      if (parsed.warnings.length > 0)
+        params.set("warnings", parsed.warnings.slice(0, 3).join(" | "));
+      if (stats.failures.length > 0)
+        params.set("failure_detail", stats.failures.slice(0, 3).join(" | "));
+      return params;
+    },
+  });
 }
 
 /**
@@ -190,127 +136,77 @@ export async function uploadEmployeesCsvAction(formData: FormData) {
  * tagged for a location not in the target set get silently skipped.
  */
 export async function uploadEmployeesCsvBulkAction(formData: FormData) {
-  const scope = String(formData.get("scope") ?? "all") as "client" | "all";
-  const client_id = scope === "client" ? String(formData.get("client_id") ?? "") : null;
-  const storagePath = String(formData.get("file_path") ?? "");
+  await runBulkUpload({
+    formData,
+    errorParam: "bulk_error",
+    parse: parseEmployeeCsv,
+    fatalParseError: (parsed) =>
+      parsed.errors.length > 0 && parsed.records.length === 0 ? parsed.errors.join("; ") : null,
+    run: async (supabase: Supabase, parsed, targets, { scope, client_id }) => {
+      // Aggregate stats across all targets.
+      const aggregated: IngestStats = {
+        inserted: 0,
+        updated: 0,
+        failed: 0,
+        skipped_other_location: 0,
+        failures: [],
+      };
+      const perLocation: Array<{
+        name: string;
+        inserted: number;
+        updated: number;
+        failed: number;
+      }> = [];
 
-  const redirectBase =
-    scope === "client" && client_id
-      ? `/dashboard/clients/${client_id}`
-      : `/dashboard/uploads`;
-
-  if (!storagePath) {
-    redirect(`${redirectBase}?bulk_error=${encodeURIComponent("No file uploaded.")}`);
-  }
-
-  const supabase = await createClient();
-
-  let text: string;
-  try {
-    text = await readCsvFromStorage(supabase, storagePath);
-  } catch (err) {
-    await deleteCsvFromStorage(supabase, storagePath);
-    redirect(
-      `${redirectBase}?bulk_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Failed to read uploaded file."
-      )}`
-    );
-  }
-
-  try {
-    const parsed = parseEmployeeCsv(text);
-
-    if (parsed.errors.length > 0 && parsed.records.length === 0) {
-      redirect(
-        `${redirectBase}?bulk_error=${encodeURIComponent(parsed.errors.join("; "))}`
-      );
-    }
-
-    const targets = await resolveBulkTargetLocations(supabase, scope, client_id);
-    if (targets.length === 0) {
-      redirect(
-        `${redirectBase}?bulk_error=${encodeURIComponent(
-          scope === "client" ? "No locations under this client." : "No locations exist yet."
-        )}`
-      );
-    }
-
-    // Aggregate stats across all targets.
-    const aggregated: IngestStats = {
-      inserted: 0,
-      updated: 0,
-      failed: 0,
-      skipped_other_location: 0,
-      failures: [],
-    };
-    const perLocation: Array<{
-      name: string;
-      inserted: number;
-      updated: number;
-      failed: number;
-    }> = [];
-
-    for (const loc of targets) {
-      const stats = await ingestEmployeesForLocation(supabase, parsed, loc);
-      aggregated.inserted += stats.inserted;
-      aggregated.updated += stats.updated;
-      aggregated.failed += stats.failed;
-      aggregated.skipped_other_location += stats.skipped_other_location;
-      aggregated.failures.push(...stats.failures);
-      perLocation.push({
-        name: loc.name,
-        inserted: stats.inserted,
-        updated: stats.updated,
-        failed: stats.failed,
-      });
-    }
-
-    // The "skipped_other_location" aggregate is misleading when each row gets
-    // checked against N locations (a row matching loc[0] is "skipped" by locs
-    // [1..N-1]). Compute the true unmatched count instead: rows in the CSV
-    // whose location_label matches no target name AND no target alias.
-    const targetNames = new Set<string>();
-    for (const l of targets) {
-      targetNames.add(l.name.toLowerCase());
-      if (l.csv_aliases) {
-        for (const a of l.csv_aliases) {
-          if (a) targetNames.add(a.trim().toLowerCase());
-        }
+      for (const loc of targets) {
+        const stats = await ingestEmployeesForLocation(supabase, parsed, loc);
+        aggregated.inserted += stats.inserted;
+        aggregated.updated += stats.updated;
+        aggregated.failed += stats.failed;
+        aggregated.skipped_other_location += stats.skipped_other_location;
+        aggregated.failures.push(...stats.failures);
+        perLocation.push({
+          name: loc.name,
+          inserted: stats.inserted,
+          updated: stats.updated,
+          failed: stats.failed,
+        });
       }
-    }
-    let trulyUnmatched = 0;
-    for (const rec of parsed.records) {
-      const lbl = (rec.location_label ?? "").trim().toLowerCase();
-      if (lbl && !targetNames.has(lbl)) trulyUnmatched += 1;
-    }
 
-    // Revalidate every touched location so their dashboards refresh.
-    for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
-    revalidatePath("/dashboard/employees");
-    if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
-    revalidatePath("/dashboard/uploads");
+      // The "skipped_other_location" aggregate is misleading when each row gets
+      // checked against N locations (a row matching loc[0] is "skipped" by locs
+      // [1..N-1]). Compute the true unmatched count instead: rows in the CSV
+      // whose location_label matches no target name AND no target alias.
+      const trulyUnmatched = countTrulyUnmatched(
+        parsed.records.map((rec) => rec.location_label),
+        targets
+      );
 
-    const params = new URLSearchParams();
-    params.set("bulk_inserted", String(aggregated.inserted));
-    params.set("bulk_updated", String(aggregated.updated));
-    params.set("bulk_failed", String(aggregated.failed));
-    params.set("bulk_inactive_skipped", String(parsed.inactive_skipped));
-    params.set("bulk_unmatched", String(trulyUnmatched));
-    params.set("bulk_locations", String(targets.length));
-    // Per-location breakdown (compact). Only show locations that had at least
-    // one row land — empty locations are noise.
-    const breakdown = perLocation
-      .filter((p) => p.inserted + p.updated + p.failed > 0)
-      .map((p) => `${p.name}: ${p.inserted}+${p.updated}u${p.failed > 0 ? ` (${p.failed} failed)` : ""}`)
-      .join(" · ");
-    if (breakdown) params.set("bulk_breakdown", breakdown);
-    if (aggregated.failures.length > 0)
-      params.set("bulk_failure_detail", aggregated.failures.slice(0, 3).join(" | "));
-    if (parsed.warnings.length > 0)
-      params.set("bulk_warnings", parsed.warnings.slice(0, 3).join(" | "));
+      // Revalidate every touched location so their dashboards refresh.
+      for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
+      revalidatePath("/dashboard/employees");
+      if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
+      revalidatePath("/dashboard/uploads");
 
-    redirect(`${redirectBase}?${params.toString()}`);
-  } finally {
-    await deleteCsvFromStorage(supabase, storagePath);
-  }
+      const params = new URLSearchParams();
+      params.set("bulk_inserted", String(aggregated.inserted));
+      params.set("bulk_updated", String(aggregated.updated));
+      params.set("bulk_failed", String(aggregated.failed));
+      params.set("bulk_inactive_skipped", String(parsed.inactive_skipped));
+      params.set("bulk_unmatched", String(trulyUnmatched));
+      params.set("bulk_locations", String(targets.length));
+      // Per-location breakdown (compact). Only show locations that had at least
+      // one row land — empty locations are noise.
+      const breakdown = perLocation
+        .filter((p) => p.inserted + p.updated + p.failed > 0)
+        .map((p) => `${p.name}: ${p.inserted}+${p.updated}u${p.failed > 0 ? ` (${p.failed} failed)` : ""}`)
+        .join(" · ");
+      if (breakdown) params.set("bulk_breakdown", breakdown);
+      if (aggregated.failures.length > 0)
+        params.set("bulk_failure_detail", aggregated.failures.slice(0, 3).join(" | "));
+      if (parsed.warnings.length > 0)
+        params.set("bulk_warnings", parsed.warnings.slice(0, 3).join(" | "));
+      return params;
+    },
+  });
 }

@@ -10,6 +10,7 @@ import {
 import { recomputeAfterSalesUpsert } from "@/lib/ingest/sevenshifts/recompute";
 import { rowMatchesLocation } from "@/lib/location-match";
 import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
+import { runSingleUpload } from "@/lib/upload-action-kit";
 
 // NOTE on timeouts: in a "use server" file only async functions can be
 // exported, so `maxDuration` must live on the calling pages, not here. All
@@ -203,97 +204,51 @@ async function ingestPOSForLocation(
 export async function uploadPOSCsvAction(formData: FormData) {
   console.log("[pos-import] uploadPOSCsvAction invoked");
 
-  const location_id = String(formData.get("location_id") ?? "");
-  const storagePath = String(formData.get("file_path") ?? "");
-
-  if (!location_id) {
-    redirect(
-      `/dashboard/locations?pos_error=${encodeURIComponent("Missing location.")}`
-    );
-  }
-  if (!storagePath) {
-    redirect(
-      `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
-        "No file uploaded."
-      )}`
-    );
-  }
-
-  const supabase = await createClient();
-
-  let text: string;
-  try {
-    text = await readCsvFromStorage(supabase, storagePath);
-  } catch (err) {
-    await deleteCsvFromStorage(supabase, storagePath);
-    redirect(
-      `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Failed to read uploaded file."
-      )}`
-    );
-  }
-
-  try {
-    const parsed = parseSalesCsv(text);
-    console.log(
-      `[pos-import] parsed ${parsed.rows_in_file} rows -> ${parsed.unique_receipts} receipts ` +
-        `(${parsed.split_tender_receipts} split-tender)`
-    );
-    if (parsed.errors.length > 0 && parsed.records.length === 0) {
-      redirect(
-        `/dashboard/locations/${location_id}?pos_error=${encodeURIComponent(
-          parsed.errors.join("; ")
-        )}`
+  await runSingleUpload({
+    formData,
+    errorParam: "pos_error",
+    parse: (text) => {
+      const parsed = parseSalesCsv(text);
+      console.log(
+        `[pos-import] parsed ${parsed.rows_in_file} rows -> ${parsed.unique_receipts} receipts ` +
+          `(${parsed.split_tender_receipts} split-tender)`
       );
-    }
+      return parsed;
+    },
+    fatalParseError: (parsed) =>
+      parsed.errors.length > 0 && parsed.records.length === 0 ? parsed.errors.join("; ") : null,
+    run: async (supabase: SupabaseServer, parsed, location) => {
+      const stats = await ingestPOSForLocation(supabase, parsed, location);
+      for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
 
-    const { data: locRow } = await supabase
-      .from("locations")
-      .select("id, name, csv_aliases")
-      .eq("id", location_id)
-      .single();
-    const location =
-      (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
-        id: location_id,
-        name: "",
-        csv_aliases: null,
-      };
+      console.log(
+        `[pos-import] ${location.name}: sales ${stats.sales_inserted}+${stats.sales_updated}u, ` +
+          `split=${stats.split_tender_receipts}, refunds=${stats.refund_rows}, ` +
+          `quarters=${stats.affected_quarters}, recomputed=${stats.recomputed}, ` +
+          `teams=${stats.teams_recomputed}, skipped_other=${stats.skipped_other_location}`
+      );
 
-    const stats = await ingestPOSForLocation(supabase, parsed, location);
-    for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
+      revalidatePath(`/dashboard/locations/${location.id}`);
+      revalidatePath(`/dashboard/locations/${location.id}/teams`);
+      revalidatePath("/dashboard/employees");
 
-    console.log(
-      `[pos-import] ${location.name}: sales ${stats.sales_inserted}+${stats.sales_updated}u, ` +
-        `split=${stats.split_tender_receipts}, refunds=${stats.refund_rows}, ` +
-        `quarters=${stats.affected_quarters}, recomputed=${stats.recomputed}, ` +
-        `teams=${stats.teams_recomputed}, skipped_other=${stats.skipped_other_location}`
-    );
-
-    revalidatePath(`/dashboard/locations/${location_id}`);
-    revalidatePath(`/dashboard/locations/${location_id}/teams`);
-    revalidatePath("/dashboard/employees");
-
-    const params = new URLSearchParams();
-    params.set("pos_in", String(stats.sales_inserted));
-    params.set("pos_up", String(stats.sales_updated));
-    params.set("pos_split", String(stats.split_tender_receipts));
-    params.set("pos_refunds", String(stats.refund_rows));
-    params.set("pos_quarters", String(stats.affected_quarters));
-    params.set("pos_recomputed", String(stats.recomputed));
-    params.set("pos_teams", String(stats.teams_recomputed));
-    if (stats.skipped_other_location > 0)
-      params.set("pos_skipped_other_location", String(stats.skipped_other_location));
-    if (stats.warnings.length > 0)
-      params.set("pos_warnings", stats.warnings.slice(0, 3).join(" | "));
-    if (stats.failures.length > 0)
-      params.set("pos_failures", stats.failures.slice(0, 3).join(" | "));
-
-    redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
-  } finally {
-    // Always reclaim the storage object — fires after the success redirect
-    // throws, and after any error redirect from inside this try.
-    await deleteCsvFromStorage(supabase, storagePath);
-  }
+      const params = new URLSearchParams();
+      params.set("pos_in", String(stats.sales_inserted));
+      params.set("pos_up", String(stats.sales_updated));
+      params.set("pos_split", String(stats.split_tender_receipts));
+      params.set("pos_refunds", String(stats.refund_rows));
+      params.set("pos_quarters", String(stats.affected_quarters));
+      params.set("pos_recomputed", String(stats.recomputed));
+      params.set("pos_teams", String(stats.teams_recomputed));
+      if (stats.skipped_other_location > 0)
+        params.set("pos_skipped_other_location", String(stats.skipped_other_location));
+      if (stats.warnings.length > 0)
+        params.set("pos_warnings", stats.warnings.slice(0, 3).join(" | "));
+      if (stats.failures.length > 0)
+        params.set("pos_failures", stats.failures.slice(0, 3).join(" | "));
+      return params;
+    },
+  });
 }
 
 /**
