@@ -21,7 +21,7 @@ import {
  * ids, so re-runs are idempotent.
  *
  * AUTH: Bearer <CRON_SECRET>, mirroring /api/admin/backfill-worked-time.
- * /api/admin/* is already exempt from the session middleware; this handler
+ * /api/admin/* is already exempt from the session proxy; this handler
  * enforces its own CRON_SECRET match.
  */
 

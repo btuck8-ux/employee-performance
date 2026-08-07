@@ -11,7 +11,7 @@ import { runGuestFeedbackHarvest } from "@/lib/ingest/guest-feedback/harvest";
  * shared alert (alert.ts) + empty-streak guard (streak.ts).
  *
  * Scheduled via vercel.json cron at 09:30 UTC — AFTER nightly-ingest (09:00) so
- * worked time lands first and attribution resolves same-night. Middleware-exempt
+ * worked time lands first and attribution resolves same-night. Proxy-exempt
  * under /api/cron/*; this handler enforces its own Bearer <CRON_SECRET>, which
  * Vercel Cron forwards automatically.
  */

@@ -14,7 +14,7 @@ import { runToastSalesIngest } from "@/lib/ingest/toast/orchestrator";
  * recompute is deterministic.
  *
  * AUTH: Bearer <CRON_SECRET>, mirroring the other /api/admin routes (the
- * middleware bypasses the session check; this handler enforces the token).
+ * proxy bypasses the session check; this handler enforces the token).
  * Invoke per store for the go-live catch-up:
  *
  *   curl -H "Authorization: Bearer $CRON_SECRET" \

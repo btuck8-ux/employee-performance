@@ -15,7 +15,7 @@ import { runToastKitchenIngest } from "@/lib/ingest/toast/kitchen-ingest";
  * Scheduled via vercel.json at 10:00 UTC — deliberately last: nightly-ingest
  * 09:00, toast_sales 09:15, guest-feedback+tasks 09:30, culture_pulse 09:45,
  * so the labor punches this feed's attribution joins against are already
- * landed. Middleware-exempt under /api/cron/*; this handler enforces its own
+ * landed. Proxy-exempt under /api/cron/*; this handler enforces its own
  * Authorization: Bearer <CRON_SECRET>, which Vercel Cron forwards.
  */
 
