@@ -24,7 +24,7 @@ export const TATTLE_MERCHANT_ID = process.env.TATTLE_MERCHANT_ID ?? "2685";
 export class SessionExpiredError extends Error {
   constructor(public vendor: "tattle") {
     super(
-      `session expired — recapture ${vendor} (TATTLE_BEARER_TOKEN/TATTLE_REFRESH_TOKEN from dashboard.gettattle.com localStorage); see docs/runbook-guest-feedback-harvester.md`
+      `session expired — recapture ${vendor} (TATTLE_BEARER_TOKEN from dashboard.gettattle.com localStorage); see docs/runbook-guest-feedback-harvester.md`
     );
     this.name = "SessionExpiredError";
   }
