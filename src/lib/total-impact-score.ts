@@ -120,9 +120,28 @@ export function computeTotalImpactScoreBreakdown(
     + (tasks !== null ? 1 : 0)
     + (survey !== null ? 1 : 0)) as 0 | 1 | 2 | 3 | 4 | 5;
 
-  if (cnt < TIS_MIN_COMPONENTS || wSum <= 0) {
+  if (cnt < TIS_MIN_COMPONENTS) {
     return {
       composite_score: null,
+      components_count: cnt,
+      cs_component_score: cs,
+      attendance_component_score: att,
+      on_time_component_score: on,
+      tasks_component_score: tasks,
+      survey_component_score: survey,
+      effective_weight_cs: null,
+      effective_weight_attendance: null,
+      effective_weight_on_time: null,
+      effective_weight_tasks: null,
+      effective_weight_survey: null,
+    };
+  }
+
+  if (wSum <= 0) {
+    // Degenerate all-zero-weights config: composite 0 with null effective
+    // weights, matching the deployed SQL (025, canonical — Tucker 2026-08-07).
+    return {
+      composite_score: 0,
       components_count: cnt,
       cs_component_score: cs,
       attendance_component_score: att,

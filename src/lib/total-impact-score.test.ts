@@ -166,14 +166,11 @@ test("non-finite inputs are treated as missing, not clamped", () => {
   assertClose(b.composite_score, 77.5, "composite");
 });
 
-test("degenerate zero-weight config with 4 components present: TS returns null", () => {
-  // TS↔SQL PARITY: divergence (same shape as the Phase 9 one). With cnt ≥ 4
-  // but every PRESENT weight = 0 (wSum ≤ 0), TS returns a null composite
-  // (`cnt < TIS_MIN_COMPONENTS || wSum <= 0` guard). The SQL twin in 025
-  // gates effective weights on `w_sum > 0` but the final composite only on
-  // `cnt >= 4`, so `coalesce(NULL * score, 0) + ...` yields composite = 0
-  // instead of NULL. Only reachable with a degenerate weight config.
-  // Asserting CURRENT TS behavior; resolution is a Tucker-decision.
+test("degenerate zero-weight config with 4 components present: composite 0 (SQL-aligned)", () => {
+  // With cnt ≥ 4 but every PRESENT weight = 0 (wSum ≤ 0), the composite is 0
+  // with null effective weights — matching the deployed SQL in 025 (canonical).
+  // TS aligned to SQL per Tucker's decision, 2026-08-07 (previously null).
+  // Only reachable with a degenerate weight config (defaults are non-zero).
   const b = computeTotalImpactScoreBreakdown(90, 100, 80, 70, null, {
     weight_cs_score: 0,
     weight_attendance: 0,
@@ -182,7 +179,7 @@ test("degenerate zero-weight config with 4 components present: TS returns null",
     weight_survey: 0.15, // only the MISSING component carries weight
   });
   assert.equal(b.components_count, 4);
-  assert.equal(b.composite_score, null);
+  assert.equal(b.composite_score, 0);
   assert.equal(b.effective_weight_cs, null);
 });
 

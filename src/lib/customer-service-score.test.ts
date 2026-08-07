@@ -173,21 +173,18 @@ test("no components: composite null, count 0", () => {
   assert.equal(b.tip_component_score, null);
 });
 
-test("degenerate zero-weight config with 2 components present: TS returns null", () => {
-  // TS↔SQL PARITY: divergence. With cnt ≥ 2 but every PRESENT weight = 0
-  // (wSum ≤ 0), TS returns a null composite (the `cnt < 2 || wSum <= 0`
-  // guard). The SQL twin in 023 gates the effective weights on `w_sum > 0`
-  // but gates the final composite only on `cnt >= 2`, so
-  // `coalesce(NULL * score, 0) + ...` sums to composite = 0 instead of NULL.
+test("degenerate zero-weight config with 2 components present: composite 0 (SQL-aligned)", () => {
+  // With cnt ≥ 2 but every PRESENT weight = 0 (wSum ≤ 0), the composite is 0
+  // with null effective weights — matching the deployed SQL in 023 (canonical).
+  // TS aligned to SQL per Tucker's decision, 2026-08-07 (previously null).
   // Only reachable with a degenerate weight config (defaults are non-zero).
-  // Asserting CURRENT TS behavior; resolution is a Tucker-decision.
   const b = computeCustomerServiceScoreBreakdown(5, 5, null, {
     weight_tattle: 0,
     weight_reviews: 0,
     weight_tip: 0.2,
   });
   assert.equal(b.components_count, 2);
-  assert.equal(b.composite_score, null);
+  assert.equal(b.composite_score, 0);
   assert.equal(b.effective_weight_tattle, null);
 });
 
