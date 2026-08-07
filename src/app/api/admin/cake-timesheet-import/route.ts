@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { nolaLocationId } from "@/lib/ingest/cake/nola-location";
 import { startRun, finishRun } from "@/lib/ingest/sevenshifts/runs";
 import { ingestCakeTimesheetCsv } from "@/lib/ingest/cake/ingest";
 
@@ -33,8 +34,6 @@ import { ingestCakeTimesheetCsv } from "@/lib/ingest/cake/ingest";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const NOLA_LOCATION_ID = "570102ad-988f-4972-8475-f2f85a7dc0ae";
-
 async function readCsv(request: Request): Promise<string> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
@@ -48,11 +47,14 @@ async function readCsv(request: Request): Promise<string> {
   return await request.text();
 }
 
-async function nolaMaxDate(supabase: ReturnType<typeof createAdminClient>): Promise<string | null> {
+async function nolaMaxDate(
+  supabase: ReturnType<typeof createAdminClient>,
+  nolaId: string
+): Promise<string | null> {
   const { data } = await supabase
     .from("time_entries")
     .select("entry_date")
-    .eq("location_id", NOLA_LOCATION_ID)
+    .eq("location_id", nolaId)
     .order("entry_date", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -84,12 +86,13 @@ export async function POST(request: Request) {
     }
 
     const supabase = createAdminClient();
-    const maxBefore = await nolaMaxDate(supabase);
+    const nolaId = await nolaLocationId(supabase);
+    const maxBefore = await nolaMaxDate(supabase, nolaId);
 
     const runId = await startRun(
       supabase,
       "cake_timesheets",
-      NOLA_LOCATION_ID,
+      nolaId,
       windowStart ? `${windowStart}T00:00:00-05:00` : null,
       windowEnd ? `${windowEnd}T23:59:59-05:00` : null
     );
@@ -105,7 +108,7 @@ export async function POST(request: Request) {
       error_text: outcome.error_text,
     });
 
-    const maxAfter = await nolaMaxDate(supabase);
+    const maxAfter = await nolaMaxDate(supabase, nolaId);
 
     return NextResponse.json({
       import: "cake-timesheets",
