@@ -2,6 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { numOrNull } from "@/lib/format";
 
 interface SummaryInputs {
   employee_name: string;
@@ -121,11 +122,6 @@ export async function generateTattleSummaryAction(formData: FormData) {
     return;
   }
 
-  const numOrNull = (v: number | string | null | undefined): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
 
   const inputs: SummaryInputs = {
     employee_name: employeeName,

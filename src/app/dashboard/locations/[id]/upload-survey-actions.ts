@@ -1,6 +1,5 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { parseSurveyCsv, type SurveyImportResult } from "@/lib/survey-import";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
@@ -11,7 +10,7 @@ import {
   type MatchConfidence,
 } from "@/lib/fuzzy-match-employee";
 import { rowMatchesLocation } from "@/lib/location-match";
-import { readCsvFromStorage, deleteCsvFromStorage } from "@/lib/storage-csv";
+import { runSingleUpload, runBulkUpload } from "@/lib/upload-action-kit";
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
@@ -396,84 +395,43 @@ async function ingestSurveysForLocation(
 export async function uploadSurveyCsvAction(formData: FormData) {
   console.log("[survey-import] uploadSurveyCsvAction invoked");
 
-  const location_id = String(formData.get("location_id") ?? "");
-  const storagePath = String(formData.get("file_path") ?? "");
+  await runSingleUpload({
+    formData,
+    errorParam: "survey_error",
+    parse: parseSurveyCsv,
+    fatalParseError: (parsed) =>
+      parsed.errors.length > 0 && parsed.assignments.length === 0 ? parsed.errors.join("; ") : null,
+    run: async (supabase: SupabaseServer, parsed, location) => {
+      const stats = await ingestSurveysForLocation(supabase, parsed, location);
+      for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
 
-  if (!location_id) {
-    redirect(`/dashboard/locations?survey_error=${encodeURIComponent("Missing location.")}`);
-  }
-  if (!storagePath) {
-    redirect(
-      `/dashboard/locations/${location_id}?survey_error=${encodeURIComponent("No file uploaded.")}`
-    );
-  }
+      revalidatePath(`/dashboard/locations/${location.id}`);
+      revalidatePath("/dashboard/employees");
 
-  const supabase = await createClient();
-
-  let text: string;
-  try {
-    text = await readCsvFromStorage(supabase, storagePath);
-  } catch (err) {
-    await deleteCsvFromStorage(supabase, storagePath);
-    redirect(
-      `/dashboard/locations/${location_id}?survey_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Failed to read uploaded file."
-      )}`
-    );
-  }
-
-  try {
-    const parsed = parseSurveyCsv(text);
-
-    if (parsed.errors.length > 0 && parsed.assignments.length === 0) {
-      redirect(
-        `/dashboard/locations/${location_id}?survey_error=${encodeURIComponent(parsed.errors.join("; "))}`
+      const params = new URLSearchParams();
+      params.set("survey_in", String(stats.surveys_inserted));
+      params.set("survey_up", String(stats.surveys_updated));
+      params.set("assn_in", String(stats.assignments_inserted));
+      params.set("assn_up", String(stats.assignments_updated));
+      params.set("matches", String(stats.completions_matched));
+      params.set(
+        "match_breakdown",
+        `exact=${stats.match_confidence_counts.exact} first=${stats.match_confidence_counts.first_name} tokens=${stats.match_confidence_counts.token_containment} fuzzy=${stats.match_confidence_counts.levenshtein}`
       );
-    }
-
-    const { data: locRow } = await supabase
-      .from("locations")
-      .select("id, name, csv_aliases")
-      .eq("id", location_id)
-      .single();
-    const location = (locRow as { id: string; name: string; csv_aliases: string[] | null } | null) ?? {
-      id: location_id,
-      name: "",
-      csv_aliases: null,
-    };
-
-    const stats = await ingestSurveysForLocation(supabase, parsed, location);
-    for (const w of parsed.warnings.slice(0, 10)) stats.warnings.push(w);
-
-    revalidatePath(`/dashboard/locations/${location_id}`);
-    revalidatePath("/dashboard/employees");
-
-    const params = new URLSearchParams();
-    params.set("survey_in", String(stats.surveys_inserted));
-    params.set("survey_up", String(stats.surveys_updated));
-    params.set("assn_in", String(stats.assignments_inserted));
-    params.set("assn_up", String(stats.assignments_updated));
-    params.set("matches", String(stats.completions_matched));
-    params.set(
-      "match_breakdown",
-      `exact=${stats.match_confidence_counts.exact} first=${stats.match_confidence_counts.first_name} tokens=${stats.match_confidence_counts.token_containment} fuzzy=${stats.match_confidence_counts.levenshtein}`
-    );
-    params.set("survey_recomputed", String(stats.recomputed));
-    if (stats.inactive_pool_skipped > 0)
-      params.set("survey_inactive_skipped", String(stats.inactive_pool_skipped));
-    if (stats.completions_unmatched.size > 0)
-      params.set("survey_unmatched", Array.from(stats.completions_unmatched).slice(0, 8).join(", "));
-    if (stats.completions_ambiguous.size > 0)
-      params.set("survey_ambiguous", Array.from(stats.completions_ambiguous).slice(0, 5).join(" | "));
-    if (stats.warnings.length > 0)
-      params.set("survey_warnings", stats.warnings.slice(0, 3).join(" | "));
-    if (stats.failures.length > 0)
-      params.set("survey_failures", stats.failures.slice(0, 3).join(" | "));
-
-    redirect(`/dashboard/locations/${location_id}?${params.toString()}`);
-  } finally {
-    await deleteCsvFromStorage(supabase, storagePath);
-  }
+      params.set("survey_recomputed", String(stats.recomputed));
+      if (stats.inactive_pool_skipped > 0)
+        params.set("survey_inactive_skipped", String(stats.inactive_pool_skipped));
+      if (stats.completions_unmatched.size > 0)
+        params.set("survey_unmatched", Array.from(stats.completions_unmatched).slice(0, 8).join(", "));
+      if (stats.completions_ambiguous.size > 0)
+        params.set("survey_ambiguous", Array.from(stats.completions_ambiguous).slice(0, 5).join(" | "));
+      if (stats.warnings.length > 0)
+        params.set("survey_warnings", stats.warnings.slice(0, 3).join(" | "));
+      if (stats.failures.length > 0)
+        params.set("survey_failures", stats.failures.slice(0, 3).join(" | "));
+      return params;
+    },
+  });
 }
 
 /**
@@ -486,121 +444,74 @@ export async function uploadSurveyCsvAction(formData: FormData) {
 export async function uploadSurveyCsvBulkAction(formData: FormData) {
   console.log("[survey-import] uploadSurveyCsvBulkAction invoked");
 
-  const scope = String(formData.get("scope") ?? "all") as "client" | "all";
-  const client_id = scope === "client" ? String(formData.get("client_id") ?? "") : null;
-  const storagePath = String(formData.get("file_path") ?? "");
+  await runBulkUpload({
+    formData,
+    errorParam: "bulk_survey_error",
+    parse: parseSurveyCsv,
+    fatalParseError: (parsed) =>
+      parsed.errors.length > 0 && parsed.assignments.length === 0 ? parsed.errors.join("; ") : null,
+    run: async (supabase: SupabaseServer, parsed, targets, { scope, client_id }) => {
+      const aggregated: IngestStats = newStats();
+      const perLocation: Array<{
+        name: string;
+        surveys_in: number;
+        surveys_up: number;
+        assn_in: number;
+        assn_up: number;
+        matched: number;
+        recomputed: number;
+      }> = [];
 
-  const redirectBase =
-    scope === "client" && client_id
-      ? `/dashboard/clients/${client_id}`
-      : `/dashboard/uploads`;
-
-  if (!storagePath) {
-    redirect(`${redirectBase}?bulk_survey_error=${encodeURIComponent("No file uploaded.")}`);
-  }
-
-  const supabase = await createClient();
-
-  let text: string;
-  try {
-    text = await readCsvFromStorage(supabase, storagePath);
-  } catch (err) {
-    await deleteCsvFromStorage(supabase, storagePath);
-    redirect(
-      `${redirectBase}?bulk_survey_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Failed to read uploaded file."
-      )}`
-    );
-  }
-
-  try {
-    const parsed = parseSurveyCsv(text);
-
-    if (parsed.errors.length > 0 && parsed.assignments.length === 0) {
-      redirect(
-        `${redirectBase}?bulk_survey_error=${encodeURIComponent(parsed.errors.join("; "))}`
-      );
-    }
-
-    let q = supabase.from("locations").select("id, name, csv_aliases").order("name");
-    if (scope === "client" && client_id) q = q.eq("client_id", client_id);
-    const { data: targetsRaw } = await q;
-    const targets = (targetsRaw ?? []) as Array<{
-      id: string;
-      name: string;
-      csv_aliases: string[] | null;
-    }>;
-    if (targets.length === 0) {
-      redirect(
-        `${redirectBase}?bulk_survey_error=${encodeURIComponent(
-          scope === "client" ? "No locations under this client." : "No locations exist yet."
-        )}`
-      );
-    }
-
-    const aggregated: IngestStats = newStats();
-    const perLocation: Array<{
-      name: string;
-      surveys_in: number;
-      surveys_up: number;
-      assn_in: number;
-      assn_up: number;
-      matched: number;
-      recomputed: number;
-    }> = [];
-
-    for (const loc of targets) {
-      const stats = await ingestSurveysForLocation(supabase, parsed, loc);
-      aggregated.surveys_inserted += stats.surveys_inserted;
-      aggregated.surveys_updated += stats.surveys_updated;
-      aggregated.assignments_inserted += stats.assignments_inserted;
-      aggregated.assignments_updated += stats.assignments_updated;
-      aggregated.completions_matched += stats.completions_matched;
-      for (const k of ["exact", "first_name", "token_containment", "levenshtein", "ambiguous", "none"] as const) {
-        aggregated.match_confidence_counts[k] += stats.match_confidence_counts[k];
+      for (const loc of targets) {
+        const stats = await ingestSurveysForLocation(supabase, parsed, loc);
+        aggregated.surveys_inserted += stats.surveys_inserted;
+        aggregated.surveys_updated += stats.surveys_updated;
+        aggregated.assignments_inserted += stats.assignments_inserted;
+        aggregated.assignments_updated += stats.assignments_updated;
+        aggregated.completions_matched += stats.completions_matched;
+        for (const k of ["exact", "first_name", "token_containment", "levenshtein", "ambiguous", "none"] as const) {
+          aggregated.match_confidence_counts[k] += stats.match_confidence_counts[k];
+        }
+        aggregated.inactive_pool_skipped += stats.inactive_pool_skipped;
+        aggregated.recomputed += stats.recomputed;
+        for (const n of stats.completions_unmatched) aggregated.completions_unmatched.add(n);
+        for (const n of stats.completions_ambiguous) aggregated.completions_ambiguous.add(n);
+        aggregated.failures.push(...stats.failures);
+        perLocation.push({
+          name: loc.name,
+          surveys_in: stats.surveys_inserted,
+          surveys_up: stats.surveys_updated,
+          assn_in: stats.assignments_inserted,
+          assn_up: stats.assignments_updated,
+          matched: stats.completions_matched,
+          recomputed: stats.recomputed,
+        });
       }
-      aggregated.inactive_pool_skipped += stats.inactive_pool_skipped;
-      aggregated.recomputed += stats.recomputed;
-      for (const n of stats.completions_unmatched) aggregated.completions_unmatched.add(n);
-      for (const n of stats.completions_ambiguous) aggregated.completions_ambiguous.add(n);
-      aggregated.failures.push(...stats.failures);
-      perLocation.push({
-        name: loc.name,
-        surveys_in: stats.surveys_inserted,
-        surveys_up: stats.surveys_updated,
-        assn_in: stats.assignments_inserted,
-        assn_up: stats.assignments_updated,
-        matched: stats.completions_matched,
-        recomputed: stats.recomputed,
-      });
-    }
 
-    for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
-    revalidatePath("/dashboard/employees");
-    if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
-    revalidatePath("/dashboard/uploads");
+      for (const loc of targets) revalidatePath(`/dashboard/locations/${loc.id}`);
+      revalidatePath("/dashboard/employees");
+      if (scope === "client" && client_id) revalidatePath(`/dashboard/clients/${client_id}`);
+      revalidatePath("/dashboard/uploads");
 
-    const params = new URLSearchParams();
-    params.set("bulk_survey_locations", String(targets.length));
-    params.set("bulk_survey_in", String(aggregated.surveys_inserted));
-    params.set("bulk_survey_up", String(aggregated.surveys_updated));
-    params.set("bulk_assn_in", String(aggregated.assignments_inserted));
-    params.set("bulk_assn_up", String(aggregated.assignments_updated));
-    params.set("bulk_survey_matches", String(aggregated.completions_matched));
-    params.set("bulk_survey_recomputed", String(aggregated.recomputed));
-    const breakdown = perLocation
-      .filter((p) => p.surveys_in + p.surveys_up + p.assn_in + p.assn_up > 0)
-      .map(
-        (p) =>
-          `${p.name}: surveys ${p.surveys_in}+${p.surveys_up}u · assn ${p.assn_in}+${p.assn_up}u · matched ${p.matched} · recomputed ${p.recomputed}`
-      )
-      .join(" | ");
-    if (breakdown) params.set("bulk_survey_breakdown", breakdown);
-    if (aggregated.failures.length > 0)
-      params.set("bulk_survey_failures", aggregated.failures.slice(0, 3).join(" | "));
-
-    redirect(`${redirectBase}?${params.toString()}`);
-  } finally {
-    await deleteCsvFromStorage(supabase, storagePath);
-  }
+      const params = new URLSearchParams();
+      params.set("bulk_survey_locations", String(targets.length));
+      params.set("bulk_survey_in", String(aggregated.surveys_inserted));
+      params.set("bulk_survey_up", String(aggregated.surveys_updated));
+      params.set("bulk_assn_in", String(aggregated.assignments_inserted));
+      params.set("bulk_assn_up", String(aggregated.assignments_updated));
+      params.set("bulk_survey_matches", String(aggregated.completions_matched));
+      params.set("bulk_survey_recomputed", String(aggregated.recomputed));
+      const breakdown = perLocation
+        .filter((p) => p.surveys_in + p.surveys_up + p.assn_in + p.assn_up > 0)
+        .map(
+          (p) =>
+            `${p.name}: surveys ${p.surveys_in}+${p.surveys_up}u · assn ${p.assn_in}+${p.assn_up}u · matched ${p.matched} · recomputed ${p.recomputed}`
+        )
+        .join(" | ");
+      if (breakdown) params.set("bulk_survey_breakdown", breakdown);
+      if (aggregated.failures.length > 0)
+        params.set("bulk_survey_failures", aggregated.failures.slice(0, 3).join(" | "));
+      return params;
+    },
+  });
 }

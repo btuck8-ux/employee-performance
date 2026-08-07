@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCrosswalk, type LocationCrosswalk, type AdminClient } from "@/lib/ingest/sevenshifts/crosswalk";
 import { getAll } from "@/lib/ingest/sevenshifts/client";
@@ -132,13 +133,8 @@ async function backfillStore(
 }
 
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
-  }
-  if ((request.headers.get("authorization") ?? "") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const locationParam = (url.searchParams.get("location") ?? "").trim();

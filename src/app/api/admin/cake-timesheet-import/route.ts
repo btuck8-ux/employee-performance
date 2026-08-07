@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { nolaLocationId } from "@/lib/ingest/cake/nola-location";
 import { startRun, finishRun } from "@/lib/ingest/sevenshifts/runs";
 import { ingestCakeTimesheetCsv } from "@/lib/ingest/cake/ingest";
 
@@ -33,8 +35,6 @@ import { ingestCakeTimesheetCsv } from "@/lib/ingest/cake/ingest";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const NOLA_LOCATION_ID = "570102ad-988f-4972-8475-f2f85a7dc0ae";
-
 async function readCsv(request: Request): Promise<string> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
@@ -48,11 +48,14 @@ async function readCsv(request: Request): Promise<string> {
   return await request.text();
 }
 
-async function nolaMaxDate(supabase: ReturnType<typeof createAdminClient>): Promise<string | null> {
+async function nolaMaxDate(
+  supabase: ReturnType<typeof createAdminClient>,
+  nolaId: string
+): Promise<string | null> {
   const { data } = await supabase
     .from("time_entries")
     .select("entry_date")
-    .eq("location_id", NOLA_LOCATION_ID)
+    .eq("location_id", nolaId)
     .order("entry_date", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -62,13 +65,8 @@ async function nolaMaxDate(supabase: ReturnType<typeof createAdminClient>): Prom
 export async function POST(request: Request) {
   // Dedicated harvester token (least privilege); falls back to CRON_SECRET so
   // nothing breaks before CAKE_HARVEST_TOKEN is set. Once set, only it is accepted.
-  const secret = process.env.CAKE_HARVEST_TOKEN ?? process.env.CRON_SECRET;
-  if (!secret) {
-    return NextResponse.json({ error: "CAKE_HARVEST_TOKEN/CRON_SECRET not configured" }, { status: 500 });
-  }
-  if ((request.headers.get("authorization") ?? "") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.CAKE_HARVEST_TOKEN ?? process.env.CRON_SECRET, "CAKE_HARVEST_TOKEN/CRON_SECRET");
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const windowStart = (url.searchParams.get("window_start") ?? "").trim() || undefined;
@@ -84,12 +82,13 @@ export async function POST(request: Request) {
     }
 
     const supabase = createAdminClient();
-    const maxBefore = await nolaMaxDate(supabase);
+    const nolaId = await nolaLocationId(supabase);
+    const maxBefore = await nolaMaxDate(supabase, nolaId);
 
     const runId = await startRun(
       supabase,
       "cake_timesheets",
-      NOLA_LOCATION_ID,
+      nolaId,
       windowStart ? `${windowStart}T00:00:00-05:00` : null,
       windowEnd ? `${windowEnd}T23:59:59-05:00` : null
     );
@@ -105,7 +104,7 @@ export async function POST(request: Request) {
       error_text: outcome.error_text,
     });
 
-    const maxAfter = await nolaMaxDate(supabase);
+    const maxAfter = await nolaMaxDate(supabase, nolaId);
 
     return NextResponse.json({
       import: "cake-timesheets",

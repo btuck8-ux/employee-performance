@@ -1,5 +1,6 @@
 "use server";
 import { createClient } from "@/lib/supabase/server";
+import { numOrNull, toNum } from "@/lib/format";
 
 export interface HourlyTipRateRow {
   hour_of_day: number;
@@ -67,28 +68,16 @@ export async function fetchHourlyTipRateAction(
     location_tip_rate_pct: number | string | null;
   };
 
-  const toNum = (v: number | string | null | undefined): number => {
-    if (v === null || v === undefined) return 0;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? 0 : n;
-  };
-  const toNumOrNull = (
-    v: number | string | null | undefined
-  ): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
 
   const rows: HourlyTipRateRow[] = ((data ?? []) as RawRow[]).map((r) => ({
     hour_of_day: Number(r.hour_of_day),
     employee_hours_worked: toNum(r.employee_hours_worked),
     employee_sales: toNum(r.employee_sales),
     employee_tips: toNum(r.employee_tips),
-    employee_tip_rate_pct: toNumOrNull(r.employee_tip_rate_pct),
+    employee_tip_rate_pct: numOrNull(r.employee_tip_rate_pct),
     location_sales: toNum(r.location_sales),
     location_tips: toNum(r.location_tips),
-    location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
+    location_tip_rate_pct: numOrNull(r.location_tip_rate_pct),
   }));
 
   return { ok: true, rows };

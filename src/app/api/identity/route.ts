@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { LOCATION_CODES } from "@/lib/location-codes";
 
 /**
  * EPD -> Culture Pulse IDENTITY feed.
@@ -21,34 +23,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
-// Shared location crosswalk codes (migration 027). Reject anything else with 400.
-// Kept in lockstep with /api/scores' identical list (see that route).
-const LOCATION_CODES = [
-  "CPD",
-  "COS",
-  "DTD",
-  "FCOL",
-  "HRANCH",
-  "HOU",
-  "LONGM",
-  "NOLA",
-];
 
 // PostgREST hard-caps a single page at 1000 rows; clamp limit to it.
 const MAX_LIMIT = 1000;
 
 export async function GET(request: Request) {
-  const token = process.env.SCORES_FEED_TOKEN;
-  if (!token) {
-    return NextResponse.json(
-      { error: "SCORES_FEED_TOKEN not configured" },
-      { status: 500 }
-    );
-  }
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${token}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.SCORES_FEED_TOKEN, "SCORES_FEED_TOKEN");
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const locationCode = url.searchParams.get("location_code");

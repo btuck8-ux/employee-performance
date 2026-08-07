@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { CSV_UPLOADS_BUCKET } from "@/lib/storage-csv";
 
@@ -23,17 +24,8 @@ const PAGE_SIZE = 1000;
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return NextResponse.json(
-      { error: "CRON_SECRET not configured" },
-      { status: 500 }
-    );
-  }
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
+  if (denied) return denied;
 
   const supabase = createAdminClient();
   const cutoffMs = Date.now() - ORPHAN_THRESHOLD_HOURS * 60 * 60 * 1000;

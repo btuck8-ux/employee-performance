@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { quarterInfo, type Quarter } from "./quarter";
+import { numOrNull } from "@/lib/format";
 import {
   computeCustomerServiceScoreBreakdown,
   fetchCustomerServiceWeights,
@@ -267,28 +268,23 @@ async function fetchTipMetrics(
     | undefined;
   if (!row) return nullTips;
 
-  const toNum = (v: number | string | null | undefined): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
 
   // If both employee and location have zero qualifying sales, treat tips as
   // unavailable for the window — the function still returns 0 totals but
   // there's no meaningful metric to display.
-  const employeeSales = toNum(row.sales_under_cap) ?? 0;
-  const locationRate = toNum(row.location_avg_tip_rate_pct);
+  const employeeSales = numOrNull(row.sales_under_cap) ?? 0;
+  const locationRate = numOrNull(row.location_avg_tip_rate_pct);
   if (employeeSales === 0 && locationRate === null) return nullTips;
 
   return {
-    hours_worked: toNum(row.hours_worked),
-    sales_during_presence: toNum(row.sales_under_cap),
-    tips_during_presence: toNum(row.tips_under_cap),
-    tip_rate_pct: toNum(row.employee_tip_rate_pct),
-    tip_per_hour: toNum(row.employee_tip_per_hour),
-    location_tip_rate_pct: toNum(row.location_avg_tip_rate_pct),
-    location_tip_per_hour: toNum(row.location_avg_tip_per_hour),
-    tip_rate_delta_pp: toNum(row.tip_rate_delta_pp),
+    hours_worked: numOrNull(row.hours_worked),
+    sales_during_presence: numOrNull(row.sales_under_cap),
+    tips_during_presence: numOrNull(row.tips_under_cap),
+    tip_rate_pct: numOrNull(row.employee_tip_rate_pct),
+    tip_per_hour: numOrNull(row.employee_tip_per_hour),
+    location_tip_rate_pct: numOrNull(row.location_avg_tip_rate_pct),
+    location_tip_per_hour: numOrNull(row.location_avg_tip_per_hour),
+    tip_rate_delta_pp: numOrNull(row.tip_rate_delta_pp),
   };
 }
 
@@ -338,11 +334,6 @@ async function fetchKitchenMetrics(
     kitchen_residual_seconds: null,
   };
 
-  const toNum = (v: number | string | null | undefined): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
 
   const { data: empData, error: empError } = await supabase.rpc("compute_kitchen_speed", {
     p_employee_id: employeeId,
@@ -365,8 +356,8 @@ async function fetchKitchenMetrics(
       }
     | null
     | undefined;
-  const empItems = toNum(emp?.items) ?? 0;
-  const empAvg = toNum(emp?.avg_prep_seconds);
+  const empItems = numOrNull(emp?.items) ?? 0;
+  const empAvg = numOrNull(emp?.avg_prep_seconds);
   // No attributed items = never on the clock at a kitchen-enabled store in
   // the window (or no kitchen data yet) — the whole block stays null.
   if (empItems === 0 || empAvg === null) return nullKitchen;
@@ -386,12 +377,12 @@ async function fetchKitchenMetrics(
 
   return {
     kitchen_items: empItems,
-    kitchen_tickets: toNum(emp?.tickets),
-    kitchen_shifts: toNum(emp?.shifts) ?? 0,
+    kitchen_tickets: numOrNull(emp?.tickets),
+    kitchen_shifts: numOrNull(emp?.shifts) ?? 0,
     kitchen_avg_prep_seconds: empAvg,
-    kitchen_baseline_prep_seconds: toNum(emp?.baseline_prep_seconds),
-    location_kitchen_avg_prep_seconds: toNum(locRow?.avg_prep_seconds),
-    kitchen_residual_seconds: toNum(emp?.residual_seconds),
+    kitchen_baseline_prep_seconds: numOrNull(emp?.baseline_prep_seconds),
+    location_kitchen_avg_prep_seconds: numOrNull(locRow?.avg_prep_seconds),
+    kitchen_residual_seconds: numOrNull(emp?.residual_seconds),
   };
 }
 

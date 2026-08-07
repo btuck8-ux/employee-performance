@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatHireDate, formatTenure } from "@/lib/format";
+import { formatHireDate, formatTenure, numOrNull, toNum } from "@/lib/format";
 import { computeMetricsFromEntries } from "@/lib/performance-recompute";
 import {
   PerformanceHistoryTabs,
@@ -123,11 +123,6 @@ export default async function EmployeeDetailPage({
     )
   );
 
-  const toNumOrNull = (v: number | string | null): number | null => {
-    if (v === null || v === undefined) return null;
-    const n = typeof v === "string" ? Number(v) : v;
-    return Number.isNaN(n) ? null : n;
-  };
 
   // Look up the current (non-superseded) generated_report per performance_record,
   // partitioned by report_kind ('performance' vs 'task_detail').
@@ -162,31 +157,31 @@ export default async function EmployeeDetailPage({
     return {
       id: r.id,
       label: r.report_periods?.label ?? "—",
-      attendance_pct: toNumOrNull(r.attendance_pct),
-      on_time_pct: toNumOrNull(r.on_time_pct),
-      on_time_grace_pct: toNumOrNull(r.on_time_grace_pct),
+      attendance_pct: numOrNull(r.attendance_pct),
+      on_time_pct: numOrNull(r.on_time_pct),
+      on_time_grace_pct: numOrNull(r.on_time_grace_pct),
       covered_shifts: r.covered_shifts,
       surveys_assigned: r.surveys_assigned,
       surveys_completed: r.surveys_completed,
-      survey_engagement_pct: toNumOrNull(r.survey_engagement_pct),
+      survey_engagement_pct: numOrNull(r.survey_engagement_pct),
       tasks_accountable: r.tasks_accountable,
       tasks_completed: r.tasks_completed,
       tasks_owned: r.tasks_owned,
-      task_completion_pct: toNumOrNull(r.task_completion_pct),
-      task_list_completion_pct: toNumOrNull(r.task_list_completion_pct),
-      avg_task_list_completion_pct: toNumOrNull(r.avg_task_list_completion_pct),
+      task_completion_pct: numOrNull(r.task_completion_pct),
+      task_list_completion_pct: numOrNull(r.task_list_completion_pct),
+      avg_task_list_completion_pct: numOrNull(r.avg_task_list_completion_pct),
       tattle_quantity: r.tattle_quantity,
-      tattle_rating: toNumOrNull(r.tattle_rating),
-      tattle_score_food_quality: toNumOrNull(r.tattle_score_food_quality),
-      tattle_score_accuracy: toNumOrNull(r.tattle_score_accuracy),
-      tattle_score_speed_of_service: toNumOrNull(r.tattle_score_speed_of_service),
+      tattle_rating: numOrNull(r.tattle_rating),
+      tattle_score_food_quality: numOrNull(r.tattle_score_food_quality),
+      tattle_score_accuracy: numOrNull(r.tattle_score_accuracy),
+      tattle_score_speed_of_service: numOrNull(r.tattle_score_speed_of_service),
       customer_review_quantity: r.customer_review_quantity,
-      customer_service_rating: toNumOrNull(r.customer_service_rating),
-      tip_rate_pct: toNumOrNull(r.tip_rate_pct),
-      tip_per_hour: toNumOrNull(r.tip_per_hour),
-      location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
-      location_tip_per_hour: toNumOrNull(r.location_tip_per_hour),
-      tip_rate_delta_pp: toNumOrNull(r.tip_rate_delta_pp),
+      customer_service_rating: numOrNull(r.customer_service_rating),
+      tip_rate_pct: numOrNull(r.tip_rate_pct),
+      tip_per_hour: numOrNull(r.tip_per_hour),
+      location_tip_rate_pct: numOrNull(r.location_tip_rate_pct),
+      location_tip_per_hour: numOrNull(r.location_tip_per_hour),
+      tip_rate_delta_pp: numOrNull(r.tip_rate_delta_pp),
       current_report_id: cur?.id ?? null,
       feedback_updated_after_generation: cur?.flag ?? false,
     };
@@ -199,14 +194,14 @@ export default async function EmployeeDetailPage({
       performance_record_id: r.id,
       label: r.report_periods?.label ?? "—",
       period_start: r.report_periods?.period_start ?? "",
-      customer_service_score: toNumOrNull(r.customer_service_score),
+      customer_service_score: numOrNull(r.customer_service_score),
       customer_service_score_components_count:
         r.customer_service_score_components_count ?? null,
-      tattle_rating: toNumOrNull(r.tattle_rating),
+      tattle_rating: numOrNull(r.tattle_rating),
       tattle_quantity: r.tattle_quantity,
-      customer_service_rating: toNumOrNull(r.customer_service_rating),
+      customer_service_rating: numOrNull(r.customer_service_rating),
       customer_review_quantity: r.customer_review_quantity,
-      tip_rate_delta_pp: toNumOrNull(r.tip_rate_delta_pp),
+      tip_rate_delta_pp: numOrNull(r.tip_rate_delta_pp),
     }));
   const csWeights = await fetchCustomerServiceWeights(supabase);
 
@@ -339,16 +334,6 @@ export default async function EmployeeDetailPage({
           p_end_date: hourlyInitialWindow.endDate,
         }
       );
-      const toNum = (v: number | string | null | undefined): number => {
-        if (v === null || v === undefined) return 0;
-        const n = typeof v === "string" ? Number(v) : v;
-        return Number.isNaN(n) ? 0 : n;
-      };
-      const toNumOrNull = (v: number | string | null | undefined): number | null => {
-        if (v === null || v === undefined) return null;
-        const n = typeof v === "string" ? Number(v) : v;
-        return Number.isNaN(n) ? null : n;
-      };
       type RpcRow = {
         hour_of_day: number | string;
         employee_hours_worked: number | string | null;
@@ -364,10 +349,10 @@ export default async function EmployeeDetailPage({
         employee_hours_worked: toNum(r.employee_hours_worked),
         employee_sales: toNum(r.employee_sales),
         employee_tips: toNum(r.employee_tips),
-        employee_tip_rate_pct: toNumOrNull(r.employee_tip_rate_pct),
+        employee_tip_rate_pct: numOrNull(r.employee_tip_rate_pct),
         location_sales: toNum(r.location_sales),
         location_tips: toNum(r.location_tips),
-        location_tip_rate_pct: toNumOrNull(r.location_tip_rate_pct),
+        location_tip_rate_pct: numOrNull(r.location_tip_rate_pct),
       }));
     }
   }
@@ -420,11 +405,11 @@ export default async function EmployeeDetailPage({
 
   if (tisInitialWindow && tisInitialWindow.mode === "quarter" && tisInitialWindow.quarterId && loc?.id) {
     const r0 = rawRows.find((r) => r.report_periods?.id === tisInitialWindow!.quarterId);
-    const cs = toNumOrNull(r0?.customer_service_score ?? null);
-    const att = toNumOrNull(r0?.attendance_pct ?? null);
-    const on = toNumOrNull(r0?.on_time_grace_pct ?? null);
-    const tasks = toNumOrNull(r0?.avg_task_list_completion_pct ?? null);
-    const survey = toNumOrNull(r0?.survey_engagement_pct ?? null);
+    const cs = numOrNull(r0?.customer_service_score ?? null);
+    const att = numOrNull(r0?.attendance_pct ?? null);
+    const on = numOrNull(r0?.on_time_grace_pct ?? null);
+    const tasks = numOrNull(r0?.avg_task_list_completion_pct ?? null);
+    const survey = numOrNull(r0?.survey_engagement_pct ?? null);
     const breakdown = computeTotalImpactScoreBreakdown(cs, att, on, tasks, survey, tisWeights);
     tisInitialSnapshot = {
       composite_score: breakdown.composite_score,

@@ -9,6 +9,7 @@ export const maxDuration = 300;
 
 import { createClient } from "@/lib/supabase/server";
 import { TeamsDashboard } from "@/components/teams/TeamsDashboard";
+import { numOrNull } from "@/lib/format";
 
 interface RawQuarter {
   id: string;
@@ -39,11 +40,6 @@ interface RawPerfRow {
   tips_during_presence: number | string | null;
 }
 
-function toNum(v: number | string | null | undefined): number | null {
-  if (v === null || v === undefined) return null;
-  const n = typeof v === "string" ? Number(v) : v;
-  return Number.isNaN(n) ? null : n;
-}
 
 export default async function TeamsPage({
   params,
@@ -156,8 +152,8 @@ export default async function TeamsPage({
       .eq("report_period_id", selectedQuarter.id);
     scatterRows = ((prRaw ?? []) as unknown as RawPerfRow[])
       .map((row) => {
-        const hours = toNum(row.hours_worked);
-        const tipRate = toNum(row.tip_rate_pct);
+        const hours = numOrNull(row.hours_worked);
+        const tipRate = numOrNull(row.tip_rate_pct);
         if (hours === null || hours <= 0 || tipRate === null) return null;
         return {
           employeeId: row.employee_id,
@@ -165,11 +161,11 @@ export default async function TeamsPage({
             employeeById.get(row.employee_id) ?? "Unknown (former)",
           hoursWorked: hours,
           tipRatePct: tipRate,
-          locationTipRatePct: toNum(row.location_tip_rate_pct),
-          tipRateDeltaPp: toNum(row.tip_rate_delta_pp),
-          tipPerHour: toNum(row.tip_per_hour),
-          sales: toNum(row.sales_during_presence),
-          tips: toNum(row.tips_during_presence),
+          locationTipRatePct: numOrNull(row.location_tip_rate_pct),
+          tipRateDeltaPp: numOrNull(row.tip_rate_delta_pp),
+          tipPerHour: numOrNull(row.tip_per_hour),
+          sales: numOrNull(row.sales_during_presence),
+          tips: numOrNull(row.tips_during_presence),
         };
       })
       .filter(<T,>(r: T | null): r is T => r !== null);
@@ -192,8 +188,8 @@ export default async function TeamsPage({
       hoursTogether: Number(row.hours_together) || 0,
       salesDuring: Number(row.sales_during) || 0,
       tipsDuring: Number(row.tips_during) || 0,
-      tipRatePct: toNum(row.tip_rate_pct),
-      deltaVsLocPp: toNum(row.delta_vs_loc_pp),
+      tipRatePct: numOrNull(row.tip_rate_pct),
+      deltaVsLocPp: numOrNull(row.delta_vs_loc_pp),
     }));
   }
 
