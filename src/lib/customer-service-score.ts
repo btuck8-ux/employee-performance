@@ -83,9 +83,24 @@ export function computeCustomerServiceScoreBreakdown(
 
   const cnt = ((t !== null ? 1 : 0) + (r !== null ? 1 : 0) + (p !== null ? 1 : 0)) as 0 | 1 | 2 | 3;
 
-  if (cnt < 2 || wSum <= 0) {
+  if (cnt < 2) {
     return {
       composite_score: null,
+      components_count: cnt,
+      tattle_component_score: t,
+      reviews_component_score: r,
+      tip_component_score: p,
+      effective_weight_tattle: null,
+      effective_weight_reviews: null,
+      effective_weight_tip: null,
+    };
+  }
+
+  if (wSum <= 0) {
+    // Degenerate all-zero-weights config: composite 0 with null effective
+    // weights, matching the deployed SQL (023, canonical — Tucker 2026-08-07).
+    return {
+      composite_score: 0,
       components_count: cnt,
       tattle_component_score: t,
       reviews_component_score: r,

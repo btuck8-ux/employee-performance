@@ -48,6 +48,8 @@ derivable from the code alone.
   discovered mismatch is a Tucker-decision, never a silent fix.
 - Known-good anchor weights: CS 0.40/0.40/0.20 (null if <2 of 3
   components); TIS 0.40 + 0.15×4 (null if <4 of 5).
+- Degenerate all-zero-weights config → composite 0, not null (SQL 023/025
+  canonical; aligned 2026-08-07).
 - Kitchen Speed has **no web-app surface** — the PDF is the only place it
   renders. Known gap on hold pending Tucker's UI audit, not an oversight.
 
@@ -81,7 +83,8 @@ derivable from the code alone.
 
 ## Platform
 
-- Cron routes must live under `/api/cron/*` to stay middleware-allowlisted.
+- Cron routes must live under `/api/cron/*` to stay proxy-allowlisted
+  (src/proxy.ts — Next 16 renamed middleware to proxy; renamed here 2026-08-07).
   `maxDuration` cannot be exported from `"use server"` files (Next 16
   Turbopack).
 - Migrations: 015 intentionally absent; current head is 044. When Cowork

@@ -15,7 +15,7 @@ import { LOCATION_CODES } from "@/lib/location-codes";
  * Auth: `Authorization: Bearer <SCORES_FEED_TOKEN>` — a distinct env from
  * CRON_SECRET, mirroring the cron route's bearer pattern. The route does its
  * own auth and queries via the service-role client (bypasses RLS), so it is
- * allowlisted in middleware.ts the same way as /api/cron.
+ * allowlisted in proxy.ts the same way as /api/cron.
  */
 
 export const dynamic = "force-dynamic";

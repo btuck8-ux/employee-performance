@@ -10,7 +10,7 @@ import { runNightlyIngest } from "@/lib/ingest/sevenshifts/orchestrator";
  * path as the manual CSV imports. One ingest_runs row per source x location.
  *
  * Scheduled via vercel.json cron at 09:00 UTC (~2-3 AM Phoenix, after close +
- * POS sync). Middleware-exempt under /api/cron/* (see src/middleware.ts); this
+ * POS sync). Proxy-exempt under /api/cron/* (see src/proxy.ts); this
  * handler enforces its own Authorization: Bearer <CRON_SECRET>, which Vercel
  * Cron forwards automatically.
  *

@@ -19,7 +19,7 @@ export async function createClient() {
             });
           } catch {
             // Called from a Server Component — silently ignore.
-            // Token refresh is handled by middleware.
+            // Token refresh is handled by the proxy (src/proxy.ts).
           }
         },
       },

@@ -20,7 +20,7 @@ import { runCpSurveySync } from "@/lib/ingest/culture-pulse/orchestrator";
  * the true state (completions are genuinely sparse), not a feed defect.
  *
  * AUTH: Bearer <CRON_SECRET>, mirroring the other /api/admin routes (the
- * middleware bypasses the session check; this handler enforces the token).
+ * proxy bypasses the session check; this handler enforces the token).
  */
 
 export const dynamic = "force-dynamic";

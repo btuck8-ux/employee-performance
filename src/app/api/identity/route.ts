@@ -18,7 +18,7 @@ import { LOCATION_CODES } from "@/lib/location-codes";
  *
  * Auth: `Authorization: Bearer <SCORES_FEED_TOKEN>` — reuses the scores-feed
  * token (same EPD->CP consumer + trust boundary). Queries via the service-role
- * client (bypasses RLS); allowlisted in middleware.ts the same way as /api/scores.
+ * client (bypasses RLS); allowlisted in proxy.ts the same way as /api/scores.
  */
 
 export const dynamic = "force-dynamic";

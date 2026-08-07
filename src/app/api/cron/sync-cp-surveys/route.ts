@@ -13,7 +13,7 @@ import { runCpSurveySync } from "@/lib/ingest/culture-pulse/orchestrator";
  * Scheduled via vercel.json at 09:45 UTC — after nightly-ingest (09:00),
  * the Toast sales feed (09:15), and the guest-feedback harvest (09:30), so
  * worked time and guest data land before the recompute here runs.
- * Middleware-exempt under /api/cron/*; this handler enforces its own
+ * Proxy-exempt under /api/cron/*; this handler enforces its own
  * Authorization: Bearer <CRON_SECRET>, which Vercel Cron forwards.
  *
  * Empty nights are NORMAL (weekly send cadence); the orchestrator's

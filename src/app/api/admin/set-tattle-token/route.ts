@@ -9,7 +9,7 @@ import { storeTattleBearer } from "@/lib/ingest/guest-feedback/token-store";
  * depending on a human re-pasting a token (handoff 2026-07-27 Part 3a).
  *
  * AUTH: Bearer — TASKS_HARVEST_TOKEN / CAKE_HARVEST_TOKEN (the harness
- * family token) or CRON_SECRET. /api/admin/* is middleware-exempt.
+ * family token) or CRON_SECRET. /api/admin/* is proxy-exempt.
  *
  * BODY: JSON { "token": "<access token>" } or the raw token as text/plain.
  */

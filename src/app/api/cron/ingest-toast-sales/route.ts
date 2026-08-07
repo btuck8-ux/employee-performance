@@ -14,7 +14,7 @@ import { runToastSalesIngest } from "@/lib/ingest/toast/orchestrator";
  * Scheduled via vercel.json at 09:15 UTC — after the 09:00 nightly-ingest so
  * the evening's 7shifts labor is already landed when the recompute runs, and
  * before the 09:30 guest-feedback harvest. Middleware-exempt under
- * /api/cron/* (src/middleware.ts); this handler enforces its own
+ * /api/cron/* (src/proxy.ts); this handler enforces its own
  * Authorization: Bearer <CRON_SECRET>, which Vercel Cron forwards.
  */
 
