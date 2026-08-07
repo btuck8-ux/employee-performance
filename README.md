@@ -2,12 +2,14 @@
 
 Internal Next.js + Supabase app for ingesting employee performance data and generating quarterly per-employee PDF reports.
 
+Before writing code in this repo, read **[AGENTS.md](./AGENTS.md)** — the trap-list of live consumers, scoring lockstep rules, and deliberate keeps.
+
 ## Stack
 
 - Next.js (App Router) on Vercel, TypeScript, Tailwind CSS
 - Supabase (Postgres, Auth, Storage)
 - `@react-pdf/renderer` for PDFs
-- `papaparse` + `sheetjs (xlsx)` for ingest
+- `papaparse` for CSV ingest
 
 ## Local development
 
@@ -21,23 +23,56 @@ Open http://localhost:3000 — you'll be redirected to `/auth/login` and then th
 
 ## Environment variables
 
-| Variable | Description |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key (public, safe in client) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (secret, server only) |
-| `NEXT_PUBLIC_SITE_URL` | Site URL used for OAuth redirect (`http://localhost:3000` in dev) |
+See [.env.example](./.env.example) for the full roster (~21 vars: Supabase, cron/feed tokens, Tattle session, 7shifts `IKES_*` tokens, Toast, CulturePulse bridge, Resend alerts). Two operational notes:
+
+- `IKES_COLORADO_CULTUREPULSE` must exist in prod or Colorado ingest breaks at the next nightly.
+- 7shifts tokens are **Sensitive** (write-only) Vercel vars — identity/backfill work runs in-cron, never via local scripts.
+
+## App surface
+
+- `/dashboard` — overview shell
+- `/dashboard/clients`, `/dashboard/locations`, `/dashboard/employees` — CRUD + per-entity detail
+- `/dashboard/locations/[id]` — location detail: quarter selector, employee performance table, manual upload cards
+- `/dashboard/locations/[id]/rankings` + `/teams` — rankings and team views
+- `/dashboard/uploads` — bulk upload surface
+- `/dashboard/reports` — PDF generation + archive (`/api/reports/[id]` serves them)
+- `/dashboard/admin/scoring` — scoring administration
+
+## Automated feeds
+
+Vercel crons (`vercel.json`), all UTC:
+
+| Cron | Time | Job |
+|---|---|---|
+| `sweep-csv-uploads` | 04:00 | sweep stale upload storage |
+| `nightly-ingest` | 09:00 | 7shifts fan-out: time punches, identity bridge, POS (HOU) |
+| `ingest-toast-sales` | 09:15 | Toast sales feed |
+| `harvest-guest-feedback` | 09:30 | Tattle snapshots + reviews + 7Tasks (API) |
+| `sync-cp-surveys` | 09:45 | CulturePulse survey sync |
+| `ingest-toast-kitchen` | 10:00 | Toast kitchen ticket times |
+
+GitHub Actions (browser harnesses):
+
+| Action | Time (UTC) | Lands on |
+|---|---|---|
+| `cake-nightly` | 13:30 | `/api/admin/cake-profile-ids`, `/api/admin/cake-timesheet-import` (NOLA labor) |
+| `tattle-nightly` | 13:50 | `/api/admin/set-tattle-token` (fresh Tattle token) |
+
+Outbound feeds — polled daily by CulturePulse in production (shape changes require coordination, see AGENTS.md):
+
+- `/api/identity` (08:45 UTC poll)
+- `/api/scores` (09:00 UTC poll)
 
 ## Database
 
-Schema migrations live in `supabase/migrations/`. They've been applied directly to the live Supabase project; these files are the canonical source of truth and reference for future re-creation.
+Schema migrations live in `supabase/migrations/` (head: 044; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
 
 ## Build phases
 
 - ✅ **Phase 1** — Foundation: schema, RLS, auth, dashboard shell, clients / locations / employees CRUD.
-- ⬜ **Phase 2** — Data ingest: tolerant CSV / XLSX upload, alias map, fuzzy matching.
-- ⬜ **Phase 3** — Performance dashboard: location detail with quarter selector and employee table; stale-data flagging.
-- ⬜ **Phase 4** — Report generation: `@react-pdf/renderer` template, quarterly and custom-range modes, archive UI.
-- ⬜ **Phase 5** — Automation: Vercel cron for stale-data check and auto-generate-latest-reports.
+- ✅ **Phase 2** — Data ingest: tolerant CSV upload, alias map, fuzzy matching.
+- ✅ **Phase 3** — Performance dashboard: location detail with quarter selector and employee table; stale-data flagging.
+- ✅ **Phase 4** — Report generation: `@react-pdf/renderer` template, quarterly and custom-range modes, archive UI.
+- ✅ **Phase 5** — Automation: Vercel crons + GitHub Actions for the nightly feed family (table above).
 
-See `../PROJECT_BRIEF_v3.md` (titled v4 internally) for the full spec.
+The full spec lives in the project workspace (`PROJECT_BRIEF_v3.md`, titled v4 internally) — it is not part of this repo.

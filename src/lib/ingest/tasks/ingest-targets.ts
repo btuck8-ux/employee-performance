@@ -4,12 +4,9 @@
  * per store. The CSV `Location` column routes stores — a non-matching store
  * just yields skipped_other_location.
  *
- * Extracted from harvest.ts Source C so the two tasks entry points share ONE
- * ingest path:
- *   - the (retired-by-default) server-side dashboard-cookie harvest
- *     (guest-feedback/harvest.ts, still used for cookie-based backfills), and
- *   - POST /api/admin/import-tasks-csv, fed nightly by the Playwright
- *     GitHub-Actions harness (scripts/7tasks-nightly/).
+ * Extracted from harvest.ts Source C. Sole entry point today: the nightly
+ * guest-feedback harvest (guest-feedback/harvest.ts), which pulls the Tasks
+ * report via the public 7shifts API (tasks-api-source.ts).
  */
 
 import {

@@ -5,6 +5,10 @@ import { toastGet, toastGetWithStatus } from "@/lib/ingest/toast/client";
 /**
  * STEP 0 probe for the Toast Kitchen ticket-time feed (handoff 2026-07-28 §4).
  *
+ * KEPT DELIBERATELY through the kitchen feed's burn-in (feed shipped early
+ * Aug 2026, migrations 041–044). Delete in the ~Sept 2026 cleanup once
+ * ingest-toast-kitchen shows ~a month of clean nightly runs. (AGENTS.md)
+ *
  * Two jobs, both read-only, no writes, no migration:
  *
  *  1. DEFAULT — hit the Kitchen export for one store + businessDate and report

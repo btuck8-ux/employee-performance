@@ -29,13 +29,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    // 7Tasks rejoined the server-side nightly 2026-07-27: Source C now pulls
-    // the PUBLIC 7shifts API (tasks-api-source.ts, token auth — the labor
-    // client), so all three sources are env-token again. The Playwright
-    // harness (7tasks-nightly.yml, 13:45 UTC) runs in PARALLEL during the
-    // cutover window; both paths are idempotent on the same natural keys.
-    // Once parity holds for a few nights, disable the harness workflow
-    // (handoff 2026-07-27 §4) — do not remove it, it is the fallback.
+    // 7Tasks rejoined the server-side nightly 2026-07-27: Source C pulls the
+    // PUBLIC 7shifts API (tasks-api-source.ts, token auth — the labor client),
+    // so all three sources are env-token again.
     const summary = await runGuestFeedbackHarvest({
       locationCodes: "all",
       sources: ["tattle", "reviews", "tasks"],

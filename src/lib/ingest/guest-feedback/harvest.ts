@@ -348,8 +348,7 @@ export async function runGuestFeedbackHarvest(
           fetchStart,
           endDate
         );
-        // Shared per-location loop (ingest-targets.ts) — the same path
-        // /api/admin/import-tasks-csv runs, so there is ONE tasks ingest.
+        // Shared per-location loop (ingest-targets.ts) — one tasks ingest.
         outcomes.push(
           ...(await ingestParsedTasksForTargets(
             supabase,

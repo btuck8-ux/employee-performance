@@ -7,10 +7,6 @@
  * seven_shifts_user_id to a 7shifts user by email (case-insensitive), and sets
  * the column. New hires get bridged automatically on the next run.
  *
- * This replaces the need to run scripts/backfill-seven-shifts-user-id.ts by
- * hand — that standalone script still exists for ad-hoc use where tokens are
- * available locally, but the cron no longer depends on it.
- *
  * The location-scoped join (user_id + location_id) at ingest time handles
  * shared emails across locations: the same user_id legitimately lands on
  * several employee rows.

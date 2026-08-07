@@ -26,7 +26,7 @@ Set these in **Settings → Secrets and variables → Actions**:
 
 | Secret              | Value                                                              |
 | ------------------- | ------------------------------------------------------------------ |
-| `CAKE_USERNAME`     | CAKE login email (e.g. `tbascom@loveandsandwiches.com`)            |
+| `CAKE_USERNAME`     | CAKE login email (e.g. `<cake-login-email>`)            |
 | `CAKE_PASSWORD`     | CAKE login password                                                |
 | `EPD_BASE_URL`      | `https://employee-performance-one.vercel.app`                      |
 | `EPD_HARVEST_TOKEN` | a token you choose; must equal Vercel env `CAKE_HARVEST_TOKEN`      |
@@ -44,7 +44,7 @@ EPD; the harvester never logs the password or token.
 cd scripts/cake-nightly
 npm install
 npx playwright install chromium
-CAKE_USERNAME='tbascom@loveandsandwiches.com' \
+CAKE_USERNAME='<cake-login-email>' \
 CAKE_PASSWORD='********' \
 EPD_BASE_URL='https://employee-performance-one.vercel.app' \
 EPD_HARVEST_TOKEN='********' \

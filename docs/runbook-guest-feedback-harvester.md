@@ -7,13 +7,13 @@ lands them through the same compute as the manual CSV uploads:
 |---|---|---|---|
 | Tattle Snapshots | `tattle` | `gettattle.com/v2/api/data/snapshots/raw-responses-csv` | Tattle Bearer |
 | Online Reviews | `reviews` | `api.tattleapp.io/v3/.../SocialMediaReview/export` → `cdn.tattleapp.io` | Tattle Bearer |
-| Per-employee 7Tasks | `7tasks` | `app.7shifts.com/api/v2/.../tasks_report` (async) | 7shifts dashboard cookie |
+| Per-employee 7Tasks | `7tasks` | 7shifts public API `/v2/company/{id}/task_lists` (tasks-api-source.ts) | 7shifts API token (the labor client's `IKES_*` tokens) |
 
 - **Fetch is shared, ingest is per-location.** Tattle snapshots/reviews are
-  pulled once (merchant 2685); the 7Tasks export runs once per 7shifts company
-  (62064 Houston, 185592 the 6 CO stores) and the CSV `Location` column routes
-  rows per store. Each `(source × location)` gets its own `ingest_runs` row with
-  an incremental window.
+  pulled once (merchant 2685); the 7Tasks pull fans out per 7shifts company
+  (62064 Houston, 185592 the 6 CO stores), calling `task_lists` per store/date
+  with stores routed by `seven_shifts_location_id`. Each `(source × location)`
+  gets its own `ingest_runs` row with an incremental window.
 - **NOLA is excluded** from all three (no Tattle/Reviews merchant feed; no
   7Tasks). Its CS/TIS stay NULL by design.
 
@@ -21,12 +21,12 @@ lands them through the same compute as the manual CSV uploads:
 
 | Var | Source | Where to capture |
 |---|---|---|
-| `TATTLE_BEARER_TOKEN` | A + B | `localStorage["ngStorage-token"]` on dashboard.gettattle.com (~42 chars) |
-| `TATTLE_REFRESH_TOKEN` | A + B (optional) | `localStorage["ngStorage-refresh_token"]` |
-| `SEVENSHIFTS_DASHBOARD_COOKIE` | C | full `Cookie` header from an authenticated app.7shifts.com request (must include the session cookie + `XSRF-TOKEN`) |
+| `TATTLE_BEARER_TOKEN` | A + B (fallback) | `localStorage["ngStorage-token"]` on dashboard.gettattle.com (~42 chars); the stored token from `scripts/tattle-nightly/` is read first |
 | `TATTLE_MERCHANT_ID` | optional | defaults to `2685` |
-| `TATTLE_REFRESH_URL` | optional | the Tattle JWT-refresh endpoint; set it to enable auto-refresh (v2 durability) |
 | `CRON_SECRET` | already set | bearer for the admin + cron routes |
+
+Source C needs no harvester-specific secret — it authenticates with the same
+`IKES_*` 7shifts API tokens the labor ingest uses (already set as Sensitive).
 
 A missing secret **throws** (surfaces as an `error` ingest_run), never a
 fake-empty success.
@@ -76,7 +76,7 @@ select source,status,count(*) from ingest_runs
 where source in ('tattle','reviews','7tasks') group by 1,2;
 ```
 
-- **Houston reconciles:** spot-check Mia Mims (EMP-100012) Q2 — Tattle qty/rating,
+- **Houston reconciles:** spot-check one HOU employee's Q2 — Tattle qty/rating,
   Reviews qty, Tasks % should be unchanged after a Houston re-harvest.
 - **No silent skips:** each run's `rows_skipped` (= `skipped_other_location`)
   should be ~0 for the targeted store. A non-zero value means a `csv_aliases`
@@ -89,14 +89,14 @@ When a vendor session expires, the source raises `SessionExpiredError`, the
 and the nightly alert fires (`maybeSendFailureAlert`). The empty-streak guard
 (`streak.ts`) also catches a source drifting `empty` for ≥3 nights.
 
-- **`recapture tattle`** → grab a fresh `ngStorage-token` (and
-  `ngStorage-refresh_token`) from dashboard.gettattle.com `localStorage`, update
-  `TATTLE_BEARER_TOKEN` (+ `TATTLE_REFRESH_TOKEN`) in Vercel, redeploy/rerun.
-  Setting `TATTLE_REFRESH_URL` lets the harvester self-refresh and avoid this.
-- **`recapture 7shifts`** → from an authenticated app.7shifts.com session, copy
-  the full `Cookie` request header into `SEVENSHIFTS_DASHBOARD_COOKIE`. 7shifts
-  exposes no client-side refresh token, so this is the main durability risk —
-  expect to recapture it sooner than Tattle (Playwright auto-login is the v2 fix).
+- **`recapture tattle`** → normally unnecessary: the `tattle-nightly` GitHub
+  Action (`scripts/tattle-nightly/`, 13:50 UTC) captures a fresh token every
+  night and POSTs it to `/api/admin/set-tattle-token`. If the Action itself is
+  broken, grab a fresh `ngStorage-token` from dashboard.gettattle.com
+  `localStorage` and update `TATTLE_BEARER_TOKEN` in Vercel as the manual
+  fallback.
+- Source C (7Tasks) uses the durable `IKES_*` API tokens — no session to
+  recapture; a 401 there means the API token itself was rotated/revoked.
 
 After updating an env var, re-run the affected window with the admin route, e.g.
 `?location=all&since=<the date of the gap>&sources=tasks`.
