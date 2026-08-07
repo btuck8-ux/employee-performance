@@ -33,7 +33,6 @@ export async function middleware(request: NextRequest) {
   const isPublicAsset =
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
-    pathname.startsWith("/api/health") ||
     // Vercel Cron sends Authorization: Bearer <CRON_SECRET> but no user
     // session. Bypass session check; each cron route enforces its own
     // CRON_SECRET match in the GET handler.

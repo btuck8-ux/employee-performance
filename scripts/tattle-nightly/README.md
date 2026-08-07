@@ -6,8 +6,7 @@ the authenticated session's storage (`oidc.user:*` localStorage key), and
 POSTs it to EPD's `POST /api/admin/set-tattle-token`. The guest-feedback
 harvester (Tattle + Reviews) reads the stored token first and only falls back
 to the hand-pasted `TATTLE_BEARER_TOKEN` env var — so token refresh stops
-being a manual chore. Mirrors `scripts/cake-nightly/` and
-`scripts/7tasks-nightly/`.
+being a manual chore. Mirrors `scripts/cake-nightly/`.
 
 Why a browser harness: Tattle auth is OIDC (oidc-client-ts) with rotating
 refresh tokens and a form-encoded token endpoint — a server-side env-stored

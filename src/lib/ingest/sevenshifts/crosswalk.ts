@@ -50,13 +50,3 @@ export async function loadCrosswalk(
     actuals_source: (r.actuals_source as string) === "cake" ? "cake" : "7shifts",
   }));
 }
-
-/**
- * 7tasks is the Colorado program (company 185592). NOLA (360494) and Houston
- * (62064) do not run 7tasks, so the task source only fans out to CO stores.
- */
-export const SEVEN_TASKS_COMPANY_ID = 185592;
-
-export function usesSevenTasks(loc: LocationCrosswalk): boolean {
-  return loc.company_id === SEVEN_TASKS_COMPANY_ID;
-}

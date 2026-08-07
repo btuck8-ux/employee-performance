@@ -9,7 +9,7 @@
  * and edits get re-captured; the upsert makes overlap free.
  *
  * Required env (GitHub repo secrets):
- *   CAKE_USERNAME      CAKE login email (e.g. tbascom@loveandsandwiches.com)
+ *   CAKE_USERNAME      CAKE login email (e.g. <cake-login-email>)
  *   CAKE_PASSWORD      CAKE login password
  *   EPD_BASE_URL       e.g. https://employee-performance-one.vercel.app
  *   EPD_HARVEST_TOKEN  matches Vercel CAKE_HARVEST_TOKEN (authorizes the import routes)
