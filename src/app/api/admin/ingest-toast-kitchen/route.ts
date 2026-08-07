@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { runToastKitchenIngest } from "@/lib/ingest/toast/kitchen-ingest";
 
 /**
@@ -24,14 +25,8 @@ export const maxDuration = 300;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
-  }
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const locationParam = (url.searchParams.get("location") ?? "").trim();

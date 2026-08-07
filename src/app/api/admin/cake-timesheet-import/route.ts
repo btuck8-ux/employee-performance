@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { nolaLocationId } from "@/lib/ingest/cake/nola-location";
 import { startRun, finishRun } from "@/lib/ingest/sevenshifts/runs";
@@ -64,13 +65,8 @@ async function nolaMaxDate(
 export async function POST(request: Request) {
   // Dedicated harvester token (least privilege); falls back to CRON_SECRET so
   // nothing breaks before CAKE_HARVEST_TOKEN is set. Once set, only it is accepted.
-  const secret = process.env.CAKE_HARVEST_TOKEN ?? process.env.CRON_SECRET;
-  if (!secret) {
-    return NextResponse.json({ error: "CAKE_HARVEST_TOKEN/CRON_SECRET not configured" }, { status: 500 });
-  }
-  if ((request.headers.get("authorization") ?? "") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearer(request, process.env.CAKE_HARVEST_TOKEN ?? process.env.CRON_SECRET, "CAKE_HARVEST_TOKEN/CRON_SECRET");
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const windowStart = (url.searchParams.get("window_start") ?? "").trim() || undefined;
