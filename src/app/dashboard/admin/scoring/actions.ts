@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/authz";
 import {
   fetchCustomerServiceWeights,
   type CustomerServiceWeights,
@@ -37,6 +37,11 @@ function parseWeight(raw: FormDataEntryValue | null): number {
 export async function updateCustomerServiceWeightsAction(formData: FormData) {
   const back = "/dashboard/admin/scoring";
 
+  // system_admin only (Phase A, locked decision 3). Server actions are
+  // directly POSTable, so the check lives here, not just on the page.
+  const { role, supabase } = await getSessionRole();
+  if (role !== "system_admin") redirect("/dashboard");
+
   const wTattle = parseWeight(formData.get("weight_tattle"));
   const wReviews = parseWeight(formData.get("weight_reviews"));
   const wTip = parseWeight(formData.get("weight_tip"));
@@ -63,8 +68,6 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
       )}`
     );
   }
-
-  const supabase = await createClient();
 
   // Update the singleton row. We don't need to know its id — just update the
   // single row in the table (matches partial unique index ((true))).
@@ -168,6 +171,10 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
 export async function updateTotalImpactWeightsAction(formData: FormData) {
   const back = "/dashboard/admin/scoring";
 
+  // system_admin only (Phase A, locked decision 3) — same gate as the CS action.
+  const { role, supabase } = await getSessionRole();
+  if (role !== "system_admin") redirect("/dashboard");
+
   const wCs = parseWeight(formData.get("weight_cs_score"));
   const wAtt = parseWeight(formData.get("weight_attendance"));
   const wOn = parseWeight(formData.get("weight_on_time"));
@@ -195,8 +202,6 @@ export async function updateTotalImpactWeightsAction(formData: FormData) {
       )}`
     );
   }
-
-  const supabase = await createClient();
 
   const { data: existing } = await supabase
     .from("total_impact_score_config")

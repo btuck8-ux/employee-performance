@@ -94,7 +94,7 @@ derivable from the code alone.
   (src/proxy.ts — Next 16 renamed middleware to proxy; renamed here 2026-08-07).
   `maxDuration` cannot be exported from `"use server"` files (Next 16
   Turbopack).
-- Migrations: 015 intentionally absent; current head is 045. When Cowork
+- Migrations: 015 intentionally absent; current head is 046. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are
