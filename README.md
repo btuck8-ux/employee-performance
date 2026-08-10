@@ -56,16 +56,23 @@ GitHub Actions (browser harnesses):
 | Action | Time (UTC) | Lands on |
 |---|---|---|
 | `cake-nightly` | 13:30 | `/api/admin/cake-profile-ids`, `/api/admin/cake-timesheet-import` (NOLA labor) |
-| `tattle-nightly` | 13:50 | `/api/admin/set-tattle-token` (fresh Tattle token) |
+| `tattle-nightly` | 13:50 | `/api/admin/set-tattle-token` (Tattle token — see note) |
 
-Outbound feeds — polled daily by CulturePulse in production (shape changes require coordination, see AGENTS.md):
+> **tattle-nightly reality check (2026-08-10):** the Action is scheduled but not
+> operational — it has run exactly once ever (failed, 2026-07-27) and has never
+> stored a token. The Tattle feed rides the env `TATTLE_BEARER_TOKEN` with
+> manual recapture (see the guest-feedback runbook); the nightly alert email is
+> the tripwire when that token expires. The `/api/admin/set-tattle-token`
+> landing point stays live for the Action.
 
-- `/api/identity` (08:45 UTC poll)
-- `/api/scores` (09:00 UTC poll)
+Outbound feeds — polled daily in production by CulturePulse (08:45/09:00 UTC) and Training HQ (11:15 UTC). Shape changes require coordination (see AGENTS.md); the payload is additive-only:
+
+- `/api/identity` — CP 08:45 UTC poll
+- `/api/scores` — CP 09:00 UTC, THQ 11:15 UTC; serves the 11 composite fields plus, since migration 045, the 9 individual metrics behind CS/TIS (wire names mirror `performance_records` columns; `null` = not-computed, never 0)
 
 ## Database
 
-Schema migrations live in `supabase/migrations/` (head: 044; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
+Schema migrations live in `supabase/migrations/` (head: 045; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
 
 ## Build phases
 

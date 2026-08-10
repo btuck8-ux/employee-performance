@@ -21,7 +21,7 @@ lands them through the same compute as the manual CSV uploads:
 
 | Var | Source | Where to capture |
 |---|---|---|
-| `TATTLE_BEARER_TOKEN` | A + B (fallback) | `localStorage["ngStorage-token"]` on dashboard.gettattle.com (~42 chars); the stored token from `scripts/tattle-nightly/` is read first |
+| `TATTLE_BEARER_TOKEN` | A + B (the live path) | `localStorage["ngStorage-token"]` on dashboard.gettattle.com (~42 chars). A stored token from `scripts/tattle-nightly/` would be read first, but the Action has never stored one (see "recapture tattle" below) — the env var is what actually authenticates |
 | `TATTLE_MERCHANT_ID` | optional | defaults to `2685` |
 | `CRON_SECRET` | already set | bearer for the admin + cron routes |
 
@@ -89,12 +89,14 @@ When a vendor session expires, the source raises `SessionExpiredError`, the
 and the nightly alert fires (`maybeSendFailureAlert`). The empty-streak guard
 (`streak.ts`) also catches a source drifting `empty` for ≥3 nights.
 
-- **`recapture tattle`** → normally unnecessary: the `tattle-nightly` GitHub
-  Action (`scripts/tattle-nightly/`, 13:50 UTC) captures a fresh token every
-  night and POSTs it to `/api/admin/set-tattle-token`. If the Action itself is
-  broken, grab a fresh `ngStorage-token` from dashboard.gettattle.com
-  `localStorage` and update `TATTLE_BEARER_TOKEN` in Vercel as the manual
-  fallback.
+- **`recapture tattle`** → this IS the live path (2026-08-10 reality check):
+  the `tattle-nightly` GitHub Action (`scripts/tattle-nightly/`, scheduled
+  13:50 UTC, POSTs to `/api/admin/set-tattle-token`) has run exactly once
+  ever — it failed on 2026-07-27 and has never stored a token
+  (`app_settings` is empty). The feed rides the env `TATTLE_BEARER_TOKEN`
+  until it expires; when the alert email fires, grab a fresh
+  `ngStorage-token` from dashboard.gettattle.com `localStorage` and update
+  `TATTLE_BEARER_TOKEN` in Vercel.
 - Source C (7Tasks) uses the durable `IKES_*` API tokens — no session to
   recapture; a 401 there means the API token itself was rotated/revoked.
 

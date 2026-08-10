@@ -4,13 +4,25 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { LOCATION_CODES } from "@/lib/location-codes";
 
 /**
- * EPD -> Culture Pulse performance-scores feed.
+ * EPD performance-scores feed (consumers: Culture Pulse daily 09:00 UTC,
+ * Training HQ daily 11:15 UTC).
  *
  * Read-only REST endpoint backed by the `v_employee_scores` view (and
- * `v_employee_scores_latest` for the default `period=latest`). CP polls this
- * to pull per-employee Customer Service Score + Total Impact Score, joining on
- * `employee_code` (primary, durable key) + `location_code`. See
+ * `v_employee_scores_latest` for the default `period=latest`). Consumers pull
+ * per-employee Customer Service Score + Total Impact Score plus, since
+ * migration 045 (2026-08-10), the 9 individual metrics behind the composites
+ * (`on_time_grace_pct`, `attendance_pct`, `survey_engagement_pct`,
+ * `customer_service_rating`, `tattle_rating`, `tattle_score_food_quality`,
+ * `tattle_score_accuracy`, `tattle_score_speed_of_service`,
+ * `avg_task_list_completion_pct` — names mirror the internal
+ * performance_records columns; null = not-computed, never 0). Join keys are
+ * `employee_code` (primary, durable) + `location_code`. See
  * scores-feed-endpoint-handoff.md / epd-scores-feed-handoff.md (authoritative).
+ *
+ * Additive-only contract: the view may only ever append columns at the end
+ * (Postgres `create or replace view` enforces it); this route passes rows
+ * through unchanged via select("*"), so the original 11-field shape both live
+ * consumers parse is byte-compatible.
  *
  * Auth: `Authorization: Bearer <SCORES_FEED_TOKEN>` — a distinct env from
  * CRON_SECRET, mirroring the cron route's bearer pattern. The route does its
