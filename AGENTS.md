@@ -29,13 +29,20 @@ derivable from the code alone.
 
 ## Live consumers — coordinate before ANY shape change
 
-- `/api/scores` + `/api/identity` are polled **daily by CulturePulse in
-  production** (identity 08:45 UTC, scores 09:00 UTC). Response shapes,
-  auth semantics, and pagination are a cross-project contract.
+- `/api/scores` + `/api/identity` are polled **daily in production** —
+  CulturePulse (identity 08:45 UTC, scores 09:00 UTC) and Training HQ
+  (scores 11:15 UTC). Response shapes, auth semantics, and pagination are
+  a cross-project contract. The scores payload is additive-only: mig 045
+  appended the 9 individual metrics behind CS/TIS (wire names mirror
+  `performance_records` columns; null = not-computed, never 0;
+  `scores-feed-contract.test.ts` pins the shape).
 - `/api/admin/cake-profile-ids` + `/api/admin/cake-timesheet-import` are
   the **cake-nightly GitHub Action's** landing points (13:30 UTC daily).
 - `/api/admin/set-tattle-token` is the **tattle-nightly Action's** landing
-  point (13:50 UTC daily).
+  point (scheduled 13:50 UTC daily — but the Action has run exactly once
+  ever, failed 2026-07-27, and has never stored a token; the Tattle feed
+  actually rides env `TATTLE_BEARER_TOKEN` + manual recapture, with the
+  nightly alert email as the expiry tripwire).
 - Avoid landing merges during the nightly ingest window (~09:00–10:15 UTC)
   and the GH-Action window (~13:30–14:00 UTC).
 
@@ -87,7 +94,7 @@ derivable from the code alone.
   (src/proxy.ts — Next 16 renamed middleware to proxy; renamed here 2026-08-07).
   `maxDuration` cannot be exported from `"use server"` files (Next 16
   Turbopack).
-- Migrations: 015 intentionally absent; current head is 044. When Cowork
+- Migrations: 015 intentionally absent; current head is 045. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are
