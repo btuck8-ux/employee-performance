@@ -72,7 +72,7 @@ Outbound feeds — polled daily in production by CulturePulse (08:45/09:00 UTC) 
 
 ## Database
 
-Schema migrations live in `supabase/migrations/` (head: 046; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
+Schema migrations live in `supabase/migrations/` (head: 047; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
 
 ## Build phases
 

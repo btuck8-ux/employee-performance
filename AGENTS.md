@@ -94,7 +94,16 @@ derivable from the code alone.
   (src/proxy.ts — Next 16 renamed middleware to proxy; renamed here 2026-08-07).
   `maxDuration` cannot be exported from `"use server"` files (Next 16
   Turbopack).
-- Migrations: 015 intentionally absent; current head is 046. When Cowork
+- RLS is role-scoped (047): reads via the `epd_*` security-definer helpers
+  per the Phase B classification; **writes are system_admin-only on every
+  table** — operational writes ride the service role, which bypasses RLS.
+  `app_settings` has RLS enabled with ZERO policies (deny-all to
+  authenticated) **deliberately** — tokens live there; don't "fix" it.
+  `public.users` is a pre-RBAC vestige kept only as an FK target (SA-only
+  policies; the signup trigger writes it) — the real role model is
+  `user_roles`. Behavioral policy tests:
+  `supabase/tests/phase_b_policy_tests.sql` (run via MCP, self-rolling-back).
+- Migrations: 015 intentionally absent; current head is 047. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are
