@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { fetchTotalImpactWeights } from "@/lib/total-impact-score";
-import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { getSessionRole } from "@/lib/authz";
 import {
   updateCustomerServiceWeightsAction,
   updateTotalImpactWeightsAction,
@@ -19,7 +20,11 @@ export default async function ScoringAdminPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const search = await searchParams;
-  const supabase = await createClient();
+  // system_admin only (Phase A, locked decision 3) — server-side, not UI-only.
+  // The server actions in ./actions.ts re-check independently; this page gate
+  // alone would not stop a hand-crafted POST.
+  const { role, supabase } = await getSessionRole();
+  if (role !== "system_admin") redirect("/dashboard");
   const weights = await fetchCustomerServiceWeights(supabase);
   const tisWeights = await fetchTotalImpactWeights(supabase);
 
