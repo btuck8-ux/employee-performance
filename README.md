@@ -68,11 +68,11 @@ GitHub Actions (browser harnesses):
 Outbound feeds — polled daily in production by CulturePulse (08:45/09:00 UTC) and Training HQ (11:15 UTC). Shape changes require coordination (see AGENTS.md); the payload is additive-only:
 
 - `/api/identity` — CP 08:45 UTC poll
-- `/api/scores` — CP 09:00 UTC, THQ 11:15 UTC; serves the 11 composite fields plus, since migration 045, the 9 individual metrics behind CS/TIS (wire names mirror `performance_records` columns; `null` = not-computed, never 0)
+- `/api/scores` — CP 09:00 UTC, THQ 11:15 UTC; serves the 11 composite fields plus the 9 individual metrics behind CS/TIS (mig 045) and the 6 per-metric count fields (mig 048) — 26 columns total, wire names mirror `performance_records` columns, `null` = not-computed, never 0
 
 ## Database
 
-Schema migrations live in `supabase/migrations/` (head: 047; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
+Schema migrations live in `supabase/migrations/` (head: 048; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
 
 ## Build phases
 
