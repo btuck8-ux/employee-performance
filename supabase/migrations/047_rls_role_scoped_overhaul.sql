@@ -15,6 +15,11 @@
 --     `(select public.helper())` so Postgres evaluates them once per
 --     statement (InitPlan), never per row. Row-dependent predicates reduce
 --     to array membership / uuid equality against those InitPlans.
+--     Array-valued helpers carry an explicit `::uuid[]` cast inside ANY —
+--     `= any ((select public.helper())::uuid[])` — because a bare
+--     parenthesized subquery makes Postgres parse `ANY (subquery)` (row-set
+--     form: uuid = uuid[] → 42883); the cast forces the array form while
+--     keeping the single InitPlan (verified: Index Cond on (InitPlan 1)).
 --
 -- Policy naming: <table>_read (FOR SELECT) + <table>_sa_write (FOR ALL).
 -- Every table keeps an EXPLICIT select policy; no table's read model relies
@@ -116,7 +121,7 @@ drop policy toast_item_fulfillments_authenticated_read      on public.toast_item
 create policy performance_records_read on public.performance_records
   for select to authenticated
   using (
-    location_id = any ((select public.epd_authorized_location_ids()))
+    location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     or employee_id = (select public.epd_self_employee_id())
   );
 create policy performance_records_sa_write on public.performance_records
@@ -127,7 +132,7 @@ create policy performance_records_sa_write on public.performance_records
 create policy generated_reports_read on public.generated_reports
   for select to authenticated
   using (
-    location_id = any ((select public.epd_authorized_location_ids()))
+    location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     or employee_id = (select public.epd_self_employee_id())
   );
 create policy generated_reports_sa_write on public.generated_reports
@@ -138,7 +143,7 @@ create policy generated_reports_sa_write on public.generated_reports
 create policy time_entries_read on public.time_entries
   for select to authenticated
   using (
-    location_id = any ((select public.epd_authorized_location_ids()))
+    location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     or employee_id = (select public.epd_self_employee_id())
   );
 create policy time_entries_sa_write on public.time_entries
@@ -149,7 +154,7 @@ create policy time_entries_sa_write on public.time_entries
 create policy employees_read on public.employees
   for select to authenticated
   using (
-    location_id = any ((select public.epd_authorized_location_ids()))
+    location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     or id = (select public.epd_self_employee_id())
   );
 create policy employees_sa_write on public.employees
@@ -165,7 +170,7 @@ create policy employees_sa_write on public.employees
 
 create policy tattle_attributions_read on public.tattle_attributions
   for select to authenticated
-  using (employee_id = any ((select public.epd_readable_employee_ids())));
+  using (employee_id = any ((select public.epd_readable_employee_ids())::uuid[]));
 create policy tattle_attributions_sa_write on public.tattle_attributions
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -173,7 +178,7 @@ create policy tattle_attributions_sa_write on public.tattle_attributions
 
 create policy review_attributions_read on public.review_attributions
   for select to authenticated
-  using (employee_id = any ((select public.epd_readable_employee_ids())));
+  using (employee_id = any ((select public.epd_readable_employee_ids())::uuid[]));
 create policy review_attributions_sa_write on public.review_attributions
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -181,7 +186,7 @@ create policy review_attributions_sa_write on public.review_attributions
 
 create policy task_accountability_read on public.task_accountability
   for select to authenticated
-  using (employee_id = any ((select public.epd_readable_employee_ids())));
+  using (employee_id = any ((select public.epd_readable_employee_ids())::uuid[]));
 create policy task_accountability_sa_write on public.task_accountability
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -189,7 +194,7 @@ create policy task_accountability_sa_write on public.task_accountability
 
 create policy task_owners_read on public.task_owners
   for select to authenticated
-  using (employee_id = any ((select public.epd_readable_employee_ids())));
+  using (employee_id = any ((select public.epd_readable_employee_ids())::uuid[]));
 create policy task_owners_sa_write on public.task_owners
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -197,7 +202,7 @@ create policy task_owners_sa_write on public.task_owners
 
 create policy survey_assignments_read on public.survey_assignments
   for select to authenticated
-  using (employee_id = any ((select public.epd_readable_employee_ids())));
+  using (employee_id = any ((select public.epd_readable_employee_ids())::uuid[]));
 create policy survey_assignments_sa_write on public.survey_assignments
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -209,7 +214,7 @@ create policy survey_assignments_sa_write on public.survey_assignments
 
 create policy locations_read on public.locations
   for select to authenticated
-  using (id = any ((select public.epd_authorized_location_ids())));
+  using (id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy locations_sa_write on public.locations
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -217,7 +222,7 @@ create policy locations_sa_write on public.locations
 
 create policy sales_records_read on public.sales_records
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy sales_records_sa_write on public.sales_records
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -225,7 +230,7 @@ create policy sales_records_sa_write on public.sales_records
 
 create policy customer_reviews_read on public.customer_reviews
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy customer_reviews_sa_write on public.customer_reviews
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -233,7 +238,7 @@ create policy customer_reviews_sa_write on public.customer_reviews
 
 create policy tattle_surveys_read on public.tattle_surveys
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy tattle_surveys_sa_write on public.tattle_surveys
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -241,7 +246,7 @@ create policy tattle_surveys_sa_write on public.tattle_surveys
 
 create policy surveys_read on public.surveys
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy surveys_sa_write on public.surveys
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -249,7 +254,7 @@ create policy surveys_sa_write on public.surveys
 
 create policy tasks_read on public.tasks
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy tasks_sa_write on public.tasks
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -257,7 +262,7 @@ create policy tasks_sa_write on public.tasks
 
 create policy team_tip_impact_read on public.team_tip_impact
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy team_tip_impact_sa_write on public.team_tip_impact
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -265,7 +270,7 @@ create policy team_tip_impact_sa_write on public.team_tip_impact
 
 create policy toast_item_fulfillments_read on public.toast_item_fulfillments
   for select to authenticated
-  using (location_id = any ((select public.epd_authorized_location_ids())));
+  using (location_id = any ((select public.epd_authorized_location_ids())::uuid[]));
 create policy toast_item_fulfillments_sa_write on public.toast_item_fulfillments
   for all to authenticated
   using ((select public.epd_is_system_admin()))
@@ -281,7 +286,7 @@ create policy tattle_responses_read on public.tattle_responses
     exists (
       select 1 from public.tattle_surveys ts
       where ts.id = tattle_survey_id
-        and ts.location_id = any ((select public.epd_authorized_location_ids()))
+        and ts.location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     )
   );
 create policy tattle_responses_sa_write on public.tattle_responses

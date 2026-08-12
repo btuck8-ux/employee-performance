@@ -81,22 +81,22 @@ const DROPPED_STORAGE = [
  * `... or true` — fails the pin.
  */
 const EMP_DIRECT =
-  "location_id = any ((select public.epd_authorized_location_ids())) or employee_id = (select public.epd_self_employee_id())";
-const EMP_ARRAY = "employee_id = any ((select public.epd_readable_employee_ids()))";
-const LOC_GRAIN = "location_id = any ((select public.epd_authorized_location_ids()))";
+  "location_id = any ((select public.epd_authorized_location_ids())::uuid[]) or employee_id = (select public.epd_self_employee_id())";
+const EMP_ARRAY = "employee_id = any ((select public.epd_readable_employee_ids())::uuid[])";
+const LOC_GRAIN = "location_id = any ((select public.epd_authorized_location_ids())::uuid[])";
 const SA_ONLY = "(select public.epd_is_system_admin())";
 
 const READ_MATRIX: Array<[string, string]> = [
   ["performance_records", EMP_DIRECT],
   ["generated_reports", EMP_DIRECT],
   ["time_entries", EMP_DIRECT],
-  ["employees", "location_id = any ((select public.epd_authorized_location_ids())) or id = (select public.epd_self_employee_id())"],
+  ["employees", "location_id = any ((select public.epd_authorized_location_ids())::uuid[]) or id = (select public.epd_self_employee_id())"],
   ["tattle_attributions", EMP_ARRAY],
   ["review_attributions", EMP_ARRAY],
   ["task_accountability", EMP_ARRAY],
   ["task_owners", EMP_ARRAY],
   ["survey_assignments", EMP_ARRAY],
-  ["locations", "id = any ((select public.epd_authorized_location_ids()))"],
+  ["locations", "id = any ((select public.epd_authorized_location_ids())::uuid[])"],
   ["sales_records", LOC_GRAIN],
   ["customer_reviews", LOC_GRAIN],
   ["tattle_surveys", LOC_GRAIN],
@@ -104,7 +104,7 @@ const READ_MATRIX: Array<[string, string]> = [
   ["tasks", LOC_GRAIN],
   ["team_tip_impact", LOC_GRAIN],
   ["toast_item_fulfillments", LOC_GRAIN],
-  ["tattle_responses", "exists ( select 1 from public.tattle_surveys ts where ts.id = tattle_survey_id and ts.location_id = any ((select public.epd_authorized_location_ids())) )"],
+  ["tattle_responses", "exists ( select 1 from public.tattle_surveys ts where ts.id = tattle_survey_id and ts.location_id = any ((select public.epd_authorized_location_ids())::uuid[]) )"],
   ["report_periods", "true"],
   ["metric_thresholds", "true"],
   ["clients", SA_ONLY],
