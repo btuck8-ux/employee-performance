@@ -4,13 +4,15 @@
  * The route serves `select("*")` straight off `v_employee_scores(_latest)`, so
  * the wire shape IS the view shape. Two live consumers (Culture Pulse 09:00
  * UTC, Training HQ 11:15 UTC) parse it in production. These tests pin the
- * contract at its source — migration 045's view definitions:
+ * contract at its source — the latest view-replacing migration (048):
  *
- *   (a) the 9 individual metrics are present, appended AFTER the original 11;
- *   (b) each metric is a straight `pr.<col> as <col>` pass-through — no
- *       coalesce/nullif, so SQL null (not-computed) reaches the wire as JSON
- *       null, never 0;
- *   (c) the original 11 fields are unchanged in name and order.
+ *   (a) 26 columns in locked order: the original 11, the 9 metrics (mig 045),
+ *       the 6 per-metric counts (mig 048) — always appended, never reordered;
+ *   (b) every metric and count is a straight `pr.<col> as <col>` pass-through
+ *       — no coalesce/nullif, so SQL null (not-computed) reaches the wire as
+ *       JSON null, never 0 (317 real surveys_completed=0 rows depend on the
+ *       distinction);
+ *   (c) the pre-existing fields are unchanged in name and order.
  *
  * If a future migration replaces these views, point MIGRATION_FILE at it —
  * the assertions are the contract, the filename is incidental.
@@ -23,7 +25,7 @@ import { join } from "node:path";
 
 const MIGRATION_FILE = join(
   process.cwd(),
-  "supabase/migrations/045_v_employee_scores_metrics.sql"
+  "supabase/migrations/048_v_employee_scores_count_fields.sql"
 );
 
 /** The 11 columns both live consumers already parse — order matters. */
@@ -52,6 +54,16 @@ const NEW_9 = [
   "tattle_score_accuracy",
   "tattle_score_speed_of_service",
   "avg_task_list_completion_pct",
+];
+
+/** The 6 count fields (THQ memo 2026-08-12, FINAL): order is contract. */
+const COUNTS_6 = [
+  "surveys_assigned",
+  "surveys_completed",
+  "customer_review_quantity",
+  "tattle_quantity",
+  "tasks_accountable",
+  "tasks_completed",
 ];
 
 const sql = readFileSync(MIGRATION_FILE, "utf8");
@@ -95,15 +107,15 @@ function outputColumns(stmt: string): string[] {
 }
 
 for (const view of ["v_employee_scores", "v_employee_scores_latest"]) {
-  test(`${view}: original 11 columns unchanged, 9 metrics appended at the end`, () => {
+  test(`${view}: 26-column shape — 11 original + 9 metrics + 6 counts, in order`, () => {
     const cols = outputColumns(viewStatement(view));
-    assert.deepEqual(cols, [...ORIGINAL_11, ...NEW_9]);
+    assert.deepEqual(cols, [...ORIGINAL_11, ...NEW_9, ...COUNTS_6]);
   });
 }
 
-test("v_employee_scores: each metric is a straight pass-through (null stays null)", () => {
+test("v_employee_scores: each metric and count is a straight pass-through (null stays null)", () => {
   const stmt = viewStatement("v_employee_scores");
-  for (const col of NEW_9) {
+  for (const col of [...NEW_9, ...COUNTS_6]) {
     const line = stmt
       .split("\n")
       .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/\s+/g, " "))
@@ -119,12 +131,12 @@ test("v_employee_scores: each metric is a straight pass-through (null stays null
   assert.doesNotMatch(code, /coalesce|nullif/i, "no null-rewriting anywhere in the view");
 });
 
-test("v_employee_scores_latest: each metric is a bare column pass-through (null stays null)", () => {
+test("v_employee_scores_latest: each metric and count is a bare column pass-through (null stays null)", () => {
   const stmt = viewStatement("v_employee_scores_latest");
   const lines = stmt
     .split("\n")
     .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, ""));
-  for (const col of NEW_9) {
+  for (const col of [...NEW_9, ...COUNTS_6]) {
     assert.ok(
       lines.includes(col),
       `${col} must be selected as a bare identifier — no coalesce/nullif/expressions`
