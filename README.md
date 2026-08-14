@@ -70,6 +70,7 @@ Outbound feeds — polled daily in production by CulturePulse (08:45/09:00 UTC) 
 
 - `/api/identity` — CP 08:45 UTC poll
 - `/api/scores` — CP 09:00 UTC, THQ 11:15 UTC; serves the 11 composite fields plus the 9 individual metrics behind CS/TIS (mig 045) and the 6 per-metric count fields (mig 048) — 26 columns total, wire names mirror `performance_records` columns, `null` = not-computed, never 0
+- `/api/scores/range` — THQ on-demand (server-side pass-through, 10-min cache TTL); computes the 9 metrics + 6 counts over an arbitrary `start`/`end` window (calendar-valid, ≥ 2026-01-01, ≤ 366 days) via the canonical range engine — no composites in v1, `null` = not-computable-for-window, pagination `page`/`limit` default 25 / max 50, same `SCORES_FEED_TOKEN` bearer. Contract: the 2026-08-14 THQ memo (locked); `range-feed-contract.test.ts` pins the shape
 
 ## Database
 
