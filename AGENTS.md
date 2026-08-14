@@ -110,7 +110,7 @@ derivable from the code alone.
   policies; the signup trigger writes it) — the real role model is
   `user_roles`. Behavioral policy tests:
   `supabase/tests/phase_b_policy_tests.sql` (run via MCP, self-rolling-back).
-- Migrations: 015 intentionally absent; current head is 049. When Cowork
+- Migrations: 015 intentionally absent; current head is 050. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are
