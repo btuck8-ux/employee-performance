@@ -93,6 +93,9 @@ export interface ScheduleCollapseOutcome {
   unmatched: string[];
   /** Deduped display labels for rows resolving to inactive employees. */
   inactive_skipped: string[];
+  /** Row-level counts (labels above are deduped, so they undercount). */
+  unmatched_rows: number;
+  inactive_rows: number;
   skipped_no_start: number;
   /** Days where one person had more than one CP shift (merged per CSV rule). */
   multi_shift_days: number;
@@ -134,6 +137,8 @@ export function collapseCpSchedule(
 ): ScheduleCollapseOutcome {
   const unmatched = new Set<string>();
   const inactiveSkipped = new Set<string>();
+  let unmatchedRows = 0;
+  let inactiveRows = 0;
   let skippedNoStart = 0;
   let resolvedByCode = 0;
   let resolvedBySevenShiftsId = 0;
@@ -153,10 +158,12 @@ export function collapseCpSchedule(
     }
     if (!employee) {
       unmatched.add(rowLabel(row));
+      unmatchedRows += 1;
       continue;
     }
     if (!employee.active) {
       inactiveSkipped.add(rowLabel(row));
+      inactiveRows += 1;
       continue;
     }
 
@@ -222,6 +229,8 @@ export function collapseCpSchedule(
     resolved_by_seven_shifts_id: resolvedBySevenShiftsId,
     unmatched: Array.from(unmatched),
     inactive_skipped: Array.from(inactiveSkipped),
+    unmatched_rows: unmatchedRows,
+    inactive_rows: inactiveRows,
     skipped_no_start: skippedNoStart,
     multi_shift_days: multiShiftDays,
   };

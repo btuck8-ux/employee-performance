@@ -31,6 +31,9 @@ const UPSERT_BATCH = 500;
 
 export interface ScheduleIngestStats {
   entries_upserted: number;
+  /** Collapsed (employee, day) entries whose LOCAL date fell outside the
+   * requested window (the fetch over-pulls a day each side by design). */
+  out_of_window: number;
   employees_touched: number;
   quarters_recomputed: number;
   records_recomputed: number;
@@ -38,6 +41,8 @@ export interface ScheduleIngestStats {
   resolved_by_seven_shifts_id: number;
   unmatched: string[];
   inactive_skipped: string[];
+  unmatched_rows: number;
+  inactive_rows: number;
   skipped_no_start: number;
   multi_shift_days: number;
   failures: string[];
@@ -46,7 +51,8 @@ export interface ScheduleIngestStats {
 export async function ingestCpSchedulesForLocation(
   supabase: AdminClient,
   loc: { id: string; location_code: string },
-  rows: CpScheduleRow[]
+  rows: CpScheduleRow[],
+  window: { sinceDate: string; untilDate: string }
 ): Promise<ScheduleIngestStats> {
   const tz = timezoneForLocationCode(loc.location_code);
 
@@ -61,9 +67,16 @@ export async function ingestCpSchedulesForLocation(
   );
   const collapse = collapseCpSchedule(rows, index, tz);
 
-  const payloads = collapse.entries.map((e) =>
-    buildScheduledEntryPayload(e, loc.id)
+  // Trim to the exact LOCAL-date window: the UTC fetch over-pulls a day on
+  // each side so edge shifts project correctly; anything landing outside
+  // [since, until] — notably pre-backfill-floor dates that CSV-era rows own
+  // — must not be written (Codex findings 1+2, 2026-08-14).
+  const inWindow = collapse.entries.filter(
+    (e) => e.entry_date >= window.sinceDate && e.entry_date <= window.untilDate
   );
+  const outOfWindow = collapse.entries.length - inWindow.length;
+
+  const payloads = inWindow.map((e) => buildScheduledEntryPayload(e, loc.id));
 
   let upserted = 0;
   for (let i = 0; i < payloads.length; i += UPSERT_BATCH) {
@@ -78,13 +91,13 @@ export async function ingestCpSchedulesForLocation(
   // Recompute touched (employee × quarter), current-or-past quarters only.
   const today = new Date().toISOString().slice(0, 10);
   const quarters = distinctQuarters(
-    collapse.entries.map((e) => e.entry_date)
+    inWindow.map((e) => e.entry_date)
   ).filter((q) => {
     const startMonth = (q.quarter - 1) * 3 + 1;
     const quarterStart = `${q.year}-${String(startMonth).padStart(2, "0")}-01`;
     return quarterStart <= today;
   });
-  const touchedEmployees = new Set(collapse.entries.map((e) => e.employee_id));
+  const touchedEmployees = new Set(inWindow.map((e) => e.employee_id));
   const jobs: RecomputeJob[] = [];
   for (const employee_id of touchedEmployees) {
     for (const q of quarters) {
@@ -95,6 +108,7 @@ export async function ingestCpSchedulesForLocation(
 
   return {
     entries_upserted: upserted,
+    out_of_window: outOfWindow,
     employees_touched: touchedEmployees.size,
     quarters_recomputed: quarters.length,
     records_recomputed: rc.recomputed,
@@ -102,6 +116,8 @@ export async function ingestCpSchedulesForLocation(
     resolved_by_seven_shifts_id: collapse.resolved_by_seven_shifts_id,
     unmatched: collapse.unmatched,
     inactive_skipped: collapse.inactive_skipped,
+    unmatched_rows: collapse.unmatched_rows,
+    inactive_rows: collapse.inactive_rows,
     skipped_no_start: collapse.skipped_no_start,
     multi_shift_days: collapse.multi_shift_days,
     failures: rc.failures,

@@ -106,6 +106,22 @@ describe("collapseCpSchedule — resolution", () => {
     assert.deepEqual(out.unmatched, ["New Hire"]);
   });
 
+  it("counts skipped ROWS separately from the deduped labels", () => {
+    const index = buildScheduleRosterIndex(ROSTER);
+    const out = collapseCpSchedule(
+      [
+        row({ id: "r1", employee_name: "New Hire", shift_start_at: "2026-06-15T15:00:00Z" }),
+        row({ id: "r2", employee_name: "New Hire", shift_start_at: "2026-06-16T15:00:00Z" }),
+      ],
+      index,
+      DENVER
+    );
+    // One label, two skipped rows — rows_skipped accounting uses the counts
+    // (Codex finding 4, 2026-08-14).
+    assert.deepEqual(out.unmatched, ["New Hire"]);
+    assert.equal(out.unmatched_rows, 2);
+  });
+
   it("skips inactive employees with a count, like the CSV importer", () => {
     const index = buildScheduleRosterIndex(ROSTER);
     const out = collapseCpSchedule(

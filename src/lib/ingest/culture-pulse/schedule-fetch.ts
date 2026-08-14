@@ -8,10 +8,12 @@
  * shift_start_at/shift_end_at, role, and — on ~99% of rows — employee_code
  * plus sevenshifts_user_id, which is what the EPD-side resolve keys on.
  *
- * The window filter is on shift_start_at in UTC; the local-date projection
- * happens EPD-side (schedule-resolve.ts). A UTC window is up to a few hours
- * wider than the intended local-date window at the edges — harmless, the
- * upsert grain is idempotent.
+ * The window filter is on shift_start_at in UTC, widened by a day on BOTH
+ * ends; the local-date projection and the exact [since, until] local-date
+ * trim happen EPD-side (schedule-resolve/-ingest). Filtering on raw UTC
+ * bounds alone would both leak pre-floor local dates (a 02:00Z start is the
+ * previous local evening) and drop late-evening shifts on the window's last
+ * local day (Codex findings 1+2, 2026-08-14).
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -39,9 +41,18 @@ async function fetchAll<T>(
   return out;
 }
 
+function shiftDate(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 /**
- * Pull one CP location's schedule rows with shift_start_at inside
- * [sinceDate, untilDate] (YYYY-MM-DD, inclusive, UTC-bounded).
+ * Pull one CP location's schedule rows whose shift_start_at COULD project
+ * into a local date inside [sinceDate, untilDate] (YYYY-MM-DD): the UTC
+ * bounds are widened a day each way; the caller trims to exact local dates
+ * after tz projection. Pagination is ordered on (shift_start_at, id) — the
+ * unique id tiebreaker keeps .range() pages stable when start times collide.
  */
 export async function fetchCpScheduleRows(
   cp: SupabaseClient,
@@ -57,9 +68,10 @@ export async function fetchCpScheduleRows(
           "id, employee_name, employee_email, shift_start_at, shift_end_at, role, employee_code, sevenshifts_user_id"
         )
         .eq("location_id", cpLocationId)
-        .gte("shift_start_at", `${sinceDate}T00:00:00.000Z`)
-        .lte("shift_start_at", `${untilDate}T23:59:59.999Z`)
+        .gte("shift_start_at", `${shiftDate(sinceDate, -1)}T00:00:00.000Z`)
+        .lte("shift_start_at", `${shiftDate(untilDate, 1)}T23:59:59.999Z`)
         .order("shift_start_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     "weekly_schedule_entries"
   );

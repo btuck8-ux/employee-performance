@@ -114,21 +114,28 @@ export async function runCpScheduleSync(
     };
     try {
       const rows = await fetchCpScheduleRows(cp, loc.cp_location_id, sinceDate, untilDate);
-      const stats = await ingestCpSchedulesForLocation(supabase, loc, rows);
+      const stats = await ingestCpSchedulesForLocation(supabase, loc, rows, {
+        sinceDate,
+        untilDate,
+      });
 
       outcome.rows_in = rows.length;
       outcome.rows_upserted = stats.entries_upserted;
+      // Row-level counts — the deduped label lists undercount (Codex #4).
       outcome.rows_skipped =
-        stats.unmatched.length + stats.inactive_skipped.length + stats.skipped_no_start;
+        stats.unmatched_rows + stats.inactive_rows + stats.skipped_no_start;
       outcome.detail = {
         entries_upserted: stats.entries_upserted,
+        out_of_window: stats.out_of_window,
         employees_touched: stats.employees_touched,
         quarters_recomputed: stats.quarters_recomputed,
         records_recomputed: stats.records_recomputed,
         resolved_by_code: stats.resolved_by_code,
         resolved_by_seven_shifts_id: stats.resolved_by_seven_shifts_id,
         unmatched: stats.unmatched.slice(0, 20),
+        unmatched_rows: stats.unmatched_rows,
         inactive_skipped: stats.inactive_skipped.slice(0, 20),
+        inactive_rows: stats.inactive_rows,
         skipped_no_start: stats.skipped_no_start,
         multi_shift_days: stats.multi_shift_days,
         recompute_failures: stats.failures.slice(0, 20),
