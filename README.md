@@ -48,6 +48,7 @@ Vercel crons (`vercel.json`), all UTC:
 | `nightly-ingest` | 09:00 | 7shifts fan-out: time punches, identity bridge, POS (HOU) |
 | `ingest-toast-sales` | 09:15 | Toast sales feed |
 | `harvest-guest-feedback` | 09:30 | Tattle snapshots + reviews + 7Tasks (API) |
+| `sync-cp-schedules` | 09:40 | CulturePulse scheduled-shifts sync (attendance/on-time inputs; first run backfills from 2026-06-01) |
 | `sync-cp-surveys` | 09:45 | CulturePulse survey sync |
 | `ingest-toast-kitchen` | 10:00 | Toast kitchen ticket times |
 

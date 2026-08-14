@@ -9,7 +9,8 @@ export type IngestSource =
   | "reviews"
   | "toast_sales"
   | "culture_pulse"
-  | "toast_kitchen";
+  | "toast_kitchen"
+  | "cp_schedule";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {
