@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionRole, type EpdRole } from "@/lib/authz";
 import {
   LayoutDashboard,
   Building2,
@@ -9,28 +9,56 @@ import {
   FileText,
   Upload,
   Settings,
+  type LucideIcon,
 } from "lucide-react";
 
-const NAV_ITEMS = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/dashboard/clients", label: "Clients", icon: Building2 },
-  { href: "/dashboard/locations", label: "Locations", icon: MapPin },
-  { href: "/dashboard/employees", label: "Employees", icon: Users },
-  { href: "/dashboard/reports", label: "Reports", icon: FileText },
-  { href: "/dashboard/uploads", label: "Uploads", icon: Upload },
-  { href: "/dashboard/admin/scoring", label: "Scoring", icon: Settings },
-];
+interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+const NAV: Record<string, NavItem> = {
+  overview: { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  clients: { href: "/dashboard/clients", label: "Clients", icon: Building2 },
+  locations: { href: "/dashboard/locations", label: "Locations", icon: MapPin },
+  employees: { href: "/dashboard/employees", label: "Employees", icon: Users },
+  reports: { href: "/dashboard/reports", label: "Reports", icon: FileText },
+  uploads: { href: "/dashboard/uploads", label: "Uploads", icon: Upload },
+  scoring: { href: "/dashboard/admin/scoring", label: "Scoring", icon: Settings },
+};
+
+/**
+ * Role-gated nav (kickoff §4, decision A: RA/AA ride the manager nav).
+ * Hiding is UX, not security — every gated page/action enforces its own
+ * server-side check, and RLS trims data regardless. SA loses the Locations
+ * item deliberately: client cards on /dashboard/clients link to each store.
+ */
+function navItemsForRole(role: EpdRole | null): NavItem[] {
+  switch (role) {
+    case "system_admin":
+      return [NAV.overview, NAV.clients, NAV.employees, NAV.reports, NAV.uploads, NAV.scoring];
+    case "regional_admin":
+    case "area_admin":
+    case "manager":
+      return [NAV.overview, NAV.locations, NAV.employees, NAV.reports];
+    case "user":
+    default:
+      // user tier is self-scoped; a null role (uninvited sign-in) fails
+      // closed to the same minimal surface.
+      return [NAV.overview];
+  }
+}
 
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user, role } = await getSessionRole();
   if (!user) redirect("/auth/login");
+
+  const items = navItemsForRole(role);
 
   return (
     <div className="min-h-screen flex bg-slate-50">
@@ -40,7 +68,7 @@ export default async function DashboardLayout({
           <p className="text-xs text-slate-500 mt-0.5">Internal platform</p>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-0.5">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
+          {items.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
