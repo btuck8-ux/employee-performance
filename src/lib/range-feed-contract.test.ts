@@ -257,6 +257,8 @@ test("page/limit: strict integers, limit capped at 50, junk is a 400 not a silen
     { page: "-1" },
     { page: "1.5" },
     { page: "abc" },
+    // Infinity-coercing digit string must 400, not serialize page as null.
+    { page: "9".repeat(400) },
     { limit: "0" },
     { limit: "51" },
     { limit: "abc" },
@@ -332,10 +334,15 @@ test("sort is (location_code, employee_code) ascending — pages never shuffle",
 
 // ---- (e) route-file text pins ----
 
-test("route: maxDuration 300, force-dynamic, shared SCORES_FEED_TOKEN bearer", () => {
+test("route: maxDuration 300, force-dynamic, shared SCORES_FEED_TOKEN bearer at a CALL site", () => {
   assert.match(routeSrc, /export const maxDuration = 300/);
   assert.match(routeSrc, /export const dynamic = "force-dynamic"/);
-  assert.match(routeSrc, /SCORES_FEED_TOKEN/);
+  // Call-site match, not identifier presence (Codex review): a dead import
+  // or comment would not satisfy these.
+  assert.match(
+    routeSrc,
+    /requireBearer\(\s*request,\s*process\.env\.SCORES_FEED_TOKEN/
+  );
 });
 
 test("route: carries the quotable DATA FLOORS block (ship-report + THQ UI dependency)", () => {
@@ -356,6 +363,6 @@ test("route: carries the quotable DATA FLOORS block (ship-report + THQ UI depend
   }
 });
 
-test("route: reuses computeMetricsForRange (no parallel scoring math)", () => {
-  assert.match(routeSrc, /computeMetricsForRange/);
+test("route: reuses computeMetricsForRange at a call site (no parallel scoring math)", () => {
+  assert.match(routeSrc, /await computeMetricsForRange\(/);
 });

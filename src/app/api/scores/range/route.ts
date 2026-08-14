@@ -250,22 +250,31 @@ export async function GET(request: Request) {
 
     // Candidates: every employee at those locations, ACTIVE OR NOT — the
     // population rule is data-in-window, so a departed employee with rows
-    // in a historical window still appears.
-    let empQuery = supabase
-      .from("employees")
-      .select("id, employee_code, employee_name, location_id")
-      .in("location_id", [...codeByLocationId.keys()]);
-    if (employeeCode) empQuery = empQuery.eq("employee_code", employeeCode);
-    const { data: employees, error: empErr } = await empQuery;
-    if (empErr) throw new Error(`employees query failed: ${empErr.message}`);
-
-    const candidates: MemberEmployee[] = (employees ?? []).map((e) => ({
-      id: e.id as string,
-      employee_code: e.employee_code as string,
-      employee_name: e.employee_name as string,
-      location_id: e.location_id as string,
-      location_code: codeByLocationId.get(e.location_id as string) ?? "",
-    }));
+    // in a historical window still appears. Paged past the PostgREST
+    // 1000-row cap (Codex review): an unpaginated fetch would silently
+    // drop members once headcount outgrows one page.
+    const candidates: MemberEmployee[] = [];
+    for (let from = 0; ; from += PROBE_PAGE) {
+      let empQuery = supabase
+        .from("employees")
+        .select("id, employee_code, employee_name, location_id")
+        .in("location_id", [...codeByLocationId.keys()])
+        .order("id", { ascending: true })
+        .range(from, from + PROBE_PAGE - 1);
+      if (employeeCode) empQuery = empQuery.eq("employee_code", employeeCode);
+      const { data: employees, error: empErr } = await empQuery;
+      if (empErr) throw new Error(`employees query failed: ${empErr.message}`);
+      for (const e of employees ?? []) {
+        candidates.push({
+          id: e.id as string,
+          employee_code: e.employee_code as string,
+          employee_name: e.employee_name as string,
+          location_id: e.location_id as string,
+          location_code: codeByLocationId.get(e.location_id as string) ?? "",
+        });
+      }
+      if ((employees ?? []).length < PROBE_PAGE) break;
+    }
 
     const memberIds = await probeMembership(
       supabase,

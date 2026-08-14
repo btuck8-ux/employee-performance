@@ -100,12 +100,17 @@ export function windowDays(start: string, end: string): number {
   return Math.round(ms / 86_400_000) + 1;
 }
 
-/** Positive-integer param: strict (junk is a 400, not a silent default). */
+/**
+ * Positive-integer param: strict (junk is a 400, not a silent default).
+ * Safe-integer bound (Codex review): an absurd digit string would coerce
+ * to Infinity, pass a bare >= 1 check, and serialize pagination.page as
+ * JSON null — a wire-contract violation.
+ */
 function parsePositiveInt(raw: string | null, fallback: number): number | null {
   if (raw === null) return fallback;
   if (!/^\d+$/.test(raw)) return null;
   const n = Number(raw);
-  return n >= 1 ? n : null;
+  return Number.isSafeInteger(n) && n >= 1 ? n : null;
 }
 
 /**
