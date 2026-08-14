@@ -86,13 +86,17 @@ export async function inviteClientAdminAction(formData: FormData) {
   if (inviteErr) {
     // Existing account (already signed up / already invited): grant the role
     // to the existing user instead of failing — no second email is sent.
-    const { data: usersPage, error: listErr } = await admin.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000,
-    });
-    const existing = listErr
-      ? null
-      : usersPage.users.find((u) => (u.email ?? "").toLowerCase() === email);
+    let existing: { id: string } | null = null;
+    for (let page = 1; page <= 10 && !existing; page += 1) {
+      const { data: usersPage, error: listErr } = await admin.auth.admin.listUsers({
+        page,
+        perPage: 1000,
+      });
+      if (listErr) break;
+      existing =
+        usersPage.users.find((u) => (u.email ?? "").toLowerCase() === email) ?? null;
+      if (usersPage.users.length < 1000) break;
+    }
     if (!existing) {
       console.warn("[clients] invite failed", {
         actor: user.id,
@@ -104,7 +108,7 @@ export async function inviteClientAdminAction(formData: FormData) {
         invite_client: clientId,
       });
     }
-    targetUserId = existing!.id;
+    targetUserId = existing.id;
     grantedExisting = true;
   } else {
     targetUserId = invited.user.id;
@@ -112,12 +116,24 @@ export async function inviteClientAdminAction(formData: FormData) {
 
   // Refuse to touch an account that already holds ANY role — changing or
   // stacking roles is not this surface's job (and silently downgrading a
-  // system_admin would be a catastrophe).
-  const { data: existingRole } = await admin
+  // system_admin would be a catastrophe). A failed lookup fails CLOSED —
+  // never fall through to the grant on an error (Codex finding, 2026-08-14).
+  const { data: existingRole, error: roleLookupErr } = await admin
     .from("user_roles")
     .select("role")
     .eq("user_id", targetUserId!)
     .maybeSingle();
+  if (roleLookupErr) {
+    console.error("[clients] role lookup failed pre-grant", {
+      actor: user.id,
+      target: targetUserId,
+      error: roleLookupErr.message,
+    });
+    back(clientId, {
+      invite_error: `Could not verify the account's existing role (${roleLookupErr.message}) — no grant made.`,
+      invite_client: clientId,
+    });
+  }
   if (existingRole) {
     back(clientId, {
       invite_error: `${email} already holds the ${existingRole.role} role — revoke it first if this is intentional.`,

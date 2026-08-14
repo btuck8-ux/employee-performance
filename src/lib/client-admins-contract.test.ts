@@ -73,18 +73,21 @@ test("helper execute: revoked from public/anon, granted to authenticated + servi
 
 test("invite + revoke actions re-check system_admin server-side (fail closed)", () => {
   assert.match(actions, /^"use server";/m);
-  // Both exported actions must gate on the session role BEFORE any
-  // service-role work — count the checks.
-  const gateCount = (
-    actions.match(/role !== "system_admin"/g) ?? []
-  ).length;
-  assert.ok(gateCount >= 2, "both actions carry the SA re-check");
-  // The role check must precede the first admin-client construction in file
-  // order for each action body; cheap proxy: no createAdminClient() call
-  // before the first gate.
-  const firstGate = actions.indexOf('role !== "system_admin"');
-  const firstAdmin = actions.indexOf("createAdminClient()");
-  assert.ok(firstGate !== -1 && firstAdmin > firstGate, "gate precedes service-role client");
+  // Per-ACTION ordering (Codex 2026-08-14 finding: a file-order check alone
+  // would pass if one action's admin client moved above its own gate): split
+  // the source at exported-action boundaries and require, inside EACH body,
+  // that the SA gate appears before any service-role client construction.
+  const bodies = actions.split(/export async function /).slice(1);
+  const actionBodies = bodies.filter((b) => b.includes("createAdminClient()"));
+  assert.equal(actionBodies.length, 2, "both actions use the service-role client");
+  for (const body of actionBodies) {
+    const gate = body.indexOf('role !== "system_admin"');
+    const admin = body.indexOf("createAdminClient()");
+    assert.ok(
+      gate !== -1 && gate < admin,
+      `SA gate precedes createAdminClient in action "${body.slice(0, 40)}…"`
+    );
+  }
 });
 
 test("invite action refuses accounts that already hold a role (no silent downgrade)", () => {
@@ -92,5 +95,12 @@ test("invite action refuses accounts that already hold a role (no silent downgra
 });
 
 test("revoke only ever deletes regional_admin rows", () => {
-  assert.match(actions, /\.eq\("role", "regional_admin"\)/);
+  // Exactly one delete path exists in the file, and it is role-filtered —
+  // a second unfiltered .delete() would fail this pin (Codex 2026-08-14).
+  const deletes = actions.match(/\.delete\(\)/g) ?? [];
+  assert.equal(deletes.length, 1, "exactly one delete path");
+  assert.match(
+    actions,
+    /\.delete\(\)\s*\.eq\("user_id", targetUserId\)\s*\.eq\("role", "regional_admin"\)/
+  );
 });
