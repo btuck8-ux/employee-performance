@@ -32,7 +32,13 @@ export async function setEmployeeActiveAction(formData: FormData) {
   const employeeId = String(formData.get("employee_id") ?? "");
   const locationId = String(formData.get("location_id") ?? "");
   const nextActive = String(formData.get("next_active") ?? "") === "1";
-  const returnTo = String(formData.get("return_to") ?? "") || "/dashboard/employees";
+  // Same-origin paths only — a caller-supplied absolute/protocol-relative
+  // URL must never reach redirect() (Codex 2026-08-14: open-redirect risk).
+  const rawReturnTo = String(formData.get("return_to") ?? "");
+  const returnTo =
+    rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//")
+      ? rawReturnTo
+      : "/dashboard/employees";
 
   const { supabase, user, role } = await getSessionRole();
   if (!user || !role || !ALLOWED_TIERS.has(role)) {

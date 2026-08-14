@@ -33,7 +33,11 @@ export default async function ReportsArchivePage({
   const builderError = pickStr(search.builder_error);
   const generatedParam = pickStr(search.generated);
   const generatedIds = generatedParam
-    ? generatedParam.split(",").filter((x) => /^[0-9a-f-]{36}$/.test(x))
+    ? generatedParam
+        .split(",")
+        .filter((x) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x)
+        )
     : [];
 
   // Locations dropdown

@@ -17,6 +17,17 @@ import { renderAndStoreCustomRangeReport } from "@/app/dashboard/employees/[id]/
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Calendar-valid ISO date (rejects pattern-passing junk like 2025-13-99). */
+function isValidIsoDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const d = new Date(`${s}T12:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+/** Per-invocation ceiling — the largest store is ~40 active employees; a
+ * bigger ask means a mis-scoped selection, not a real workload. */
+const MAX_TARGETS = 60;
+
 function back(params: Record<string, string>): never {
   const qs = new URLSearchParams(params).toString();
   redirect(`/dashboard/reports${qs ? `?${qs}` : ""}`);
@@ -54,12 +65,18 @@ export async function generateReportsBuilderAction(formData: FormData) {
   if (targets.length === 0) {
     back({ builder_error: "No employees to generate for.", builder_location: locationId });
   }
+  if (targets.length > MAX_TARGETS) {
+    back({
+      builder_error: `Refusing to generate ${targets.length} reports in one pass (max ${MAX_TARGETS}) — narrow the selection.`,
+      builder_location: locationId,
+    });
+  }
 
   const generated: string[] = [];
   const failures: string[] = [];
 
   if (periodMode === "range") {
-    if (!DATE_RE.test(rangeStart) || !DATE_RE.test(rangeEnd) || rangeStart > rangeEnd) {
+    if (!isValidIsoDate(rangeStart) || !isValidIsoDate(rangeEnd) || rangeStart > rangeEnd) {
       back({
         builder_error: "Custom range needs valid start/end dates (start ≤ end).",
         builder_location: locationId,

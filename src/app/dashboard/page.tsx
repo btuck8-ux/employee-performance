@@ -15,6 +15,13 @@ export const maxDuration = 300;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Calendar-valid ISO date (rejects pattern-passing junk like 2025-13-99). */
+function isValidIsoDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const d = new Date(`${s}T12:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
 function pickStr(v: string | string[] | undefined): string {
   if (Array.isArray(v)) return v[0] ?? "";
   return v ?? "";
@@ -80,7 +87,7 @@ export default async function DashboardHome({
   const fromParam = pickStr(search.from);
   const toParam = pickStr(search.to);
   const rangeMode =
-    DATE_RE.test(fromParam) && DATE_RE.test(toParam) && fromParam <= toParam;
+    isValidIsoDate(fromParam) && isValidIsoDate(toParam) && fromParam <= toParam;
   const quarterParam = pickStr(search.quarter);
   const selectedQuarter = rangeMode
     ? null
