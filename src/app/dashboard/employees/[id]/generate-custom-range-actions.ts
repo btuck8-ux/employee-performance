@@ -46,24 +46,22 @@ function isValidDateString(s: string): boolean {
   return !Number.isNaN(d.getTime());
 }
 
-export async function generateCustomRangePerformanceReportAction(formData: FormData) {
-  const employee_id = String(formData.get("employee_id") ?? "");
-  const range_start = String(formData.get("range_start") ?? "");
-  const range_end = String(formData.get("range_end") ?? "");
+export type CustomRangeReportResult =
+  | { ok: true; report_id: string; location_id: string }
+  | { ok: false; error: string };
 
-  if (!employee_id) return;
-
-  const back = `/dashboard/employees/${employee_id}`;
-
-  if (!isValidDateString(range_start) || !isValidDateString(range_end)) {
-    redirect(`${back}?range_error=${encodeURIComponent("Both dates are required (YYYY-MM-DD).")}`);
-  }
-  if (range_start > range_end) {
-    redirect(`${back}?range_error=${encodeURIComponent("Start date must be on or before end date.")}`);
-  }
-
-  const supabase = await createClient();
-
+/**
+ * Core of the custom-range report: compute metrics for [range_start,
+ * range_end], render + upload the PDF, insert the generated_reports row.
+ * Shared by the per-employee action below and the Reports-page builder
+ * (kickoff §5e — reuse, not reimplementation). Caller validates dates.
+ */
+export async function renderAndStoreCustomRangeReport(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  employee_id: string,
+  range_start: string,
+  range_end: string
+): Promise<CustomRangeReportResult> {
   const { data: emp, error: empErr } = await supabase
     .from("employees")
     .select(
@@ -72,12 +70,12 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     .eq("id", employee_id)
     .single();
   if (empErr || !emp) {
-    redirect(`${back}?range_error=${encodeURIComponent("Employee not found.")}`);
+    return { ok: false, error: "Employee not found." };
   }
   const location_id = emp.location_id as string;
   const loc = emp.locations as unknown as { name: string } | null;
   if (!loc) {
-    redirect(`${back}?range_error=${encodeURIComponent("Employee has no location.")}`);
+    return { ok: false, error: "Employee has no location." };
   }
 
   // Pull manager feedback that overlaps the custom range. Convention: latest
@@ -116,7 +114,7 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
   );
   if (!computed.ok) {
     console.error("[custom-range] compute failed:", computed.error);
-    redirect(`${back}?range_error=${encodeURIComponent("Could not compute metrics: " + computed.error)}`);
+    return { ok: false, error: "Could not compute metrics: " + computed.error };
   }
   const m = computed.metrics;
 
@@ -193,7 +191,7 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     });
   if (uploadError) {
     console.error("[custom-range] upload failed:", uploadError);
-    redirect(`${back}?range_error=${encodeURIComponent("Upload failed: " + uploadError.message)}`);
+    return { ok: false, error: "Upload failed: " + uploadError.message };
   }
 
   const thresholdSnapshot = {
@@ -229,9 +227,9 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     })
     .select("id")
     .single();
-  if (insertError) {
+  if (insertError || !inserted) {
     console.error("[custom-range] generated_reports insert failed:", insertError);
-    redirect(`${back}?range_error=${encodeURIComponent("DB insert failed: " + insertError.message)}`);
+    return { ok: false, error: "DB insert failed: " + (insertError?.message ?? "unknown") };
   }
 
   await supabase
@@ -243,7 +241,37 @@ export async function generateCustomRangePerformanceReportAction(formData: FormD
     `[custom-range] generated ${storage_path} for ${emp.employee_name} (${range_start} → ${range_end})`
   );
 
+  return { ok: true, report_id: inserted.id as string, location_id };
+}
+
+export async function generateCustomRangePerformanceReportAction(formData: FormData) {
+  const employee_id = String(formData.get("employee_id") ?? "");
+  const range_start = String(formData.get("range_start") ?? "");
+  const range_end = String(formData.get("range_end") ?? "");
+
+  if (!employee_id) return;
+
+  const back = `/dashboard/employees/${employee_id}`;
+
+  if (!isValidDateString(range_start) || !isValidDateString(range_end)) {
+    redirect(`${back}?range_error=${encodeURIComponent("Both dates are required (YYYY-MM-DD).")}`);
+  }
+  if (range_start > range_end) {
+    redirect(`${back}?range_error=${encodeURIComponent("Start date must be on or before end date.")}`);
+  }
+
+  const supabase = await createClient();
+  const result = await renderAndStoreCustomRangeReport(
+    supabase,
+    employee_id,
+    range_start,
+    range_end
+  );
+  if (!result.ok) {
+    redirect(`${back}?range_error=${encodeURIComponent(result.error)}`);
+  }
+
   revalidatePath(back);
-  revalidatePath(`/dashboard/locations/${location_id}`);
-  redirect(`${back}?range_report_id=${inserted?.id ?? ""}`);
+  revalidatePath(`/dashboard/locations/${result.location_id}`);
+  redirect(`${back}?range_report_id=${result.report_id}`);
 }

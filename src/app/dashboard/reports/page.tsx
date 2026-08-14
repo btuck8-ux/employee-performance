@@ -1,6 +1,13 @@
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { createClient } from "@/lib/supabase/server";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { getSessionRole } from "@/lib/authz";
+import { SubmitButton } from "@/components/ui/submit-button";
+import { ReportViewer } from "@/components/reports/ReportViewer";
+import { generateReportsBuilderAction } from "./builder-actions";
+
+// The builder can fan out over a whole location (PDF render per employee) —
+// reuse the bulk-generation ceiling.
+export const maxDuration = 300;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -20,7 +27,14 @@ export default async function ReportsArchivePage({
   const filterMode = pickStr(search.mode); // "" | "quarterly" | "custom_range"
   const includeSuperseded = pickStr(search.include_superseded) === "1";
 
-  const supabase = await createClient();
+  const { role, supabase } = await getSessionRole();
+  const isSA = role === "system_admin";
+  const builderLocation = pickStr(search.builder_location);
+  const builderError = pickStr(search.builder_error);
+  const generatedParam = pickStr(search.generated);
+  const generatedIds = generatedParam
+    ? generatedParam.split(",").filter((x) => /^[0-9a-f-]{36}$/.test(x))
+    : [];
 
   // Locations dropdown
   const { data: locations } = await supabase
@@ -37,6 +51,62 @@ export default async function ReportsArchivePage({
     name: l.name,
     client_name: l.clients?.name ?? null,
   }));
+
+  // ---- Builder data (SA only): quarters + employees at picked location ----
+  const { data: periodRows } = isSA
+    ? await supabase
+        .from("report_periods")
+        .select("id, label, period_start")
+        .order("period_start", { ascending: false })
+        .limit(8)
+    : { data: null };
+  const builderQuarters = (periodRows ?? []).map((p) => ({
+    id: p.id as string,
+    label: p.label as string,
+  }));
+  const { data: builderEmployeeRows } =
+    isSA && builderLocation
+      ? await supabase
+          .from("employees")
+          .select("id, employee_name, employee_code")
+          .eq("location_id", builderLocation)
+          .eq("active", true)
+          .order("employee_name")
+      : { data: null };
+  const builderEmployees = (builderEmployeeRows ?? []).map((e) => ({
+    id: e.id as string,
+    name: e.employee_name as string,
+    code: (e.employee_code as string | null) ?? "",
+  }));
+
+  // ---- "Generated this visit" list ----
+  const { data: generatedRows } =
+    generatedIds.length > 0
+      ? await supabase
+          .from("generated_reports")
+          .select(
+            "id, generation_mode, custom_range, report_kind, employees(employee_name), report_periods(label)"
+          )
+          .in("id", generatedIds)
+      : { data: null };
+  type GeneratedRow = {
+    id: string;
+    generation_mode: string;
+    custom_range: { start: string; end: string } | null;
+    report_kind: string;
+    employees: { employee_name: string } | null;
+    report_periods: { label: string } | null;
+  };
+  const generatedReports = ((generatedRows ?? []) as unknown as GeneratedRow[]).map(
+    (r) => ({
+      id: r.id,
+      label: `${r.employees?.employee_name ?? "—"} · ${
+        r.generation_mode === "custom_range" && r.custom_range
+          ? `${r.custom_range.start} → ${r.custom_range.end}`
+          : (r.report_periods?.label ?? "—")
+      }`,
+    })
+  );
 
   // Reports list
   let q = supabase
@@ -87,50 +157,161 @@ export default async function ReportsArchivePage({
     stale: r.feedback_updated_after_generation,
   }));
 
-  // If the user has filtered to a specific location, surface a one-click
-  // shortcut to that location's bulk-generate UI. The "Reports" page itself
-  // is an ARCHIVE — generation lives on the location and employee pages —
-  // and this shortcut keeps the workflow obvious.
-  const selectedLocation = filterLocation
-    ? locationList.find((l) => l.id === filterLocation) ?? null
-    : null;
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Archive of every generated employee performance report.{" "}
-          {reports.length} shown ({includeSuperseded ? "incl. superseded" : "current only"}).
+          Custom report builder. Each employee&apos;s full report archive lives on
+          their profile&apos;s Reports section; the browse table below spans your
+          whole purview.
         </p>
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="text-slate-700">
-          <strong>Generate new reports from:</strong>
-        </span>
-        {selectedLocation ? (
-          <Link
-            href={`/dashboard/locations/${selectedLocation.id}#bulk-generate`}
-            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-medium hover:bg-slate-100"
-          >
-            → Bulk-generate for {selectedLocation.name}
-          </Link>
-        ) : (
-          <Link
-            href="/dashboard/locations"
-            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-medium hover:bg-slate-100"
-          >
-            → Pick a location to bulk-generate
-          </Link>
-        )}
-        <Link
-          href="/dashboard/employees"
-          className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-medium hover:bg-slate-100"
-        >
-          → Pick an employee for per-quarter or custom-range
-        </Link>
-      </div>
+      {builderError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {builderError}
+        </div>
+      )}
+
+      {isSA && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Build reports</CardTitle>
+            <CardDescription>
+              Pick a location, narrow to specific employees (or leave unchecked
+              for everyone active), choose a period, then generate. Quarterly
+              uses the canonical per-quarter records; custom range recomputes
+              from raw data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form method="get" className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Location</label>
+                <select
+                  name="builder_location"
+                  defaultValue={builderLocation}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[240px]"
+                >
+                  <option value="">Pick a location…</option>
+                  {locationList.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.client_name ? `${l.client_name} — ${l.name}` : l.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="submit"
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
+              >
+                Load employees
+              </button>
+            </form>
+
+            {builderLocation && (
+              <form action={generateReportsBuilderAction} className="space-y-4">
+                <input type="hidden" name="location_id" value={builderLocation} />
+                <div>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Employees ({builderEmployees.length} active — none checked =
+                    all)
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-1 max-h-56 overflow-y-auto rounded-md border border-slate-200 p-3">
+                    {builderEmployees.map((e) => (
+                      <label
+                        key={e.id}
+                        className="flex items-center gap-2 text-sm py-0.5 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          name="employee_ids"
+                          value={e.id}
+                          className="h-4 w-4 accent-[#702F8A]"
+                        />
+                        <span className="truncate">{e.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-end gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Period</label>
+                    <select
+                      name="period_mode"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                      defaultValue="quarter"
+                    >
+                      <option value="quarter">Quarter</option>
+                      <option value="range">Custom range</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Quarter</label>
+                    <select
+                      name="report_period_id"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                      defaultValue={builderQuarters[0]?.id ?? ""}
+                    >
+                      {builderQuarters.map((q2) => (
+                        <option key={q2.id} value={q2.id}>
+                          {q2.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      Range start (custom)
+                    </label>
+                    <input
+                      type="date"
+                      name="range_start"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      Range end (custom)
+                    </label>
+                    <input
+                      type="date"
+                      name="range_end"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-slate-700 mb-1.5">
+                    <input
+                      type="checkbox"
+                      name="include_task_detail"
+                      value="1"
+                      className="h-4 w-4 accent-[#702F8A]"
+                    />
+                    Attach task detail (quarterly)
+                  </label>
+                  <SubmitButton pendingLabel="Generating…">Generate</SubmitButton>
+                </div>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {generatedReports.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Generated this visit</CardTitle>
+            <CardDescription>
+              Click a report to display it inline; use the button to open a
+              printable tab.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ReportViewer reports={generatedReports} />
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

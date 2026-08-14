@@ -8,8 +8,20 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-figtree);
+  --font-display: var(--font-baloo);
   --font-mono: var(--font-geist-mono);
+
+  /* Ike's brand palette (brand book rev 2023, kickoff §5f — exact).
+     Contrast rules: white text on purple OK; the mid green NEVER as
+     text-on-white or under white text (use green-dark); yellow only as a
+     sparing highlight chip with near-black text, never text or large fills. */
+  --color-ikes-purple: #702f8a;
+  --color-ikes-purple-dark: #572c5f;
+  --color-ikes-green: #65a43d;
+  --color-ikes-green-dark: #47793a;
+  --color-ikes-blue: #008fbc;
+  --color-ikes-yellow: #f7e200;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -22,5 +34,10 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-figtree), Arial, Helvetica, sans-serif;
+}
+
+h1,
+h2 {
+  font-family: var(--font-baloo), var(--font-figtree), sans-serif;
 }

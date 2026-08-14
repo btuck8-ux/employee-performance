@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/authz";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatTenure } from "@/lib/format";
+import { EmployeeStatusButton } from "@/components/employee/EmployeeStatusButton";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -21,7 +22,11 @@ export default async function EmployeesPage({
   const filterStatus = pickStr(search.status); // "" | "active" | "inactive" | "all"
   const status = filterStatus || "active"; // default
 
-  const supabase = await createClient();
+  const { role, supabase } = await getSessionRole();
+  // Deactivate/reactivate renders for admin/manager tiers (Tucker's §8-B
+  // ruling 2026-08-14 extends it beyond SA); the server action re-checks
+  // tier + row scope regardless. RLS already trims rows to purview.
+  const canToggleStatus = role !== null && role !== "user";
 
   // Locations + clients lists (for the dropdowns).
   const { data: locationsData } = await supabase
@@ -86,6 +91,12 @@ export default async function EmployeesPage({
   } else {
     scopeDesc = "All locations across all clients";
   }
+  const returnToParams = new URLSearchParams();
+  if (filterClient) returnToParams.set("client", filterClient);
+  if (filterLocation) returnToParams.set("location", filterLocation);
+  if (filterStatus) returnToParams.set("status", filterStatus);
+  const returnTo = `/dashboard/employees${returnToParams.size > 0 ? `?${returnToParams}` : ""}`;
+
   const statusDesc =
     status === "active" ? "active employees" : status === "inactive" ? "inactive employees" : "all employees";
 
@@ -182,6 +193,8 @@ export default async function EmployeesPage({
                   <th className="py-2 pr-4">Tenure</th>
                   <th className="py-2 pr-4">Wage</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Reports</th>
+                  {canToggleStatus && <th className="py-2 pr-4">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -232,6 +245,27 @@ export default async function EmployeesPage({
                           <span className="text-slate-500">Inactive</span>
                         )}
                       </td>
+                      <td className="py-2 pr-4 text-xs">
+                        <Link
+                          href={`/dashboard/employees/${emp.id}#reports`}
+                          className="text-ikes-blue underline-offset-2 hover:underline"
+                        >
+                          Reports
+                        </Link>
+                      </td>
+                      {canToggleStatus && (
+                        <td className="py-2 pr-4 text-xs">
+                          {loc && (
+                            <EmployeeStatusButton
+                              employeeId={emp.id}
+                              locationId={loc.id}
+                              employeeName={emp.employee_name}
+                              active={!!emp.active}
+                              returnTo={returnTo}
+                            />
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
