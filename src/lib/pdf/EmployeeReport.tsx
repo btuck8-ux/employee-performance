@@ -8,7 +8,7 @@ import {
   Image,
   StyleSheet,
 } from "@react-pdf/renderer";
-import { classifyFixed } from "@/lib/classify";
+import { classifyVsTarget, type MetricTargets } from "@/lib/classify";
 import {
   classifyCustomerServiceScore,
   computeCustomerServiceScoreBreakdown,
@@ -25,7 +25,11 @@ import {
   formatRating,
   formatTenure,
 } from "@/lib/format";
-import type { ExpectationLabel, FixedMetricKey } from "@/lib/types";
+import type {
+  ExpectationLabel,
+  TargetLabel,
+  TargetMetricKey,
+} from "@/lib/types";
 import {
   staleCategories,
   type CategoryCurrencyEntry,
@@ -58,7 +62,14 @@ import {
 // brand logo, section titles in the dark brand green — and the display-only
 // rename "Customer Service Rating" → "Online Review Rating" (wire/DB names
 // untouched). Classification band colors keep their semantic values.
-export const TEMPLATE_VERSION = "1.6.0";
+// 1.6.1 (2026-08-14 targets sprint): the nine individual metrics evaluate
+// two-tier against SA-editable metric_targets (mig 051, THQ-aligned) —
+// "On Target" (green) / "Below Target" (red); the Exceeds band and the
+// yellow Meets band are retired for these rows (composites/tip/kitchen
+// badges keep three tiers). On-time classifies the grace variant (the value
+// these reports have always displayed). New row: Avg Task-List Completion %
+// (the ninth target metric, previously absent from this report).
+export const TEMPLATE_VERSION = "1.6.1";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -226,9 +237,11 @@ const styles = StyleSheet.create({
   },
 });
 
-function badgeStyle(label: ExpectationLabel | null) {
+function badgeStyle(label: ExpectationLabel | TargetLabel | null) {
   if (!label) return { backgroundColor: "#F8FAFC", color: COLORS.muted };
-  if (label === "Exceeds Expectations")
+  // Two-tier target labels share the semantic band colors: On Target rides
+  // green with Exceeds, Below Target rides red with Below (1.6.1).
+  if (label === "Exceeds Expectations" || label === "On Target")
     return { backgroundColor: COLORS.exceedsBg, color: COLORS.text };
   if (label === "Meets Expectations")
     return { backgroundColor: COLORS.meetsBg, color: COLORS.text };
@@ -251,6 +264,9 @@ export interface MetricSnapshot {
   tattle_score_food_quality: number | null;
   tattle_score_accuracy: number | null;
   tattle_score_speed_of_service: number | null;
+  // 1.6.1: the ninth target metric — null when the window/quarter had no
+  // accountable task-list instances.
+  avg_task_list_completion_pct: number | null;
   // Phase 7b: presence-based tip metrics. All five null when no POS data
   // covered this period at the employee's location.
   tip_rate_pct: number | null;
@@ -308,6 +324,12 @@ export interface ReportData {
    */
   customer_service_weights?: CustomerServiceWeights;
   /**
+   * 1.6.1: metric_targets rows (mig 051) evaluating the nine target-driven
+   * metrics two-tier. Omitted / missing keys leave the Notes column blank
+   * (fail-visible — never a hardcoded fallback).
+   */
+  metric_targets?: MetricTargets;
+  /**
    * Per-category "data through" stamps (category-currency.ts). When present,
    * a compact currency line renders under the metrics table and a staleness
    * banner appears if any category's newest data trails min(period_end,
@@ -333,8 +355,13 @@ interface MetricDef {
   key: keyof MetricSnapshot;
   name: string;
   kind: MetricKind;
-  /** Use one of the legacy fixed-threshold buckets for the Notes column. */
-  classify?: FixedMetricKey;
+  /**
+   * Evaluate the Notes column two-tier against this metric_targets key
+   * (1.6.1). The key may differ from `key` — the on-time row's snapshot
+   * field is `on_time_pct` but holds (and always displayed) the grace
+   * value, so it evaluates against the on_time_grace_pct target.
+   */
+  classify?: TargetMetricKey;
   /**
    * Callback-driven classifier for metrics whose "expectation" isn't a fixed
    * threshold (e.g., tip-rate delta vs the location average). Returning null
@@ -380,10 +407,15 @@ const hasKitchenData = (s: MetricSnapshot) =>
 
 // Order matches the existing on-page table.
 const METRIC_DEFS: MetricDef[] = [
-  { key: "on_time_pct", name: "On Time %", kind: "pct", classify: "on_time_pct" },
+  // The snapshot's on_time_pct field carries the 3-minute-grace value (see
+  // generate-report-actions.ts) — hence the grace target key.
+  { key: "on_time_pct", name: "On Time %", kind: "pct", classify: "on_time_grace_pct" },
   { key: "attendance_pct", name: "Attendance %", kind: "pct", classify: "attendance_pct" },
   { key: "covered_shifts", name: "Covered Shifts", kind: "count" },
   { key: "survey_engagement_pct", name: "Survey Engagement %", kind: "pct", classify: "survey_engagement_pct" },
+  // 1.6.1: the ninth target metric, new to this report (mirrors the
+  // on-page table's "Avg task-list rate" position after surveys).
+  { key: "avg_task_list_completion_pct", name: "Avg Task-List Completion %", kind: "pct", classify: "avg_task_list_completion_pct" },
   // Display name diverges from the column name deliberately (2026-08-14):
   // "Online Review Rating" is the label; customer_service_rating stays the
   // wire/DB name (locked with CP + THQ). Do not "clean up" either side.
@@ -482,8 +514,12 @@ function num(v: number | string | null | undefined): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
-function classifyOrNull(metric: FixedMetricKey, value: number | null) {
-  return value === null ? null : classifyFixed(metric, value);
+function classifyOrNull(
+  metric: TargetMetricKey,
+  value: number | null,
+  targets: MetricTargets
+) {
+  return value === null ? null : classifyVsTarget(metric, value, targets);
 }
 
 function priorValue(
@@ -544,7 +580,7 @@ function formatDuration(seconds: number | null): string {
 interface MetricRowProps {
   name: string;
   display: string;
-  classification: ExpectationLabel | null;
+  classification: ExpectationLabel | TargetLabel | null;
   delta: { text: string; color: string };
   isLast?: boolean;
 }
@@ -827,11 +863,15 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
               } else {
                 display = formatQuantity(current);
               }
-              let classification: ExpectationLabel | null = null;
+              let classification: ExpectationLabel | TargetLabel | null = null;
               if (def.classifyValue) {
                 classification = def.classifyValue(current, m);
               } else if (def.classify) {
-                classification = classifyOrNull(def.classify, current);
+                classification = classifyOrNull(
+                  def.classify,
+                  current,
+                  data.metric_targets ?? {}
+                );
               }
               return (
                 <MetricRow

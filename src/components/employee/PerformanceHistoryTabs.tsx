@@ -2,7 +2,8 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge, ExpectationBadge } from "@/components/ui/badge";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { classifyFixed } from "@/lib/classify";
+import { classifyVsTarget, type MetricTargets } from "@/lib/classify";
+import type { TargetLabel, TargetMetricKey } from "@/lib/types";
 import {
   formatDeltaPP,
   formatMoney,
@@ -61,6 +62,8 @@ export interface PerformanceTabsProps {
   byQuarter: QuarterRow[];
   last14Days: MetricsSummary;
   allTime: MetricsSummary;
+  /** metric_targets rows (mig 051), loaded server-side by the page. */
+  targets: MetricTargets;
   employeeId: string;
   generateAction: (formData: FormData) => Promise<void>;
   generateTaskDetailAction: (formData: FormData) => Promise<void>;
@@ -71,6 +74,7 @@ export function PerformanceHistoryTabs({
   byQuarter,
   last14Days,
   allTime,
+  targets,
   employeeId,
   generateAction,
   generateTaskDetailAction,
@@ -126,25 +130,30 @@ export function PerformanceHistoryTabs({
                 {byQuarter.map((r) => (
                   <tr key={r.id}>
                     <td className="py-2 pr-4 font-medium">{r.label}</td>
-                    <MetricCell value={r.attendance_pct} metric="attendance_pct" />
-                    <MetricCell value={r.on_time_pct} metric="on_time_pct" />
-                    <MetricCell value={r.on_time_grace_pct} metric="on_time_pct" />
+                    <MetricCell value={r.attendance_pct} metric="attendance_pct" targets={targets} />
+                    {/* Strict (no-grace) on-time is context only — the target
+                        evaluates the grace variant, the displayed/wire value
+                        (2026-08-14 sprint, Tucker decision). */}
+                    <td className="py-2 pr-4">{formatPercent(r.on_time_pct)}</td>
+                    <MetricCell value={r.on_time_grace_pct} metric="on_time_grace_pct" targets={targets} />
                     <td className="py-2 pr-4">{formatQuantity(r.covered_shifts)}</td>
                     <td className="py-2 pr-4">{formatQuantity(r.surveys_assigned)}</td>
                     <td className="py-2 pr-4">{formatQuantity(r.surveys_completed)}</td>
-                    <MetricCell value={r.survey_engagement_pct} metric="survey_engagement_pct" />
+                    <MetricCell value={r.survey_engagement_pct} metric="survey_engagement_pct" targets={targets} />
                     <td className="py-2 pr-4">{formatQuantity(r.tasks_accountable)}</td>
                     <td className="py-2 pr-4">{formatQuantity(r.tasks_owned)}</td>
                     <td className="py-2 pr-4">{formatPercent(r.task_completion_pct)}</td>
                     <td className="py-2 pr-4">{formatPercent(r.task_list_completion_pct)}</td>
-                    <td className="py-2 pr-4">{formatPercent(r.avg_task_list_completion_pct)}</td>
+                    {/* Newly classified with the targets sprint — the ninth
+                        target metric (previously rendered without a badge). */}
+                    <MetricCell value={r.avg_task_list_completion_pct} metric="avg_task_list_completion_pct" targets={targets} />
                     <td className="py-2 pr-4">{formatQuantity(r.tattle_quantity)}</td>
-                    <MetricCell value={r.tattle_rating} metric="tattle_rating" kind="rating" />
-                    <MetricCell value={r.tattle_score_food_quality} metric="tattle_score_food_quality" kind="rating" />
-                    <MetricCell value={r.tattle_score_accuracy} metric="tattle_score_accuracy" kind="rating" />
-                    <MetricCell value={r.tattle_score_speed_of_service} metric="tattle_score_speed_of_service" kind="rating" />
+                    <MetricCell value={r.tattle_rating} metric="tattle_rating" kind="rating" targets={targets} />
+                    <MetricCell value={r.tattle_score_food_quality} metric="tattle_score_food_quality" kind="rating" targets={targets} />
+                    <MetricCell value={r.tattle_score_accuracy} metric="tattle_score_accuracy" kind="rating" targets={targets} />
+                    <MetricCell value={r.tattle_score_speed_of_service} metric="tattle_score_speed_of_service" kind="rating" targets={targets} />
                     <td className="py-2 pr-4">{formatQuantity(r.customer_review_quantity)}</td>
-                    <MetricCell value={r.customer_service_rating} metric="customer_service_rating" kind="rating" />
+                    <MetricCell value={r.customer_service_rating} metric="customer_service_rating" kind="rating" targets={targets} />
                     <td className="py-2 pr-4">{formatPercent(r.tip_rate_pct)}</td>
                     <td className="py-2 pr-4">{formatMoney(r.tip_per_hour)}</td>
                     <td className="py-2 pr-4">
@@ -172,36 +181,29 @@ export function PerformanceHistoryTabs({
       </TabsContent>
 
       <TabsContent value="recent">
-        <SummaryView label="Last 14 days" metrics={last14Days} />
+        <SummaryView label="Last 14 days" metrics={last14Days} targets={targets} />
       </TabsContent>
 
       <TabsContent value="alltime">
-        <SummaryView label="All time" metrics={allTime} />
+        <SummaryView label="All time" metrics={allTime} targets={targets} />
       </TabsContent>
     </Tabs>
   );
 }
 
-type FixedMetric =
-  | "attendance_pct"
-  | "on_time_pct"
-  | "survey_engagement_pct"
-  | "tattle_rating"
-  | "tattle_score_food_quality"
-  | "tattle_score_accuracy"
-  | "tattle_score_speed_of_service"
-  | "customer_service_rating";
-
 function MetricCell({
   value,
   metric,
+  targets,
   kind = "pct",
 }: {
   value: number | null;
-  metric: FixedMetric;
+  metric: TargetMetricKey;
+  targets: MetricTargets;
   kind?: "pct" | "rating";
 }) {
-  const label = value !== null ? classifyFixed(metric, Number(value)) : null;
+  const label =
+    value !== null ? classifyVsTarget(metric, Number(value), targets) : null;
   const display = kind === "rating" ? formatRating(value) : formatPercent(value);
   return (
     <td className="py-2 pr-4">
@@ -256,9 +258,11 @@ function TipBadge({
 function SummaryView({
   label,
   metrics,
+  targets,
 }: {
   label: string;
   metrics: MetricsSummary;
+  targets: MetricTargets;
 }) {
   if (metrics.scheduled_count === 0 && metrics.covered_shifts === 0) {
     return (
@@ -268,18 +272,18 @@ function SummaryView({
     );
   }
 
-  const attLabel =
-    metrics.attendance_pct !== null
-      ? classifyFixed("attendance_pct", metrics.attendance_pct)
-      : null;
-  const otLabel =
-    metrics.on_time_pct !== null
-      ? classifyFixed("on_time_pct", metrics.on_time_pct)
-      : null;
-  const otGraceLabel =
-    metrics.on_time_grace_pct !== null
-      ? classifyFixed("on_time_pct", metrics.on_time_grace_pct)
-      : null;
+  const attLabel = classifyVsTarget(
+    "attendance_pct",
+    metrics.attendance_pct,
+    targets
+  );
+  // Strict (no-grace) on-time is context only — the target evaluates the
+  // grace variant, the displayed/wire value (2026-08-14 sprint).
+  const otGraceLabel = classifyVsTarget(
+    "on_time_grace_pct",
+    metrics.on_time_grace_pct,
+    targets
+  );
 
   return (
     <div className="space-y-4">
@@ -291,7 +295,7 @@ function SummaryView({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Tile title="Attendance" value={metrics.attendance_pct} label={attLabel} kind="pct" />
         <Tile title="Covered shifts" value={metrics.covered_shifts} label={null} kind="count" />
-        <Tile title="On time (no grace)" value={metrics.on_time_pct} label={otLabel} kind="pct" />
+        <Tile title="On time (no grace)" value={metrics.on_time_pct} label={null} kind="pct" />
         <Tile title="On time (3-min grace)" value={metrics.on_time_grace_pct} label={otGraceLabel} kind="pct" />
       </div>
     </div>
@@ -387,7 +391,7 @@ function Tile({
 }: {
   title: string;
   value: number | null;
-  label: ReturnType<typeof classifyFixed> | null;
+  label: TargetLabel | null;
   kind: "pct" | "count";
 }) {
   const display =

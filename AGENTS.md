@@ -50,6 +50,11 @@ derivable from the code alone.
   the tripwire, change-notice requested via the orchestrator memo
   2026-08-14). It closed the Jun–Aug `scheduled_shifts_gap`; a store's
   FIRST run backfills from 2026-06-01.
+- **Metric targets are a cross-app contract value** (EPD `metric_targets`,
+  SA-editable on the Scoring page ↔ THQ migration-config; the nine values
+  adopted verbatim 2026-08-14). Never change unilaterally — a target change
+  ships BOTH apps in one paired Tucker-approved motion, or the two apps'
+  On/Below-Target labels disagree.
 - Avoid landing merges during the nightly ingest window (~09:00–10:15 UTC)
   and the GH-Action window (~13:30–14:00 UTC).
 

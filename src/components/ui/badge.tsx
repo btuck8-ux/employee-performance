@@ -1,6 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import type { ExpectationLabel } from "@/lib/types";
+import type { ExpectationLabel, TargetLabel } from "@/lib/types";
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   tone?: "default" | "exceeds" | "meets" | "below" | "muted";
@@ -27,10 +27,20 @@ export function Badge({ className, tone = "default", ...props }: BadgeProps) {
   );
 }
 
-export function ExpectationBadge({ label }: { label: ExpectationLabel | null }) {
+/**
+ * Renders both label families: the three-tier ExpectationLabel (composites,
+ * kitchen/tip badges) and the two-tier TargetLabel of the nine target-driven
+ * metrics (2026-08-14 sprint). Band colors keep their semantic values —
+ * On Target shares green with Exceeds, Below Target shares red with Below.
+ */
+export function ExpectationBadge({
+  label,
+}: {
+  label: ExpectationLabel | TargetLabel | null;
+}) {
   if (!label) return <span className="text-slate-400">—</span>;
   const tone =
-    label === "Exceeds Expectations"
+    label === "Exceeds Expectations" || label === "On Target"
       ? "exceeds"
       : label === "Meets Expectations"
       ? "meets"

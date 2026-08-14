@@ -16,6 +16,7 @@ import {
   EmployeeTaskDetailReportDocument,
 } from "@/lib/pdf/EmployeeTaskDetailReport";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { fetchMetricTargets } from "@/lib/metric-targets";
 import { getCategoryCurrency } from "@/lib/category-currency";
 import { buildTaskDetailData } from "./generate-task-detail-actions";
 
@@ -74,6 +75,7 @@ export async function renderAndStorePerformanceReport(
        customer_service_rating, customer_review_quantity,
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
+       avg_task_list_completion_pct,
        tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
        kitchen_items, kitchen_tickets, kitchen_shifts, kitchen_avg_prep_seconds, kitchen_residual_seconds,
        customer_service_score, customer_service_score_components_count,
@@ -114,6 +116,7 @@ export async function renderAndStorePerformanceReport(
        customer_service_rating, customer_review_quantity,
        tattle_rating, tattle_quantity,
        tattle_score_food_quality, tattle_score_accuracy, tattle_score_speed_of_service,
+       avg_task_list_completion_pct,
        tip_rate_pct, tip_per_hour, location_tip_rate_pct, location_tip_per_hour, tip_rate_delta_pp,
        kitchen_items, kitchen_tickets, kitchen_shifts, kitchen_avg_prep_seconds, kitchen_residual_seconds,
        customer_service_score, customer_service_score_components_count,
@@ -140,6 +143,7 @@ export async function renderAndStorePerformanceReport(
     tattle_score_food_quality: number | string | null;
     tattle_score_accuracy: number | string | null;
     tattle_score_speed_of_service: number | string | null;
+    avg_task_list_completion_pct: number | string | null;
     tip_rate_pct: number | string | null;
     tip_per_hour: number | string | null;
     location_tip_rate_pct: number | string | null;
@@ -180,6 +184,7 @@ export async function renderAndStorePerformanceReport(
       tattle_score_food_quality: num(r.tattle_score_food_quality),
       tattle_score_accuracy: num(r.tattle_score_accuracy),
       tattle_score_speed_of_service: num(r.tattle_score_speed_of_service),
+      avg_task_list_completion_pct: num(r.avg_task_list_completion_pct),
       tip_rate_pct: num(r.tip_rate_pct),
       tip_per_hour: num(r.tip_per_hour),
       location_tip_rate_pct: num(r.location_tip_rate_pct),
@@ -207,6 +212,9 @@ export async function renderAndStorePerformanceReport(
   });
 
   const generated_at = new Date().toISOString();
+  // Targets are SA-editable config — load the values in force at generation
+  // time; they also go into threshold_snapshot as the audit record.
+  const metricTargets = await fetchMetricTargets(supabase);
   const reportData: ReportData = {
     employee_name: emp.employee_name,
     employee_code: emp.employee_code,
@@ -216,7 +224,8 @@ export async function renderAndStorePerformanceReport(
     report_period_end: period.period_end,
     metrics: {
       // Reports display the 3-minute-grace on-time number (not the strict
-      // value). See classify.ts thresholds for how this is bucketed.
+      // value); it evaluates against the on_time_grace_pct target
+      // (classifyVsTarget, two-tier).
       on_time_pct: num(pr.on_time_grace_pct),
       attendance_pct: num(pr.attendance_pct),
       covered_shifts: pr.covered_shifts,
@@ -230,6 +239,7 @@ export async function renderAndStorePerformanceReport(
       tattle_score_food_quality: num(pr.tattle_score_food_quality),
       tattle_score_accuracy: num(pr.tattle_score_accuracy),
       tattle_score_speed_of_service: num(pr.tattle_score_speed_of_service),
+      avg_task_list_completion_pct: num(pr.avg_task_list_completion_pct),
       tip_rate_pct: num(pr.tip_rate_pct),
       tip_per_hour: num(pr.tip_per_hour),
       location_tip_rate_pct: num(pr.location_tip_rate_pct),
@@ -253,6 +263,7 @@ export async function renderAndStorePerformanceReport(
     generated_at,
     trailing_quarters,
     customer_service_weights: await fetchCustomerServiceWeights(supabase),
+    metric_targets: metricTargets,
     // Per-category "data through" stamps + staleness banner (Part 2): a
     // truncated ingest window must be visible on the report, not render as a
     // normal full-period score.
@@ -303,16 +314,13 @@ export async function renderAndStorePerformanceReport(
     });
   if (uploadError) return { ok: false, error: `upload: ${uploadError.message}` };
 
+  // 1.6.1: two-tier target evaluation — the snapshot records the SA-editable
+  // metric_targets in force at generation time (value >= target -> On Target)
+  // instead of the retired hardcoded three-tier bands. Write-only audit
+  // field; no reader depends on the old shape.
   const thresholdSnapshot = {
     template_version: TEMPLATE_VERSION,
-    on_time_pct: { meets: 90, exceeds: 95 },
-    attendance_pct: { meets: 95, exceeds: 100 },
-    survey_engagement_pct: { meets: 80, exceeds: 85 },
-    tattle_rating: { meets: 4.25 },
-    tattle_score_food_quality: { meets: 90 },
-    tattle_score_accuracy: { meets: 90 },
-    tattle_score_speed_of_service: { meets: 90 },
-    customer_service_rating: { meets: 4.25 },
+    targets: metricTargets,
     customer_service_score: { yellow: 70, green: 85 },
   };
 

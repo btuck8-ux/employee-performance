@@ -2,10 +2,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { fetchTotalImpactWeights } from "@/lib/total-impact-score";
+import { fetchMetricTargets, TARGET_METRICS } from "@/lib/metric-targets";
 import { redirect } from "next/navigation";
 import { getSessionRole } from "@/lib/authz";
 import {
   updateCustomerServiceWeightsAction,
+  updateMetricTargetsAction,
   updateTotalImpactWeightsAction,
 } from "./actions";
 
@@ -27,6 +29,7 @@ export default async function ScoringAdminPage({
   if (role !== "system_admin") redirect("/dashboard");
   const weights = await fetchCustomerServiceWeights(supabase);
   const tisWeights = await fetchTotalImpactWeights(supabase);
+  const metricTargets = await fetchMetricTargets(supabase);
 
   const error = typeof search.error === "string" ? search.error : null;
   const saved = search.saved === "1";
@@ -39,6 +42,8 @@ export default async function ScoringAdminPage({
     typeof search.tis_recomputed === "string" ? search.tis_recomputed : null;
   const tisFailures =
     typeof search.tis_failures === "string" ? search.tis_failures : null;
+  const mtError = typeof search.mt_error === "string" ? search.mt_error : null;
+  const mtSaved = search.mt_saved === "1";
 
   return (
     <div className="space-y-6">
@@ -270,6 +275,54 @@ export default async function ScoringAdminPage({
         </CardContent>
       </Card>
 
+      {mtError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {mtError}
+        </div>
+      )}
+      {mtSaved && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          Metric targets saved.
+        </div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Metric targets</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-slate-600 mb-2">
+            Each of the nine individual metrics evaluates two-tier against its
+            target: value at or above the target reads{" "}
+            <strong>On Target</strong>, below reads{" "}
+            <strong>Below Target</strong>; a metric with no data stays
+            unclassified. Ratings are native 1–5, everything else 0–100.
+            Targets drive labels only — composite scores never read them, so
+            no recompute is needed.
+          </p>
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-4">
+            These targets are mirrored in Training HQ. Change them only as a
+            paired Tucker-approved update — an EPD-only edit puts the two apps
+            out of agreement.
+          </p>
+
+          <form action={updateMetricTargetsAction} className="space-y-4 max-w-xl">
+            {TARGET_METRICS.map((m) => (
+              <TargetInput
+                key={m.key}
+                label={m.label}
+                name={`target_${m.key}`}
+                defaultValue={metricTargets[m.key] ?? null}
+                scale={m.scale}
+              />
+            ))}
+            <div className="flex justify-end">
+              <SubmitButton pendingLabel="Saving…">Save targets</SubmitButton>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Reference: TIS spec snapshot</CardTitle>
@@ -306,6 +359,47 @@ export default async function ScoringAdminPage({
           </ul>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function TargetInput({
+  label,
+  name,
+  defaultValue,
+  scale,
+}: {
+  label: string;
+  name: string;
+  defaultValue: number | null;
+  scale: "rating" | "percent";
+}) {
+  const min = scale === "rating" ? "1" : "0";
+  const max = scale === "rating" ? "5" : "100";
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-[220px,1fr] gap-2 sm:items-center">
+      <label htmlFor={name} className="text-sm font-medium">
+        {label}
+      </label>
+      <div>
+        <input
+          id={name}
+          name={name}
+          type="number"
+          step="0.01"
+          min={min}
+          max={max}
+          defaultValue={defaultValue ?? ""}
+          required
+          className="w-32 rounded-md border border-slate-300 px-3 py-1.5 text-sm tabular-nums focus:border-slate-500 focus:outline-none"
+        />
+        <p className="text-xs text-slate-500 mt-0.5">
+          {scale === "rating" ? "Native 1–5 scale" : "0–100 scale"}
+          {defaultValue === null
+            ? " — no target configured (metric renders unclassified)"
+            : ""}
+        </p>
+      </div>
     </div>
   );
 }
