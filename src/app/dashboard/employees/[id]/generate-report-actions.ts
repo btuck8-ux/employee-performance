@@ -224,7 +224,8 @@ export async function renderAndStorePerformanceReport(
     report_period_end: period.period_end,
     metrics: {
       // Reports display the 3-minute-grace on-time number (not the strict
-      // value). See classify.ts thresholds for how this is bucketed.
+      // value); it evaluates against the on_time_grace_pct target
+      // (classifyVsTarget, two-tier).
       on_time_pct: num(pr.on_time_grace_pct),
       attendance_pct: num(pr.attendance_pct),
       covered_shifts: pr.covered_shifts,

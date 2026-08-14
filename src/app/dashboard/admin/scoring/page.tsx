@@ -374,6 +374,7 @@ function TargetInput({
   defaultValue: number | null;
   scale: "rating" | "percent";
 }) {
+  const min = scale === "rating" ? "1" : "0";
   const max = scale === "rating" ? "5" : "100";
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[220px,1fr] gap-2 sm:items-center">
@@ -386,7 +387,7 @@ function TargetInput({
           name={name}
           type="number"
           step="0.01"
-          min="0"
+          min={min}
           max={max}
           defaultValue={defaultValue ?? ""}
           required

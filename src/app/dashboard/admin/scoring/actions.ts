@@ -320,11 +320,14 @@ export async function updateMetricTargetsAction(formData: FormData) {
   const rows: Array<{ metric_key: string; target: number; updated_at: string }> = [];
   for (const m of TARGET_METRICS) {
     const n = parseWeight(formData.get(`target_${m.key}`));
+    // Scale bounds mirror the migration's CHECK: ratings native 1–5 (a 0
+    // rating target would mark everyone On Target), percents 0–100.
+    const min = m.scale === "rating" ? 1 : 0;
     const max = m.scale === "rating" ? 5 : 100;
-    if (!Number.isFinite(n) || n < 0 || n > max) {
+    if (!Number.isFinite(n) || n < min || n > max) {
       redirect(
         `${back}?mt_error=${encodeURIComponent(
-          `${m.label} must be a number between 0 and ${max}.`
+          `${m.label} must be a number between ${min} and ${max}.`
         )}`
       );
     }

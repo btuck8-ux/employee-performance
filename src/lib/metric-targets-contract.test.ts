@@ -131,6 +131,15 @@ test("TARGET_METRICS scales: ratings native 1–5, everything else 0–100", () 
   );
 });
 
+test("scale CHECK: ratings constrained 1–5, everything else 0–100 (Codex review)", () => {
+  assert.match(code, /constraint metric_targets_scale check/i);
+  assert.match(
+    code,
+    /when metric_key in \('tattle_rating', 'customer_service_rating'\)\s*then target between 1 and 5/i
+  );
+  assert.match(code, /else target between 0 and 100/i);
+});
+
 test("RLS: Class-7 pattern — enable + read-for-all + sa-write, plus the updated_at trigger", () => {
   assert.match(code, /alter table public\.metric_targets enable row level security/i);
   assert.match(

@@ -38,8 +38,19 @@ create table public.metric_targets (
       'tattle_score_speed_of_service',
       'avg_task_list_completion_pct'
     )),
-  target     numeric not null check (target >= 0),
-  updated_at timestamptz not null default now()
+  target     numeric not null,
+  updated_at timestamptz not null default now(),
+  -- Scale guard (Codex review, 2026-08-14): ratings are native 1–5,
+  -- everything else 0–100 — enforced here too, not just in the server
+  -- action, so a direct SA write can't store a degenerate target (e.g.
+  -- tattle_rating 0 = everyone On Target, attendance_pct 150 = no one).
+  constraint metric_targets_scale check (
+    case
+      when metric_key in ('tattle_rating', 'customer_service_rating')
+        then target between 1 and 5
+      else target between 0 and 100
+    end
+  )
 );
 
 comment on table public.metric_targets is
