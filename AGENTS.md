@@ -36,6 +36,14 @@ derivable from the code alone.
   appended the 9 individual metrics behind CS/TIS (wire names mirror
   `performance_records` columns; null = not-computed, never 0;
   `scores-feed-contract.test.ts` pins the shape).
+- `/api/scores/range` is THQ's SECOND surface (on-demand, server-side
+  pass-through + 10-min cache; ships 2026-08-14). The wire contract is the
+  THQ range memo, accepted verbatim and LOCKED: 18 fields (3 identity + 9
+  metrics + 6 counts), NO composites in v1, null = not-computable-for-
+  window, page/limit default 25 / max 50. `range-feed-contract.test.ts`
+  pins it; shape changes need the same cross-project coordination as
+  /api/scores. It rides proxy.ts's existing `/api/scores` prefix carve-out
+  (startsWith) — no proxy diff.
 - `/api/admin/cake-profile-ids` + `/api/admin/cake-timesheet-import` are
   the **cake-nightly GitHub Action's** landing points (13:30 UTC daily).
 - `/api/admin/set-tattle-token` is the **tattle-nightly Action's** landing
