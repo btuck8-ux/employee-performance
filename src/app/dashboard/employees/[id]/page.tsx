@@ -18,6 +18,7 @@ import {
   type CustomerServiceScoreQuarterRow,
 } from "@/components/employee/CustomerServiceScoreCard";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { fetchMetricTargets } from "@/lib/metric-targets";
 import { TotalImpactScoreCard } from "@/components/employee/TotalImpactScoreCard";
 import {
   computeTotalImpactScoreBreakdown,
@@ -211,6 +212,7 @@ export default async function EmployeeDetailPage({
       tip_rate_delta_pp: numOrNull(r.tip_rate_delta_pp),
     }));
   const csWeights = await fetchCustomerServiceWeights(supabase);
+  const metricTargets = await fetchMetricTargets(supabase);
 
   const tattleSummaryRows = rawRows
     .filter((r) => (r.tattle_quantity ?? 0) > 0)
@@ -793,6 +795,7 @@ export default async function EmployeeDetailPage({
             byQuarter={byQuarter}
             last14Days={last14Days}
             allTime={allTime}
+            targets={metricTargets}
             employeeId={emp.id}
             generateAction={generatePerformanceReportAction}
             generateTaskDetailAction={generateTaskDetailReportAction}

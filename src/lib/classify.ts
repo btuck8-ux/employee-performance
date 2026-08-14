@@ -1,51 +1,42 @@
 import type {
   ExpectationLabel,
-  FixedMetricKey,
+  TargetLabel,
+  TargetMetricKey,
   ThresholdedMetricKey,
 } from "./types";
 
 /**
- * Classification for fixed-rule metrics. The thresholds below are interim —
- * we'll move them to a per-location settings UI later.
- *
- *  - On Time %                 : <90 Below, [90,95] Meets, >95 Exceeds
- *  - Attendance %              : <95 Below, [95,100] Meets, >100 Exceeds (legacy >100 branch kept)
- *  - Survey Engagement %       : <80 Below, [80,85) Meets, >=85 Exceeds
- *  - Tattle Rating             : <4.25 Below, >=4.25 Meets
- *  - Tattle Score Food Quality : <90 Below, >=90 Meets
- *  - Tattle Score Accuracy     : <90 Below, >=90 Meets
- *  - Tattle Score Speed        : <90 Below, >=90 Meets
- *  - Customer Service Rating   : <4.25 Below, >=4.25 Meets
- *
- * Tattle and customer-service metrics remain two-tier (Below / Meets) for now;
- * they'll get an Exceeds tier when we set thresholds for it.
+ * Loaded `metric_targets` rows (mig 051), keyed by metric. Partial on
+ * purpose: a missing key means "no target configured" and classification
+ * fails VISIBLE (null → em-dash badge), never falls back to a hardcoded
+ * number — same doctrine as classifyThresholded below.
  */
-export function classifyFixed(
-  metric: FixedMetricKey,
-  value: number | null | undefined
-): ExpectationLabel | null {
+export type MetricTargets = Partial<Record<TargetMetricKey, number>>;
+
+/**
+ * Two-tier target evaluation for the nine target-driven metrics (2026-08-14
+ * targets sprint; THQ contract memo §1). Replaces the old hardcoded
+ * three-tier `classifyFixed` bands — a single target value can't honestly
+ * drive three tiers, and the targets are cross-app config (metric_targets,
+ * SA-editable) rather than code.
+ *
+ * Comparison is >=-INCLUSIVE and locked with THQ so labels never disagree:
+ * exactly 95 against a target of 95 is On Target; 4.7499… against 4.75 is
+ * Below Target. Scales are native — ratings 1–5, everything else 0–100 —
+ * and the value is compared raw, no normalization.
+ *
+ * Null/NaN value → null (not-computed stays unclassified).
+ * Missing target row → null (fail-visible, never a silent default).
+ */
+export function classifyVsTarget(
+  metric: TargetMetricKey,
+  value: number | null | undefined,
+  targets: MetricTargets
+): TargetLabel | null {
   if (value === null || value === undefined || Number.isNaN(value)) return null;
-  switch (metric) {
-    case "on_time_pct":
-      if (value < 90) return "Below Expectations";
-      if (value <= 95) return "Meets Expectations";
-      return "Exceeds Expectations";
-    case "attendance_pct":
-      if (value < 95) return "Below Expectations";
-      if (value <= 100) return "Meets Expectations";
-      return "Exceeds Expectations";
-    case "survey_engagement_pct":
-      if (value < 80) return "Below Expectations";
-      if (value < 85) return "Meets Expectations";
-      return "Exceeds Expectations";
-    case "tattle_rating":
-    case "customer_service_rating":
-      return value >= 4.25 ? "Meets Expectations" : "Below Expectations";
-    case "tattle_score_food_quality":
-    case "tattle_score_accuracy":
-    case "tattle_score_speed_of_service":
-      return value >= 90 ? "Meets Expectations" : "Below Expectations";
-  }
+  const target = targets[metric];
+  if (target === undefined || Number.isNaN(target)) return null;
+  return value >= target ? "On Target" : "Below Target";
 }
 
 /**

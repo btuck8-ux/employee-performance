@@ -11,6 +11,7 @@ import {
   type TotalImpactWeights,
 } from "@/lib/total-impact-score";
 import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
+import { fetchMetricTargets, TARGET_METRICS } from "@/lib/metric-targets";
 import type { Quarter } from "@/lib/quarter";
 
 const RECOMPUTE_CONCURRENCY = 6;
@@ -292,4 +293,67 @@ export async function updateTotalImpactWeightsAction(formData: FormData) {
     if (failures > 0) params.set("tis_failures", String(failures));
   }
   redirect(`${back}?${params.toString()}`);
+}
+
+/**
+ * Update the nine `metric_targets` rows (mig 051, 2026-08-14 targets
+ * sprint). Same SA gate as the weight actions. NO recompute option on
+ * purpose: targets drive classification labels only — composite math never
+ * reads them — so stored scores are untouched by a target change.
+ *
+ * Cross-app contract: these values are mirrored in Training HQ (their side
+ * is migration-config). Changes ship BOTH sides as a paired Tucker-approved
+ * update — the page copy carries the same warning.
+ *
+ * Audit trail: one console line per save that changed anything, with actor
+ * id + old→new per key (the employee-status/invite convention).
+ */
+export async function updateMetricTargetsAction(formData: FormData) {
+  const back = "/dashboard/admin/scoring";
+
+  // system_admin only — server actions are directly POSTable, so the check
+  // lives here, not just on the page.
+  const { role, user, supabase } = await getSessionRole();
+  if (role !== "system_admin") redirect("/dashboard");
+
+  const now = new Date().toISOString();
+  const rows: Array<{ metric_key: string; target: number; updated_at: string }> = [];
+  for (const m of TARGET_METRICS) {
+    const n = parseWeight(formData.get(`target_${m.key}`));
+    const max = m.scale === "rating" ? 5 : 100;
+    if (!Number.isFinite(n) || n < 0 || n > max) {
+      redirect(
+        `${back}?mt_error=${encodeURIComponent(
+          `${m.label} must be a number between 0 and ${max}.`
+        )}`
+      );
+    }
+    rows.push({ metric_key: m.key, target: n, updated_at: now });
+  }
+
+  // Old values feed the audit line (old→new per changed key).
+  const before = await fetchMetricTargets(supabase);
+
+  const { error } = await supabase.from("metric_targets").upsert(rows);
+  if (error) {
+    redirect(`${back}?mt_error=${encodeURIComponent("DB update failed: " + error.message)}`);
+  }
+
+  const changes: Record<string, { from: number | null; to: number }> = {};
+  for (const r of rows) {
+    const prev = before[r.metric_key as (typeof TARGET_METRICS)[number]["key"]] ?? null;
+    if (prev !== r.target) changes[r.metric_key] = { from: prev, to: r.target };
+  }
+  if (Object.keys(changes).length > 0) {
+    console.log("[scoring] metric targets updated", {
+      actor_id: user?.id ?? null,
+      changes,
+    });
+  }
+
+  revalidatePath("/dashboard/admin/scoring");
+  revalidatePath("/dashboard/employees");
+  revalidatePath("/dashboard/locations");
+
+  redirect(`${back}?mt_saved=1`);
 }

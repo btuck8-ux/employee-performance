@@ -10,6 +10,7 @@ import {
   type ReportData,
 } from "@/lib/pdf/EmployeeReport";
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
+import { fetchMetricTargets } from "@/lib/metric-targets";
 import { getCategoryCurrency } from "@/lib/category-currency";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
 
@@ -104,6 +105,9 @@ export async function renderAndStoreCustomRangeReport(
   const manager_feedback = fb.length > 0 ? fb[0].manager_feedback : null;
 
   const csWeights = await fetchCustomerServiceWeights(supabase);
+  // Targets are SA-editable config — load the values in force at generation
+  // time; they also go into threshold_snapshot as the audit record.
+  const metricTargets = await fetchMetricTargets(supabase);
   const computed = await computeMetricsForRange(
     supabase,
     employee_id,
@@ -145,6 +149,7 @@ export async function renderAndStoreCustomRangeReport(
       tattle_score_food_quality: m.tattle_score_food_quality,
       tattle_score_accuracy: m.tattle_score_accuracy,
       tattle_score_speed_of_service: m.tattle_score_speed_of_service,
+      avg_task_list_completion_pct: m.avg_task_list_completion_pct,
       // Phase 7b: presence-based tip metrics, freshly computed over the
       // custom range by compute_employee_tip_metrics. Math is sum(tips) /
       // sum(sales) over the whole range — the mathematically correct
@@ -172,6 +177,7 @@ export async function renderAndStoreCustomRangeReport(
     manager_feedback,
     generated_at,
     customer_service_weights: csWeights,
+    metric_targets: metricTargets,
     category_currency: await getCategoryCurrency(supabase, location_id, range_end),
   };
 
@@ -194,16 +200,13 @@ export async function renderAndStoreCustomRangeReport(
     return { ok: false, error: "Upload failed: " + uploadError.message };
   }
 
+  // 1.6.1: two-tier target evaluation — the snapshot records the SA-editable
+  // metric_targets in force at generation time (value >= target -> On Target)
+  // instead of the retired hardcoded three-tier bands. Write-only audit
+  // field; no reader depends on the old shape.
   const thresholdSnapshot = {
     template_version: TEMPLATE_VERSION,
-    on_time_pct: { meets: 90, exceeds: 95 },
-    attendance_pct: { meets: 95, exceeds: 100 },
-    survey_engagement_pct: { meets: 80, exceeds: 85 },
-    tattle_rating: { meets: 4.25 },
-    tattle_score_food_quality: { meets: 90 },
-    tattle_score_accuracy: { meets: 90 },
-    tattle_score_speed_of_service: { meets: 90 },
-    customer_service_rating: { meets: 4.25 },
+    targets: metricTargets,
     customer_service_score: { yellow: 70, green: 85 },
   };
 

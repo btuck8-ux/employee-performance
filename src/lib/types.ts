@@ -3,15 +3,30 @@ export type ExpectationLabel =
   | "Meets Expectations"
   | "Exceeds Expectations";
 
-export type FixedMetricKey =
-  | "on_time_pct"
+/**
+ * Two-tier labels for the nine target-driven metrics (2026-08-14 targets
+ * sprint, THQ-aligned). Composites (CS Score / TIS) and the tip/kitchen
+ * badges keep the three-tier ExpectationLabel above.
+ */
+export type TargetLabel = "On Target" | "Below Target";
+
+/**
+ * The nine metrics evaluated against `metric_targets` (mig 051). Keys match
+ * the table's CHECK'd metric_key set and the wire names on /api/scores —
+ * note on-time classifies the GRACE variant (the displayed/wire value), and
+ * avg_task_list_completion_pct joined the classified set with this sprint.
+ * The exactly-nine-keys pin lives in metric-targets-contract.test.ts.
+ */
+export type TargetMetricKey =
+  | "on_time_grace_pct"
   | "attendance_pct"
   | "survey_engagement_pct"
   | "tattle_rating"
+  | "customer_service_rating"
   | "tattle_score_food_quality"
   | "tattle_score_accuracy"
   | "tattle_score_speed_of_service"
-  | "customer_service_rating";
+  | "avg_task_list_completion_pct";
 
 export type ThresholdedMetricKey =
   | "customer_service_rating"
@@ -25,7 +40,7 @@ export type CountMetricKey =
   | "customer_review_quantity"
   | "tattle_quantity";
 
-export type MetricKey = FixedMetricKey | ThresholdedMetricKey | CountMetricKey;
+export type MetricKey = TargetMetricKey | ThresholdedMetricKey | CountMetricKey;
 
 export interface Client {
   id: string;
