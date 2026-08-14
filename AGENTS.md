@@ -43,6 +43,13 @@ derivable from the code alone.
   ever, failed 2026-07-27, and has never stored a token; the Tattle feed
   actually rides env `TATTLE_BEARER_TOKEN` + manual recapture, with the
   nightly alert email as the expiry tripwire).
+- The nightly cron family includes `/api/cron/sync-cp-schedules` (09:40
+  UTC, `ingest_runs` source `cp_schedule`, mig 049): EPD reads CP's
+  `weekly_schedule_entries` directly (same interim-credential shape as the
+  survey feed — CP-side schema changes break it; the empty-streak guard is
+  the tripwire, change-notice requested via the orchestrator memo
+  2026-08-14). It closed the Jun–Aug `scheduled_shifts_gap`; a store's
+  FIRST run backfills from 2026-06-01.
 - Avoid landing merges during the nightly ingest window (~09:00–10:15 UTC)
   and the GH-Action window (~13:30–14:00 UTC).
 
@@ -103,7 +110,7 @@ derivable from the code alone.
   policies; the signup trigger writes it) — the real role model is
   `user_roles`. Behavioral policy tests:
   `supabase/tests/phase_b_policy_tests.sql` (run via MCP, self-rolling-back).
-- Migrations: 015 intentionally absent; current head is 048. When Cowork
+- Migrations: 015 intentionally absent; current head is 049. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are

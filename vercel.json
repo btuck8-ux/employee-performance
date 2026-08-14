@@ -18,6 +18,10 @@
       "schedule": "30 9 * * *"
     },
     {
+      "path": "/api/cron/sync-cp-schedules",
+      "schedule": "40 9 * * *"
+    },
+    {
       "path": "/api/cron/sync-cp-surveys",
       "schedule": "45 9 * * *"
     },
