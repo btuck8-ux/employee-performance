@@ -1,9 +1,11 @@
 /* eslint-disable jsx-a11y/alt-text */
+import { join } from "node:path";
 import {
   Document,
   Page,
   Text,
   View,
+  Image,
   StyleSheet,
 } from "@react-pdf/renderer";
 import { classifyFixed } from "@/lib/classify";
@@ -52,7 +54,11 @@ import {
 // shifts the rating badge is withheld (an automated verdict would pass
 // exactly the judgment humans are supposed to withhold) and the footnote
 // flags the figures as directional only.
-export const TEMPLATE_VERSION = "1.5.2";
+// 1.6.0 (2026-08-14 UI sprint): Ike's rebrand — purple header band with the
+// brand logo, section titles in the dark brand green — and the display-only
+// rename "Customer Service Rating" → "Online Review Rating" (wire/DB names
+// untouched). Classification band colors keep their semantic values.
+export const TEMPLATE_VERSION = "1.6.0";
 
 const COLORS = {
   exceedsBg: "#CCFFCC",
@@ -66,18 +72,44 @@ const COLORS = {
   bar: "#94A3B8",      // slate-400, sparkline bars
   barCurrent: "#1E293B", // slate-800, sparkline current quarter
   chartBar: "#3B82F6", // blue-500, trend page bars
+  // Ike's brand (book rev 2023): purple carries chrome; green-dark is the
+  // AA-safe green for text on white (the mid green #65A43D fails AA).
+  brandPurple: "#702F8A",
+  brandGreenDark: "#47793A",
 };
+
+// Server-render only (renderToBuffer in server actions), so a filesystem path
+// into public/ is the correct way to embed the logo.
+const LOGO_PATH = join(process.cwd(), "public/brand/logo-primary-t.png");
 
 const styles = StyleSheet.create({
   page: { padding: 36, fontSize: 11, fontFamily: "Helvetica", color: COLORS.text },
-  h1: { fontSize: 22, fontWeight: 700, marginBottom: 4 },
-  subtitle: { fontSize: 11, color: COLORS.muted, marginBottom: 16 },
+  headerBand: {
+    backgroundColor: COLORS.brandPurple,
+    marginHorizontal: -36,
+    marginTop: -36,
+    marginBottom: 14,
+    paddingHorizontal: 36,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerLogo: { width: 110, height: 36, objectFit: "contain" },
+  h1: { fontSize: 20, fontWeight: 700, color: "#FFFFFF" },
+  subtitle: { fontSize: 9, color: "#E9D8F2", marginTop: 3 },
   hr: { borderBottomWidth: 1, borderBottomColor: COLORS.rule, marginVertical: 12 },
   headerGrid: { flexDirection: "row", flexWrap: "wrap", marginBottom: 8 },
   headerCell: { width: "50%", marginBottom: 6 },
   label: { fontSize: 9, color: COLORS.muted, marginBottom: 2 },
   value: { fontSize: 12 },
-  sectionTitle: { fontSize: 13, fontWeight: 700, marginTop: 12, marginBottom: 8 },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: 700,
+    marginTop: 12,
+    marginBottom: 8,
+    color: COLORS.brandGreenDark,
+  },
   currencyBlock: { marginTop: 6 },
   currencyBanner: {
     fontSize: 8,
@@ -352,7 +384,10 @@ const METRIC_DEFS: MetricDef[] = [
   { key: "attendance_pct", name: "Attendance %", kind: "pct", classify: "attendance_pct" },
   { key: "covered_shifts", name: "Covered Shifts", kind: "count" },
   { key: "survey_engagement_pct", name: "Survey Engagement %", kind: "pct", classify: "survey_engagement_pct" },
-  { key: "customer_service_rating", name: "Customer Service Rating", kind: "rating", classify: "customer_service_rating" },
+  // Display name diverges from the column name deliberately (2026-08-14):
+  // "Online Review Rating" is the label; customer_service_rating stays the
+  // wire/DB name (locked with CP + THQ). Do not "clean up" either side.
+  { key: "customer_service_rating", name: "Online Review Rating", kind: "rating", classify: "customer_service_rating" },
   { key: "customer_review_quantity", name: "Customer Review Quantity", kind: "count" },
   { key: "tattle_rating", name: "Tattle Rating", kind: "rating", classify: "tattle_rating" },
   { key: "tattle_quantity", name: "Tattle Quantity", kind: "count" },
@@ -695,10 +730,15 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
   return (
     <Document>
       <Page size="LETTER" style={styles.page}>
-        <Text style={styles.h1}>Employee Performance Report</Text>
-        <Text style={styles.subtitle}>
-          Generated {new Date(data.generated_at).toLocaleString()}
-        </Text>
+        <View style={styles.headerBand}>
+          <View>
+            <Text style={styles.h1}>Employee Performance Report</Text>
+            <Text style={styles.subtitle}>
+              Generated {new Date(data.generated_at).toLocaleString()}
+            </Text>
+          </View>
+          <Image style={styles.headerLogo} src={LOGO_PATH} />
+        </View>
 
         <View style={styles.headerGrid}>
           <View style={styles.headerCell}>

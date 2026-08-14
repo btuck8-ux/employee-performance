@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionRole } from "@/lib/authz";
+import { Badge } from "@/components/ui/badge";
+import { EmployeeStatusButton } from "@/components/employee/EmployeeStatusButton";
 import { Button } from "@/components/ui/button";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,6 +50,10 @@ export default async function EmployeeDetailPage({
   const { id } = await params;
   const search = await searchParams;
   const supabase = await createClient();
+  const { role } = await getSessionRole();
+  // §8-B ruling 2026-08-14: deactivate/reactivate extends to admin/manager
+  // tiers; the server action re-checks tier + row scope.
+  const canToggleStatus = role !== null && role !== "user";
   const rangeError =
     typeof search.range_error === "string" ? search.range_error : null;
   const rangeReportJustCreated =
@@ -226,7 +233,14 @@ export default async function EmployeeDetailPage({
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13); // inclusive 14-day window ending today
   const fourteenDaysAgoIso = fourteenDaysAgo.toISOString().slice(0, 10);
 
-  const [{ data: allEntries }, { data: recentEntries }] = await Promise.all([
+  const showAllReports = search.all_reports === "1";
+  const [
+    { data: allEntries },
+    { data: recentEntries },
+    { data: upcomingShiftRows },
+    { data: workedShiftRows },
+    { data: archiveRows },
+  ] = await Promise.all([
     supabase
       .from("time_entries")
       .select("entry_date, entry_type, in_time")
@@ -237,7 +251,54 @@ export default async function EmployeeDetailPage({
       .eq("employee_id", id)
       .gte("entry_date", fourteenDaysAgoIso)
       .lte("entry_date", todayIso),
+    supabase
+      .from("time_entries")
+      .select("id, entry_date, in_time, out_time, role, regular_hours")
+      .eq("employee_id", id)
+      .eq("entry_type", "scheduled")
+      .gte("entry_date", todayIso)
+      .order("entry_date", { ascending: true })
+      .limit(21),
+    supabase
+      .from("time_entries")
+      .select("id, entry_date, in_time, out_time, role, regular_hours")
+      .eq("employee_id", id)
+      .eq("entry_type", "worked")
+      .lte("entry_date", todayIso)
+      .order("entry_date", { ascending: false })
+      .limit(30),
+    supabase
+      .from("generated_reports")
+      .select(
+        "id, generation_mode, report_kind, custom_range, generated_at, superseded_at, feedback_updated_after_generation, report_periods(label)"
+      )
+      .eq("employee_id", id)
+      .order("generated_at", { ascending: false })
+      .limit(200),
   ]);
+  type ShiftRow = {
+    id: string;
+    entry_date: string;
+    in_time: string | null;
+    out_time: string | null;
+    role: string | null;
+    regular_hours: number | string | null;
+  };
+  const upcomingShifts = (upcomingShiftRows ?? []) as ShiftRow[];
+  const workedShifts = (workedShiftRows ?? []) as ShiftRow[];
+  type ArchiveRow = {
+    id: string;
+    generation_mode: string;
+    report_kind: string;
+    custom_range: { start: string; end: string } | null;
+    generated_at: string;
+    superseded_at: string | null;
+    feedback_updated_after_generation: boolean;
+    report_periods: { label: string } | null;
+  };
+  const reportArchive = ((archiveRows ?? []) as unknown as ArchiveRow[]).filter(
+    (r) => showAllReports || r.superseded_at === null
+  );
 
   type EntryRow = { entry_date: string; entry_type: "scheduled" | "worked"; in_time: string | null };
   const allTime = computeMetricsFromEntries((allEntries ?? []) as EntryRow[]);
@@ -476,7 +537,23 @@ export default async function EmployeeDetailPage({
           )}
         </p>
         <div className="flex items-start justify-between mt-1 gap-4">
-          <h1 className="text-2xl font-semibold tracking-tight">{emp.employee_name}</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl font-semibold tracking-tight">{emp.employee_name}</h1>
+            {emp.active ? (
+              <Badge className="bg-ikes-green-dark text-white">Active</Badge>
+            ) : (
+              <Badge tone="muted">Inactive</Badge>
+            )}
+            {canToggleStatus && loc && (
+              <EmployeeStatusButton
+                employeeId={emp.id}
+                locationId={loc.id}
+                employeeName={emp.employee_name as string}
+                active={!!emp.active}
+                returnTo={`/dashboard/employees/${emp.id}`}
+              />
+            )}
+          </div>
           <Button asChild>
             <Link href={`/dashboard/employees/${emp.id}/edit`}>Edit</Link>
           </Button>
@@ -502,6 +579,10 @@ export default async function EmployeeDetailPage({
             <div>
               <dt className="text-slate-500">Location</dt>
               <dd>{loc?.name ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Client</dt>
+              <dd>{loc?.clients?.name ?? "—"}</dd>
             </div>
             <div>
               <dt className="text-slate-500">Status</dt>
@@ -550,6 +631,156 @@ export default async function EmployeeDetailPage({
               </dd>
             </div>
           </dl>
+        </CardContent>
+      </Card>
+
+      {(() => {
+        const cur = rawRows[0] ?? null;
+        const label = cur?.report_periods?.label ?? null;
+        const tiles: Array<{ name: string; value: string; n: string | null }> = cur
+          ? [
+              // Display name diverges from customer_service_rating
+              // deliberately (2026-08-14 rename).
+              {
+                name: "Online Review Rating",
+                value:
+                  numOrNull(cur.customer_service_rating) !== null
+                    ? `${Number(cur.customer_service_rating).toFixed(2)} / 5`
+                    : "—",
+                n:
+                  cur.customer_review_quantity != null
+                    ? `n=${cur.customer_review_quantity}`
+                    : null,
+              },
+              {
+                name: "Attendance",
+                value:
+                  numOrNull(cur.attendance_pct) !== null
+                    ? `${Number(cur.attendance_pct).toFixed(1)}%`
+                    : "—",
+                n: null,
+              },
+              {
+                name: "On-Time",
+                value:
+                  numOrNull(cur.on_time_grace_pct) !== null
+                    ? `${Number(cur.on_time_grace_pct).toFixed(1)}%`
+                    : "—",
+                n: null,
+              },
+              {
+                name: "Survey Engagement",
+                value:
+                  numOrNull(cur.survey_engagement_pct) !== null
+                    ? `${Number(cur.survey_engagement_pct).toFixed(1)}%`
+                    : "—",
+                n:
+                  cur.surveys_assigned != null
+                    ? `n=${cur.surveys_assigned}`
+                    : null,
+              },
+              {
+                name: "7Tasks Completion",
+                value:
+                  numOrNull(cur.avg_task_list_completion_pct) !== null
+                    ? `${Number(cur.avg_task_list_completion_pct).toFixed(1)}%`
+                    : "—",
+                n: null,
+              },
+              {
+                name: "Tattle Rating",
+                value:
+                  numOrNull(cur.tattle_rating) !== null
+                    ? `${Number(cur.tattle_rating).toFixed(2)} / 5`
+                    : "—",
+                n:
+                  cur.tattle_quantity != null ? `n=${cur.tattle_quantity}` : null,
+              },
+            ]
+          : [];
+        if (tiles.length === 0) return null;
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Performance metrics{label ? ` — ${label}` : ""}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {tiles.map((t) => (
+                  <div
+                    key={t.name}
+                    className="rounded-md border border-slate-200 px-3 py-2.5"
+                  >
+                    <p className="text-xs text-slate-500">{t.name}</p>
+                    <p className="text-lg font-semibold mt-0.5">{t.value}</p>
+                    {t.n && <p className="text-[11px] text-slate-400">{t.n}</p>}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400 mt-3">
+                — means not computed for this quarter (never zero-filled).
+              </p>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Shifts</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">
+                Upcoming scheduled
+              </h3>
+              {upcomingShifts.length === 0 ? (
+                <p className="text-sm text-slate-500">No scheduled shifts on file.</p>
+              ) : (
+                <ul className="text-sm divide-y divide-slate-100">
+                  {upcomingShifts.map((sh) => (
+                    <li key={sh.id} className="py-1.5 flex justify-between gap-3">
+                      <span>{sh.entry_date}</span>
+                      <span className="text-slate-600">
+                        {(sh.in_time ?? "—").slice(0, 5)}–{(sh.out_time ?? "—").slice(0, 5)}
+                      </span>
+                      <span className="text-slate-500 text-xs self-center">
+                        {sh.role ?? ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">
+                Recent worked
+              </h3>
+              {workedShifts.length === 0 ? (
+                <p className="text-sm text-slate-500">No worked shifts on file.</p>
+              ) : (
+                <ul className="text-sm divide-y divide-slate-100">
+                  {workedShifts.map((sh) => (
+                    <li key={sh.id} className="py-1.5 flex justify-between gap-3">
+                      <span>{sh.entry_date}</span>
+                      <span className="text-slate-600">
+                        {(sh.in_time ?? "—").slice(0, 5)}–{(sh.out_time ?? "—").slice(0, 5)}
+                      </span>
+                      <span className="text-slate-500 text-xs self-center">
+                        {sh.role ?? ""}
+                        {sh.regular_hours != null && Number(sh.regular_hours) > 0
+                          ? ` · ${Number(sh.regular_hours).toFixed(1)}h`
+                          : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -717,6 +948,92 @@ export default async function EmployeeDetailPage({
                   </details>
                 );
               })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card id="reports">
+        <CardHeader>
+          <CardTitle>Reports</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-slate-500">
+              Every report generated for this employee. Quarterly generation
+              lives on the History tab above; custom ranges below.
+            </p>
+            <Link
+              href={
+                showAllReports
+                  ? `/dashboard/employees/${emp.id}#reports`
+                  : `/dashboard/employees/${emp.id}?all_reports=1#reports`
+              }
+              className="text-xs text-ikes-blue underline-offset-2 hover:underline whitespace-nowrap"
+            >
+              {showAllReports ? "Current only" : "Include superseded"}
+            </Link>
+          </div>
+          {reportArchive.length === 0 ? (
+            <p className="text-sm text-slate-500">No reports generated yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-slate-500 uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="py-2 pr-4">Generated</th>
+                    <th className="py-2 pr-4">Period</th>
+                    <th className="py-2 pr-4">Mode</th>
+                    <th className="py-2 pr-4">Kind</th>
+                    <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {reportArchive.map((r) => (
+                    <tr key={r.id}>
+                      <td className="py-2 pr-4 whitespace-nowrap">
+                        {new Date(r.generated_at).toLocaleString()}
+                      </td>
+                      <td className="py-2 pr-4 whitespace-nowrap">
+                        {r.generation_mode === "custom_range" && r.custom_range
+                          ? `${r.custom_range.start} → ${r.custom_range.end}`
+                          : (r.report_periods?.label ?? "—")}
+                      </td>
+                      <td className="py-2 pr-4 text-xs text-slate-600">
+                        {r.generation_mode === "custom_range" ? "Custom" : "Quarterly"}
+                      </td>
+                      <td className="py-2 pr-4 text-xs text-slate-600">
+                        {r.report_kind === "task_detail" ? "Task detail" : "Performance"}
+                      </td>
+                      <td className="py-2 pr-4 whitespace-nowrap text-xs">
+                        {r.superseded_at ? (
+                          <span className="text-slate-500">Superseded</span>
+                        ) : r.feedback_updated_after_generation ? (
+                          <span
+                            className="text-amber-700"
+                            title="Manager feedback was updated after this report was generated."
+                          >
+                            ⚠ Stale
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700">Current</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <a
+                          href={`/api/reports/${r.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs underline hover:text-slate-900"
+                        >
+                          View
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </CardContent>

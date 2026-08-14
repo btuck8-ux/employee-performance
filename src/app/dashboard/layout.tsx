@@ -1,31 +1,16 @@
-import Link from "next/link";
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { getSessionRole, type EpdRole } from "@/lib/authz";
-import {
-  LayoutDashboard,
-  Building2,
-  MapPin,
-  Users,
-  FileText,
-  Upload,
-  Settings,
-  type LucideIcon,
-} from "lucide-react";
+import { NavLinks, type NavLinkItem } from "@/components/nav-links";
 
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-}
-
-const NAV: Record<string, NavItem> = {
-  overview: { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  clients: { href: "/dashboard/clients", label: "Clients", icon: Building2 },
-  locations: { href: "/dashboard/locations", label: "Locations", icon: MapPin },
-  employees: { href: "/dashboard/employees", label: "Employees", icon: Users },
-  reports: { href: "/dashboard/reports", label: "Reports", icon: FileText },
-  uploads: { href: "/dashboard/uploads", label: "Uploads", icon: Upload },
-  scoring: { href: "/dashboard/admin/scoring", label: "Scoring", icon: Settings },
+const NAV: Record<string, NavLinkItem> = {
+  overview: { href: "/dashboard", label: "Overview", icon: "overview" },
+  clients: { href: "/dashboard/clients", label: "Clients", icon: "clients" },
+  locations: { href: "/dashboard/locations", label: "Locations", icon: "locations" },
+  employees: { href: "/dashboard/employees", label: "Employees", icon: "employees" },
+  reports: { href: "/dashboard/reports", label: "Reports", icon: "reports" },
+  uploads: { href: "/dashboard/uploads", label: "Uploads", icon: "uploads" },
+  scoring: { href: "/dashboard/admin/scoring", label: "Scoring", icon: "scoring" },
 };
 
 /**
@@ -34,7 +19,7 @@ const NAV: Record<string, NavItem> = {
  * server-side check, and RLS trims data regardless. SA loses the Locations
  * item deliberately: client cards on /dashboard/clients link to each store.
  */
-function navItemsForRole(role: EpdRole | null): NavItem[] {
+function navItemsForRole(role: EpdRole | null): NavLinkItem[] {
   switch (role) {
     case "system_admin":
       return [NAV.overview, NAV.clients, NAV.employees, NAV.reports, NAV.uploads, NAV.scoring];
@@ -63,21 +48,19 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen flex bg-slate-50">
       <aside className="w-60 bg-white border-r border-slate-200 flex flex-col">
-        <div className="px-6 py-5 border-b border-slate-200">
-          <h1 className="text-sm font-semibold tracking-tight">Employee Performance</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Internal platform</p>
+        <div className="px-5 py-4 border-b border-slate-200">
+          <Image
+            src="/brand/logo-primary-t.png"
+            alt="Ike's Love & Sandwiches"
+            width={170}
+            height={56}
+            priority
+            className="h-auto w-full max-w-[170px]"
+          />
+          <p className="text-xs text-slate-500 mt-1.5">Employee Performance</p>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-0.5">
-          {items.map(({ href, label, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-slate-700 hover:bg-slate-100"
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </Link>
-          ))}
+          <NavLinks items={items} />
         </nav>
         <div className="border-t border-slate-200 px-4 py-3">
           <p className="text-xs text-slate-500 truncate" title={user.email ?? ""}>

@@ -113,7 +113,9 @@ export function PerformanceHistoryTabs({
                   <th className="py-2 pr-4">Accuracy</th>
                   <th className="py-2 pr-4">Speed</th>
                   <th className="py-2 pr-4">Reviews</th>
-                  <th className="py-2 pr-4">Cust. service rating</th>
+                  {/* Display name diverges from the customer_service_rating
+                      column name deliberately (2026-08-14 rename). */}
+                  <th className="py-2 pr-4">Online review rating</th>
                   <th className="py-2 pr-4">Tip rate</th>
                   <th className="py-2 pr-4">Tip / hr</th>
                   <th className="py-2 pr-4">vs Loc avg</th>

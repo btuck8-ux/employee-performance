@@ -1,6 +1,7 @@
 "use client";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -16,11 +17,30 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Employee Performance Platform</CardTitle>
-          <CardDescription>Sign in to continue.</CardDescription>
+    <div className="relative min-h-screen flex items-center justify-center bg-slate-50 px-4 overflow-hidden">
+      {/* The brand book's halftone-dot motif — used exactly once, as a quiet
+          corner texture (kickoff §5f). */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -bottom-16 -right-16 h-72 w-72 rounded-full opacity-15"
+        style={{
+          backgroundImage: "radial-gradient(#702f8a 1.5px, transparent 1.5px)",
+          backgroundSize: "12px 12px",
+        }}
+      />
+      <Card className="w-full max-w-sm relative">
+        <CardHeader className="items-center text-center">
+          <Image
+            src="/brand/logo-vertical-t.png"
+            alt="Ike's Love & Sandwiches"
+            width={180}
+            height={180}
+            priority
+            className="mx-auto h-auto w-44"
+          />
+          <CardDescription className="pt-2">
+            Employee Performance Platform — sign in to continue.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Button className="w-full" onClick={signInWithGoogle}>
