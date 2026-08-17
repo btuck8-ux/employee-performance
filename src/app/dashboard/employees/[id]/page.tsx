@@ -34,12 +34,15 @@ import { generateCustomRangePerformanceReportAction } from "./generate-custom-ra
 import { updateManagerFeedbackAction } from "./manager-feedback-actions";
 import { HourlyTipRateView } from "@/components/teams/HourlyTipRateView";
 import type { HourlyTipRateRow } from "@/app/dashboard/locations/[id]/teams/fetch-hourly-tip-rate-actions";
+// Server-safe module — importing these helpers from TimeWindowPicker (a
+// "use client" file) makes them client references and calling one during the
+// server render throws, killing the whole profile to an error/404 (Next 16).
 import {
   resolveAllTimeWindow,
   resolveQuarterWindow,
   type QuarterOption,
   type TimeWindow,
-} from "@/components/teams/TimeWindowPicker";
+} from "@/components/teams/time-window";
 
 export default async function EmployeeDetailPage({
   params,

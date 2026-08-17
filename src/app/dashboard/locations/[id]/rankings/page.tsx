@@ -2,12 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+// Server-safe module — importing these helpers from TimeWindowPicker (a
+// "use client" file) makes them client references and calling one during the
+// server render throws, killing the whole profile to an error/404 (Next 16).
 import {
   resolveAllTimeWindow,
   resolveQuarterWindow,
   type QuarterOption,
   type TimeWindow,
-} from "@/components/teams/TimeWindowPicker";
+} from "@/components/teams/time-window";
 import { fetchRankingsAction, type RankingRow } from "./fetch-rankings-actions";
 import { RankingsView } from "./RankingsView";
 

@@ -124,3 +124,68 @@ export async function maybeSendFailureAlert(
     return { sent: false, reason: "send threw; logged instead" };
   }
 }
+
+/**
+ * Fatal-outside-the-ledger alert (hardening chip, 2026-08-17).
+ *
+ * A cron route that dies before its orchestrator's first startRun() writes
+ * ZERO ingest_runs rows, so the run-outcome path above never fires — proven
+ * 2026-08-14 when a transient Supabase outage 500'd three crons at their
+ * FIRST DB call and the only evidence was Vercel logs. Every /api/cron/*
+ * route's top-level catch calls this with the route path + error message
+ * (pinned by src/lib/cron-fatal-alert-contract.test.ts).
+ *
+ * Deliberately does NOT write ingest_runs — a synthetic row would dirty the
+ * ledger the incremental windows and empty-streak guard read. Email/console
+ * only, same env gating as maybeSendFailureAlert. Never throws.
+ */
+export async function sendFatalAlert(
+  route: string,
+  message: string
+): Promise<AlertResult> {
+  const body = [
+    `${route} threw before completing — likely BEFORE its first ingest_runs write, so the run-outcome alert cannot see it.`,
+    "",
+    `Error: ${message}`,
+    "",
+    "No (or partial) ingest_runs rows exist for this invocation. Check Vercel runtime logs for the stack. Incremental windows self-heal on the next nightly cycle, or re-trigger the route manually with the CRON_SECRET bearer.",
+  ].join("\n");
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.INGEST_ALERT_EMAIL;
+
+  if (!apiKey || !to) {
+    console.error(
+      `[ingest/alert] FATAL ALERT (email not configured — set RESEND_API_KEY + INGEST_ALERT_EMAIL):\n${body}`
+    );
+    return { sent: false, reason: "RESEND_API_KEY/INGEST_ALERT_EMAIL not set; logged instead" };
+  }
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: ALERT_FROM,
+        to: to.split(",").map((s) => s.trim()),
+        subject: `[EPD] Cron fatal — ${route}`,
+        text: body,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      const hint =
+        res.status === 403 && !process.env.INGEST_ALERT_FROM
+          ? " — sandbox sender onboarding@resend.dev can only deliver to the Resend account owner's email; verify a domain and set INGEST_ALERT_FROM to fix"
+          : "";
+      console.error(`[ingest/alert] Resend ${res.status}${hint}: ${t.slice(0, 300)}\n${body}`);
+      return { sent: false, reason: `resend ${res.status}${hint}` };
+    }
+    return { sent: true, reason: "sent via resend" };
+  } catch (err) {
+    console.error(`[ingest/alert] fatal-alert send failed: ${err instanceof Error ? err.message : String(err)}\n${body}`);
+    return { sent: false, reason: "send threw; logged instead" };
+  }
+}

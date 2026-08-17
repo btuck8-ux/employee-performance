@@ -58,6 +58,11 @@ derivable from the code alone.
   the tripwire, change-notice requested via the orchestrator memo
   2026-08-14). It closed the Jun–Aug `scheduled_shifts_gap`; a store's
   FIRST run backfills from 2026-06-01.
+- **EPD's CP-surveys read is kind-filtered** (`fetch.ts` `.in("kind",
+  ["weekly","one_off"])`, per CP mig 0055's homework reshape 2026-08-17):
+  homework is deliberately excluded — training compliance is THQ's signal,
+  not survey engagement. Any future CP-surveys read must carry the same
+  filter and must NOT assume `surveys.location_id` is NOT NULL.
 - **Metric targets are a cross-app contract value** (EPD `metric_targets`,
   SA-editable on the Scoring page ↔ THQ migration-config; the nine values
   adopted verbatim 2026-08-14). Never change unilaterally — a target change

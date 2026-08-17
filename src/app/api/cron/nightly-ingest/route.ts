@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
+import { sendFatalAlert } from "@/lib/ingest/sevenshifts/alert";
 import { runNightlyIngest } from "@/lib/ingest/sevenshifts/orchestrator";
 
 /**
@@ -37,6 +38,10 @@ export async function GET(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[nightly-ingest] fatal:", message);
+    // A fatal here usually means the FIRST DB call died — zero ingest_runs
+    // rows, so the run-outcome alert is blind to it (2026-08-14 outage).
+    // Send the failure email from the catch itself; never throws.
+    await sendFatalAlert("/api/cron/nightly-ingest", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
