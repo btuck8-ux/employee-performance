@@ -63,10 +63,12 @@ export default async function GuestFeedbackPage({
   const tab = pickStr(search.tab) === "tattles" ? "tattles" : "reviews";
   const fromParam = pickStr(search.from);
   const toParam = pickStr(search.to);
-  const from = DATE_RE.test(fromParam)
+  let from = DATE_RE.test(fromParam)
     ? fromParam
     : isoDateDaysAgo(DEFAULT_WINDOW_DAYS);
-  const to = DATE_RE.test(toParam) ? toParam : isoDateDaysAgo(0);
+  let to = DATE_RE.test(toParam) ? toParam : isoDateDaysAgo(0);
+  // An inverted range is a typo, not a request for the empty set.
+  if (from > to) [from, to] = [to, from];
   const reviewsPage = parsePage(pickStr(search.rpage));
   const tattlesPage = parsePage(pickStr(search.tpage));
 
@@ -88,34 +90,60 @@ export default async function GuestFeedbackPage({
   const multiStore = locations.length > 1;
 
   // ---- Online Reviews page ----
-  let reviewsQ = supabase
-    .from("customer_reviews")
-    .select(
-      "id, review_date, location_id, rating, provider_name, reviewer, review_text, review_url, response_status",
-      { count: "exact" }
-    )
-    .gte("review_date", from)
-    .lte("review_date", to)
-    .order("review_date", { ascending: false })
-    .order("id", { ascending: true })
-    .range((reviewsPage - 1) * PAGE_SIZE, reviewsPage * PAGE_SIZE - 1);
-  if (store) reviewsQ = reviewsQ.eq("location_id", store);
-  const { data: reviewRows, count: reviewCount, error: reviewsError } = await reviewsQ;
+  const buildReviewsQ = (page: number) => {
+    let q = supabase
+      .from("customer_reviews")
+      .select(
+        "id, review_date, location_id, rating, provider_name, reviewer, review_text, review_url, response_status",
+        { count: "exact" }
+      )
+      .gte("review_date", from)
+      .lte("review_date", to)
+      .order("review_date", { ascending: false })
+      .order("id", { ascending: true })
+      .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+    if (store) q = q.eq("location_id", store);
+    return q;
+  };
+  const reviewsFirst = await buildReviewsQ(reviewsPage);
+  const reviewCount = reviewsFirst.count;
+  let reviewRows = reviewsFirst.data;
+  let reviewsError = reviewsFirst.error;
+  const reviewPages = Math.max(1, Math.ceil((reviewCount ?? 0) / PAGE_SIZE));
+  // A page param past the end (stale link, hand-edited URL) clamps to the
+  // last real page instead of presenting a false "no rows" state.
+  let reviewsPageEff = reviewsPage;
+  if (!reviewsError && (reviewCount ?? 0) > 0 && reviewsPage > reviewPages) {
+    reviewsPageEff = reviewPages;
+    ({ data: reviewRows, error: reviewsError } = await buildReviewsQ(reviewPages));
+  }
 
   // ---- Tattle Surveys page ----
-  let tattlesQ = supabase
-    .from("tattle_surveys")
-    .select(
-      "id, date_experienced, location_id, tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, comments_combined",
-      { count: "exact" }
-    )
-    .gte("date_experienced", from)
-    .lte("date_experienced", to)
-    .order("date_experienced", { ascending: false })
-    .order("id", { ascending: true })
-    .range((tattlesPage - 1) * PAGE_SIZE, tattlesPage * PAGE_SIZE - 1);
-  if (store) tattlesQ = tattlesQ.eq("location_id", store);
-  const { data: tattleRows, count: tattleCount, error: tattlesError } = await tattlesQ;
+  const buildTattlesQ = (page: number) => {
+    let q = supabase
+      .from("tattle_surveys")
+      .select(
+        "id, date_experienced, location_id, tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, comments_combined",
+        { count: "exact" }
+      )
+      .gte("date_experienced", from)
+      .lte("date_experienced", to)
+      .order("date_experienced", { ascending: false })
+      .order("id", { ascending: true })
+      .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+    if (store) q = q.eq("location_id", store);
+    return q;
+  };
+  const tattlesFirst = await buildTattlesQ(tattlesPage);
+  const tattleCount = tattlesFirst.count;
+  let tattleRows = tattlesFirst.data;
+  let tattlesError = tattlesFirst.error;
+  const tattlePages = Math.max(1, Math.ceil((tattleCount ?? 0) / PAGE_SIZE));
+  let tattlesPageEff = tattlesPage;
+  if (!tattlesError && (tattleCount ?? 0) > 0 && tattlesPage > tattlePages) {
+    tattlesPageEff = tattlePages;
+    ({ data: tattleRows, error: tattlesError } = await buildTattlesQ(tattlePages));
+  }
 
   const reviews = (reviewRows ?? []).map((r) => ({
     id: r.id as string,
@@ -138,9 +166,6 @@ export default async function GuestFeedbackPage({
     speed_of_service_score: t.speed_of_service_score as number | string | null,
     comments: (t.comments_combined as string | null) ?? "",
   }));
-
-  const reviewPages = Math.max(1, Math.ceil((reviewCount ?? 0) / PAGE_SIZE));
-  const tattlePages = Math.max(1, Math.ceil((tattleCount ?? 0) / PAGE_SIZE));
 
   const filterForm = (forTab: "reviews" | "tattles") => (
     <form method="get" className="flex flex-wrap items-end gap-3 mb-4">
@@ -330,7 +355,7 @@ export default async function GuestFeedbackPage({
                   </table>
                 </div>
               )}
-              {pager("reviews", reviewsPage, reviewPages, reviewCount ?? 0, "rpage")}
+              {pager("reviews", reviewsPageEff, reviewPages, reviewCount ?? 0, "rpage")}
             </CardContent>
           </Card>
         </TabsContent>
@@ -407,7 +432,7 @@ export default async function GuestFeedbackPage({
                   </table>
                 </div>
               )}
-              {pager("tattles", tattlesPage, tattlePages, tattleCount ?? 0, "tpage")}
+              {pager("tattles", tattlesPageEff, tattlePages, tattleCount ?? 0, "tpage")}
             </CardContent>
           </Card>
         </TabsContent>

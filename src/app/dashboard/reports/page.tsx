@@ -286,7 +286,7 @@ export default async function ReportsPage({
               {reports.length === RECENT_LIMIT && (
                 <p className="text-xs text-amber-700 mb-2">
                   Showing the {RECENT_LIMIT} most recent reports — the window
-                  holds more.
+                  may hold more.
                 </p>
               )}
               <table className="w-full text-sm">
