@@ -155,10 +155,14 @@ function probeCompany(
     }
   }
 
-  // 4. Date sanity across the whole payload (§6-A volatility read).
+  // 4. Date sanity across the whole payload (§6-A volatility read). Future
+  // dates count separately — a pre-entered start date is plausible data,
+  // not garbage, but Tucker should see how many there are.
+  const today = new Date().toISOString().slice(0, 10);
   let min: string | null = null;
   let max: string | null = null;
-  let bogus = 0;
+  let pre2000 = 0;
+  let future = 0;
   let withDate = 0;
   if (bestKey) {
     for (const u of users) {
@@ -167,7 +171,8 @@ function probeCompany(
       withDate += 1;
       if (min === null || d < min) min = d;
       if (max === null || d > max) max = d;
-      if (d < "2000-01-01" || d > "2027-12-31") bogus += 1;
+      if (d < "2000-01-01") pre2000 += 1;
+      else if (d > today) future += 1;
     }
   }
 
@@ -182,11 +187,28 @@ function probeCompany(
     coverage,
     agreement_vs_stored: agreement,
     diff_sample: diffs,
-    date_sanity: { min, max, bogus_outside_2000_2027: bogus },
+    date_sanity: { min, max, pre_2000: pre2000, future },
   };
 }
 
 const DETAIL_SAMPLE_CAP = 3;
+/** Spacer between detail requests — same rate-limit courtesy as getAll. */
+const DETAIL_DELAY_MS = 150;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Values echoed from the detail object are clamped to short scalars —
+ * hire-shaped keys should only ever hold dates, but the no-PII invariant
+ * must not depend on what 7shifts happens to return.
+ */
+function redactScalar(v: unknown): string {
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === "object") return `(${Array.isArray(v) ? "array" : "object"})`;
+  return String(v).slice(0, 40);
+}
 
 /**
  * GET /users/{id} for a few roster-matched users. The list payload carries no
@@ -195,11 +217,12 @@ const DETAIL_SAMPLE_CAP = 3;
 async function sampleUserDetails(companyId: number, userIds: number[]) {
   const samples = [];
   for (const id of userIds.slice(0, DETAIL_SAMPLE_CAP)) {
+    if (samples.length > 0) await sleep(DETAIL_DELAY_MS);
     try {
       const detail = await getOne<UserRow>(companyId, `users/${id}`);
-      const hireShaped: Record<string, unknown> = {};
+      const hireShaped: Record<string, string> = {};
       for (const [k, v] of Object.entries(detail)) {
-        if (HIRE_KEY_RE.test(k)) hireShaped[k] = v;
+        if (HIRE_KEY_RE.test(k)) hireShaped[k] = redactScalar(v);
       }
       samples.push({
         user_id: id,
