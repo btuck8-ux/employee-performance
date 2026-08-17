@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
+import { sendFatalAlert } from "@/lib/ingest/sevenshifts/alert";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { CSV_UPLOADS_BUCKET } from "@/lib/storage-csv";
 
@@ -27,6 +28,20 @@ export async function GET(request: Request) {
   const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
   if (denied) return denied;
 
+  // Uniform fatal-alert coverage with the ingest crons: an uncaught throw
+  // here (e.g. Storage client dying at the first call) would otherwise 500
+  // with Vercel logs as the only evidence.
+  try {
+    return await sweep();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[sweep-csv-uploads] fatal:", message);
+    await sendFatalAlert("/api/cron/sweep-csv-uploads", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function sweep() {
   const supabase = createAdminClient();
   const cutoffMs = Date.now() - ORPHAN_THRESHOLD_HOURS * 60 * 60 * 1000;
 

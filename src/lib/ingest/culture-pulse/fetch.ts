@@ -106,6 +106,15 @@ export async function fetchCpSurveyWeeks(
         .from("surveys")
         .select("id, target_monday")
         .eq("location_id", cpLocationId)
+        // CP mig 0055 (2026-08-17) added kind='homework' training-assignment
+        // rows (location_id nullable). Homework is THQ's training-compliance
+        // signal, NOT survey engagement: without this filter a per-location
+        // homework row is silently inherited and its respondents enter the
+        // pool via the "evidently sent" fallback, inflating
+        // survey_engagement_pct. Tenant-wide (NULL-location) homework never
+        // matches the .eq above, but the kind filter is the load-bearing
+        // guard. Any future CP-surveys read must carry it (AGENTS.md).
+        .in("kind", ["weekly", "one_off"])
         .gte("target_monday", sinceIsoDate)
         .range(from, to),
     "surveys"

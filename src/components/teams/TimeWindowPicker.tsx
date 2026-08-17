@@ -1,23 +1,28 @@
 "use client";
 import { useState } from "react";
+import {
+  resolveAllTimeWindow,
+  resolveCustomWindow,
+  resolveQuarterWindow,
+  todayIso,
+  type QuarterOption,
+  type TimeWindow,
+  type TimeWindowMode,
+} from "./time-window";
 
-export type TimeWindowMode = "quarter" | "all_time" | "custom";
-
-export interface TimeWindow {
-  mode: TimeWindowMode;
-  startDate: string; // YYYY-MM-DD
-  endDate: string;   // YYYY-MM-DD
-  label: string;
-  /** When mode === "quarter", the selected period's id (useful as a cache key) */
-  quarterId?: string;
-}
-
-export interface QuarterOption {
-  id: string;
-  label: string;
-  period_start: string;
-  period_end: string;
-}
+// The pure window helpers + types live in ./time-window (server-safe — see
+// its header for the Next 16 client-reference trap). Re-exported here so
+// existing CLIENT consumers keep importing from this module unchanged;
+// server components must import from "./time-window" directly (pinned by
+// src/lib/server-client-boundary-contract.test.ts).
+export {
+  resolveAllTimeWindow,
+  resolveCustomWindow,
+  resolveQuarterWindow,
+  type QuarterOption,
+  type TimeWindow,
+  type TimeWindowMode,
+} from "./time-window";
 
 interface TimeWindowPickerProps {
   quarters: QuarterOption[];
@@ -27,41 +32,6 @@ interface TimeWindowPickerProps {
   latestDate?: string | null;
   value: TimeWindow;
   onChange: (next: TimeWindow) => void;
-}
-
-const todayIso = () => new Date().toISOString().slice(0, 10);
-
-export function resolveQuarterWindow(q: QuarterOption): TimeWindow {
-  return {
-    mode: "quarter",
-    startDate: q.period_start,
-    endDate: q.period_end,
-    label: q.label,
-    quarterId: q.id,
-  };
-}
-
-export function resolveAllTimeWindow(
-  earliestDate: string | null,
-  latestDate: string | null
-): TimeWindow {
-  const start = earliestDate ?? todayIso();
-  const end = latestDate ?? todayIso();
-  return {
-    mode: "all_time",
-    startDate: start,
-    endDate: end,
-    label: "All time",
-  };
-}
-
-export function resolveCustomWindow(start: string, end: string): TimeWindow {
-  return {
-    mode: "custom",
-    startDate: start,
-    endDate: end,
-    label: `${start} → ${end}`,
-  };
 }
 
 export function TimeWindowPicker({
