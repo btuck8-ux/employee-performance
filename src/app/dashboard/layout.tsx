@@ -8,6 +8,11 @@ const NAV: Record<string, NavLinkItem> = {
   clients: { href: "/dashboard/clients", label: "Clients", icon: "clients" },
   locations: { href: "/dashboard/locations", label: "Locations", icon: "locations" },
   employees: { href: "/dashboard/employees", label: "Employees", icon: "employees" },
+  guestFeedback: {
+    href: "/dashboard/guest-feedback",
+    label: "Guest Feedback",
+    icon: "guest-feedback",
+  },
   reports: { href: "/dashboard/reports", label: "Reports", icon: "reports" },
   uploads: { href: "/dashboard/uploads", label: "Uploads", icon: "uploads" },
   scoring: { href: "/dashboard/admin/scoring", label: "Scoring", icon: "scoring" },
@@ -18,20 +23,31 @@ const NAV: Record<string, NavLinkItem> = {
  * Hiding is UX, not security — every gated page/action enforces its own
  * server-side check, and RLS trims data regardless. SA loses the Locations
  * item deliberately: client cards on /dashboard/clients link to each store.
+ * Guest Feedback is visible to EVERY signed-in tier (kickoff 2026-08-17
+ * §4b) — RLS trims its rows, and a location-less session just sees empty
+ * tabs.
  */
 function navItemsForRole(role: EpdRole | null): NavLinkItem[] {
   switch (role) {
     case "system_admin":
-      return [NAV.overview, NAV.clients, NAV.employees, NAV.reports, NAV.uploads, NAV.scoring];
+      return [
+        NAV.overview,
+        NAV.clients,
+        NAV.employees,
+        NAV.guestFeedback,
+        NAV.reports,
+        NAV.uploads,
+        NAV.scoring,
+      ];
     case "regional_admin":
     case "area_admin":
     case "manager":
-      return [NAV.overview, NAV.locations, NAV.employees, NAV.reports];
+      return [NAV.overview, NAV.locations, NAV.employees, NAV.guestFeedback, NAV.reports];
     case "user":
     default:
       // user tier is self-scoped; a null role (uninvited sign-in) fails
       // closed to the same minimal surface.
-      return [NAV.overview];
+      return [NAV.overview, NAV.guestFeedback];
   }
 }
 

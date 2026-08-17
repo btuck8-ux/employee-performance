@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSessionRole } from "@/lib/authz";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { ReportViewer } from "@/components/reports/ReportViewer";
 import { generateReportsBuilderAction } from "./builder-actions";
 
 // The builder can fan out over a whole location (PDF render per employee) —
@@ -16,35 +15,34 @@ function pickStr(v: string | string[] | undefined): string {
   return v ?? "";
 }
 
-export default async function ReportsArchivePage({
+const RECENT_WINDOW_DAYS = 7;
+const RECENT_LIMIT = 500;
+
+function recentWindowStartIso(): string {
+  return new Date(
+    Date.now() - RECENT_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+}
+
+export default async function ReportsPage({
   searchParams,
 }: {
   searchParams: Promise<SearchParams>;
 }) {
   const search = await searchParams;
-  const filterLocation = pickStr(search.location);
-  const filterKind = pickStr(search.kind); // "" | "performance" | "task_detail"
-  const filterMode = pickStr(search.mode); // "" | "quarterly" | "custom_range"
-  const includeSuperseded = pickStr(search.include_superseded) === "1";
 
   const { role, supabase } = await getSessionRole();
   const isSA = role === "system_admin";
   const builderLocation = pickStr(search.builder_location);
   const builderError = pickStr(search.builder_error);
-  const generatedParam = pickStr(search.generated);
-  const generatedIds = generatedParam
-    ? generatedParam
-        .split(",")
-        .filter((x) =>
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x)
-        )
-    : [];
 
-  // Locations dropdown
-  const { data: locations } = await supabase
-    .from("locations")
-    .select("id, name, clients(name)")
-    .order("name");
+  // ---- Builder data (SA only): locations + quarters + employees ----
+  const { data: locations } = isSA
+    ? await supabase
+        .from("locations")
+        .select("id, name, clients(name)")
+        .order("name")
+    : { data: null };
   type LocationRow = {
     id: string;
     name: string;
@@ -56,7 +54,6 @@ export default async function ReportsArchivePage({
     client_name: l.clients?.name ?? null,
   }));
 
-  // ---- Builder data (SA only): quarters + employees at picked location ----
   const { data: periodRows } = isSA
     ? await supabase
         .from("report_periods")
@@ -83,63 +80,30 @@ export default async function ReportsArchivePage({
     code: (e.employee_code as string | null) ?? "",
   }));
 
-  // ---- "Generated this visit" list ----
-  const { data: generatedRows } =
-    generatedIds.length > 0
-      ? await supabase
-          .from("generated_reports")
-          .select(
-            "id, generation_mode, custom_range, report_kind, employees(employee_name), report_periods(label)"
-          )
-          .in("id", generatedIds)
-      : { data: null };
-  type GeneratedRow = {
-    id: string;
-    generation_mode: string;
-    custom_range: { start: string; end: string } | null;
-    report_kind: string;
-    employees: { employee_name: string } | null;
-    report_periods: { label: string } | null;
-  };
-  const generatedReports = ((generatedRows ?? []) as unknown as GeneratedRow[]).map(
-    (r) => ({
-      id: r.id,
-      label: `${r.employees?.employee_name ?? "—"} · ${
-        r.generation_mode === "custom_range" && r.custom_range
-          ? `${r.custom_range.start} → ${r.custom_range.end}`
-          : (r.report_periods?.label ?? "—")
-      }`,
-    })
-  );
-
-  // Reports list
-  let q = supabase
+  // ---- "Generated in the past 7 days" (kickoff 2026-08-17 §4a) ----
+  // Rolling window, purview-scoped by RLS through the authenticated client.
+  // Superseded excluded, no toggle — the per-employee archive with its
+  // superseded toggle lives on the profile page.
+  const windowStart = recentWindowStartIso();
+  const { data: rawReports } = await supabase
     .from("generated_reports")
     .select(
-      `id, generation_mode, report_kind, custom_range, storage_path,
-       generated_at, superseded_at, feedback_updated_after_generation,
+      `id, generation_mode, report_kind, custom_range, generated_at,
        employees(id, employee_name, employee_code),
        locations(id, name),
        report_periods(label)`
     )
+    .gte("generated_at", windowStart)
+    .is("superseded_at", null)
     .order("generated_at", { ascending: false })
-    .limit(500);
-  if (filterLocation) q = q.eq("location_id", filterLocation);
-  if (filterKind) q = q.eq("report_kind", filterKind);
-  if (filterMode) q = q.eq("generation_mode", filterMode);
-  if (!includeSuperseded) q = q.is("superseded_at", null);
-
-  const { data: rawReports } = await q;
+    .limit(RECENT_LIMIT);
 
   type ReportRow = {
     id: string;
     generation_mode: string;
     report_kind: string;
     custom_range: { start: string; end: string } | null;
-    storage_path: string;
     generated_at: string;
-    superseded_at: string | null;
-    feedback_updated_after_generation: boolean;
     employees: { id: string; employee_name: string; employee_code: string } | null;
     locations: { id: string; name: string } | null;
     report_periods: { label: string } | null;
@@ -157,8 +121,6 @@ export default async function ReportsArchivePage({
     employee_code: r.employees?.employee_code ?? "",
     location_name: r.locations?.name ?? "—",
     generated_at: r.generated_at,
-    superseded: !!r.superseded_at,
-    stale: r.feedback_updated_after_generation,
   }));
 
   return (
@@ -166,9 +128,9 @@ export default async function ReportsArchivePage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Custom report builder. Each employee&apos;s full report archive lives on
-          their profile&apos;s Reports section; the browse table below spans your
-          whole purview.
+          Custom report builder. Each employee&apos;s full report archive
+          (including superseded copies) lives on their profile&apos;s Reports
+          section.
         </p>
       </div>
 
@@ -302,115 +264,40 @@ export default async function ReportsArchivePage({
         </Card>
       )}
 
-      {generatedReports.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Generated this visit</CardTitle>
-            <CardDescription>
-              Click a report to display it inline; use the button to open a
-              printable tab.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ReportViewer reports={generatedReports} />
-          </CardContent>
-        </Card>
-      )}
-
       <Card>
         <CardHeader>
-          <CardTitle>Filters</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form method="get" className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Location</label>
-              <select
-                name="location"
-                defaultValue={filterLocation}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[200px]"
-              >
-                <option value="">All locations</option>
-                {locationList.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.client_name ? `${l.client_name} — ${l.name}` : l.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Kind</label>
-              <select
-                name="kind"
-                defaultValue={filterKind}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-              >
-                <option value="">All kinds</option>
-                <option value="performance">Performance</option>
-                <option value="task_detail">Task detail</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Mode</label>
-              <select
-                name="mode"
-                defaultValue={filterMode}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-              >
-                <option value="">All modes</option>
-                <option value="quarterly">Quarterly</option>
-                <option value="custom_range">Custom range</option>
-              </select>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-slate-700 mb-1.5">
-              <input
-                type="checkbox"
-                name="include_superseded"
-                value="1"
-                defaultChecked={includeSuperseded}
-                className="h-4 w-4"
-              />
-              Include superseded
-            </label>
-            <button
-              type="submit"
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
-            >
-              Apply
-            </button>
-            {(filterLocation || filterKind || filterMode || includeSuperseded) && (
-              <Link
-                href="/dashboard/reports"
-                className="text-xs text-slate-600 underline self-center"
-              >
-                Clear all
-              </Link>
-            )}
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Generated reports</CardTitle>
+          <CardTitle>Generated in the past 7 days</CardTitle>
+          <CardDescription>
+            Everything generated across your purview in the last{" "}
+            {RECENT_WINDOW_DAYS} days. Superseded copies are excluded — find
+            them in the archive on each employee&apos;s profile.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {reports.length === 0 ? (
             <p className="text-sm text-slate-500">
-              No reports match these filters.
+              Nothing generated in the past {RECENT_WINDOW_DAYS} days.
+              {isSA
+                ? " Use the builder above to generate reports, or browse each employee's full archive on their profile."
+                : " Each employee's full archive lives on their profile's Reports section."}
             </p>
           ) : (
             <div className="overflow-x-auto">
+              {reports.length === RECENT_LIMIT && (
+                <p className="text-xs text-amber-700 mb-2">
+                  Showing the {RECENT_LIMIT} most recent reports — the window
+                  holds more.
+                </p>
+              )}
               <table className="w-full text-sm">
                 <thead className="text-left text-xs text-slate-500 uppercase border-b border-slate-200">
                   <tr>
                     <th className="py-2 pr-4">Generated</th>
                     <th className="py-2 pr-4">Employee</th>
-                    <th className="py-2 pr-4">Location</th>
-                    <th className="py-2 pr-4">Period</th>
-                    <th className="py-2 pr-4">Mode</th>
+                    <th className="py-2 pr-4">Store</th>
                     <th className="py-2 pr-4">Kind</th>
-                    <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4">Mode</th>
+                    <th className="py-2 pr-4">Period</th>
                     <th className="py-2 pr-4"></th>
                   </tr>
                 </thead>
@@ -438,31 +325,17 @@ export default async function ReportsArchivePage({
                         )}
                       </td>
                       <td className="py-2 pr-4">{r.location_name}</td>
-                      <td className="py-2 pr-4 whitespace-nowrap">{r.period}</td>
-                      <td className="py-2 pr-4 whitespace-nowrap text-xs text-slate-600">
-                        {r.generation_mode === "custom_range"
-                          ? "Custom"
-                          : "Quarterly"}
-                      </td>
                       <td className="py-2 pr-4 whitespace-nowrap text-xs text-slate-600">
                         {r.report_kind === "task_detail"
                           ? "Task detail"
                           : "Performance"}
                       </td>
-                      <td className="py-2 pr-4 whitespace-nowrap text-xs">
-                        {r.superseded ? (
-                          <span className="text-slate-500">Superseded</span>
-                        ) : r.stale ? (
-                          <span
-                            className="text-amber-700"
-                            title="Manager feedback was updated after this report was generated."
-                          >
-                            ⚠ Stale
-                          </span>
-                        ) : (
-                          <span className="text-emerald-700">Current</span>
-                        )}
+                      <td className="py-2 pr-4 whitespace-nowrap text-xs text-slate-600">
+                        {r.generation_mode === "custom_range"
+                          ? "Custom"
+                          : "Quarterly"}
                       </td>
+                      <td className="py-2 pr-4 whitespace-nowrap">{r.period}</td>
                       <td className="py-2 pr-4">
                         <a
                           href={`/api/reports/${r.id}`}
@@ -470,7 +343,7 @@ export default async function ReportsArchivePage({
                           rel="noopener noreferrer"
                           className="text-xs underline hover:text-slate-900"
                         >
-                          Download
+                          View
                         </a>
                       </td>
                     </tr>
