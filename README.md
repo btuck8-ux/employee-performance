@@ -45,7 +45,7 @@ Vercel crons (`vercel.json`), all UTC:
 | Cron | Time | Job |
 |---|---|---|
 | `sweep-csv-uploads` | 04:00 | sweep stale upload storage |
-| `nightly-ingest` | 09:00 | 7shifts fan-out: time punches, identity bridge, POS (HOU) |
+| `nightly-ingest` | 09:00 | 7shifts fan-out: time punches, identity bridge, POS (HOU); then hire-date NULL-fill from earliest worked entry |
 | `ingest-toast-sales` | 09:15 | Toast sales feed |
 | `harvest-guest-feedback` | 09:30 | Tattle snapshots + reviews + 7Tasks (API) |
 | `sync-cp-schedules` | 09:40 | CulturePulse scheduled-shifts sync (attendance/on-time inputs; first run backfills from 2026-06-01) |

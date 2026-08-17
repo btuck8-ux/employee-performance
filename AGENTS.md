@@ -104,6 +104,13 @@ derivable from the code alone.
 - NOLA: `actuals_source='cake'` — excluded from the 7shifts time fan-out;
   its labor rides the cake-nightly Playwright Action. `pos_via_7shifts` =
   Houston only.
+- `employees.hire_date`: CSV/manual values are NEVER overwritten. NULLs
+  fill from the earliest **worked** `time_entries` row (Tucker §6-B ruling
+  2026-08-17 — scheduled rows deliberately don't count). The fill rides
+  nightly-ingest (non-fatal) + the `/api/admin/backfill-hire-dates` lever;
+  one pass covers NOLA too (CAKE worked rows land in time_entries).
+  **7shifts carries NO hire-date field** (Step-0 probe 2026-08-17, list +
+  detail endpoints, both companies) — don't re-research.
 - `rowMatchesLocation` is strict case-insensitive equality — new vendor
   location labels must be added to `locations.csv_aliases` (migration, the
   035 pattern) or rows silently bucket as `skipped_other_location`.
