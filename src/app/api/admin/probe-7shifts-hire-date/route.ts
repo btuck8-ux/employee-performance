@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCrosswalk } from "@/lib/ingest/sevenshifts/crosswalk";
-import { getAll } from "@/lib/ingest/sevenshifts/client";
+import { getAll, getOne } from "@/lib/ingest/sevenshifts/client";
 
 /**
  * STEP 0 probe for the hire-date-from-7shifts feed (kickoff 2026-08-17 §3).
@@ -24,6 +24,10 @@ import { getAll } from "@/lib/ingest/sevenshifts/client";
  *     any write path exists.
  *  4. Date sanity for §6-A (re-stamp semantics): min/max payload hire dates
  *     and counts of clearly-bogus values (pre-2000 or in the future).
+ *  5. Detail-endpoint sample: the LIST payload proved to carry no hire-date
+ *     field on the first run, so the probe also GETs /users/{id} for a few
+ *     roster-matched users per company — the detail object can carry fields
+ *     the list omits. Keys + hire-shaped values reported per sample.
  *
  * Fetches users with the exact same call identities.ts uses (same params),
  * so the probe sees the same payload the nightly write path would.
@@ -182,6 +186,36 @@ function probeCompany(
   };
 }
 
+const DETAIL_SAMPLE_CAP = 3;
+
+/**
+ * GET /users/{id} for a few roster-matched users. The list payload carries no
+ * hire-date field, so this answers whether the detail object does.
+ */
+async function sampleUserDetails(companyId: number, userIds: number[]) {
+  const samples = [];
+  for (const id of userIds.slice(0, DETAIL_SAMPLE_CAP)) {
+    try {
+      const detail = await getOne<UserRow>(companyId, `users/${id}`);
+      const hireShaped: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(detail)) {
+        if (HIRE_KEY_RE.test(k)) hireShaped[k] = v;
+      }
+      samples.push({
+        user_id: id,
+        keys: Object.keys(detail).sort(),
+        hire_shaped_fields: hireShaped,
+      });
+    } catch (err) {
+      samples.push({
+        user_id: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return samples;
+}
+
 export async function GET(request: Request) {
   const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
   if (denied) return denied;
@@ -219,7 +253,16 @@ export async function GET(request: Request) {
       try {
         // Same call identities.ts makes — the probe sees the nightly's payload.
         const users = await getAll<UserRow>(companyId, "users", { limit: 500 });
-        companies.push(probeCompany(companyId, users, companyRoster));
+        const payloadIds = new Set(
+          users.map((u) => u["id"]).filter((v): v is number => typeof v === "number")
+        );
+        const sampleIds = companyRoster
+          .map((e) => e.seven_shifts_user_id)
+          .filter((id): id is number => id != null && payloadIds.has(id));
+        companies.push({
+          ...probeCompany(companyId, users, companyRoster),
+          detail_endpoint_samples: await sampleUserDetails(companyId, sampleIds),
+        });
       } catch (err) {
         companies.push({
           company_id: companyId,
