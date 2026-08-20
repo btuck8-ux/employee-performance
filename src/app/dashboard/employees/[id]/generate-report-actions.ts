@@ -1,10 +1,8 @@
 "use server";
-import { revalidatePath } from "next/cache";
 import { renderToBuffer } from "@react-pdf/renderer";
 import React from "react";
 import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createClient } from "@/lib/supabase/server";
 import {
   EmployeeReportDocument,
   TEMPLATE_VERSION,
@@ -18,6 +16,7 @@ import {
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { fetchMetricTargets } from "@/lib/metric-targets";
 import { getCategoryCurrency } from "@/lib/category-currency";
+import type { ReportRenderOptions } from "@/lib/report-render-options";
 import { buildTaskDetailData } from "./generate-task-detail-actions";
 
 function num(v: number | string | null | undefined): number | null {
@@ -64,7 +63,16 @@ export interface RenderAndStoreResult {
 export async function renderAndStorePerformanceReport(
   supabase: SupabaseClient,
   performance_record_id: string,
-  opts: { include_task_detail: boolean; generated_by: string | null }
+  opts: {
+    include_task_detail: boolean;
+    generated_by: string | null;
+    /**
+     * §5-B/§5-C builder selection — rendering only, computation untouched.
+     * Omitted (all pre-builder callers) → every row + the feedback section,
+     * exactly the pre-granularity PDF.
+     */
+    render_options?: ReportRenderOptions;
+  }
 ): Promise<RenderAndStoreResult> {
   const { data: pr, error } = await supabase
     .from("performance_records")
@@ -272,6 +280,7 @@ export async function renderAndStorePerformanceReport(
       pr.location_id,
       period.period_end
     ),
+    render_options: opts.render_options,
   };
 
   // Render the performance PDF. Cast through unknown because the wrapper
@@ -322,6 +331,9 @@ export async function renderAndStorePerformanceReport(
     template_version: TEMPLATE_VERSION,
     targets: metricTargets,
     customer_service_score: { yellow: 70, green: 85 },
+    // §5-B audit rider: which rows/sections THIS PDF rendered (jsonb,
+    // write-only, no DDL). Absent = unrestricted (pre-granularity reports).
+    ...(opts.render_options ? { render_options: opts.render_options } : {}),
   };
 
   await supabase
@@ -366,41 +378,9 @@ export async function renderAndStorePerformanceReport(
   };
 }
 
-export async function generatePerformanceReportAction(formData: FormData) {
-  const performance_record_id = String(formData.get("performance_record_id") ?? "");
-  const employee_id = String(formData.get("employee_id") ?? "");
-  const include_task_detail = formData.get("include_task_detail") === "1";
-  if (!performance_record_id || !employee_id) return;
-
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const result = await renderAndStorePerformanceReport(supabase, performance_record_id, {
-    include_task_detail,
-    generated_by: user?.id ?? null,
-  });
-
-  if (!result.ok) {
-    console.error("[report-gen] failed:", result.error);
-    return;
-  }
-  console.log(
-    `[report-gen] generated ${result.storage_path}` +
-      (result.task_detail_included ? " (with task detail bundled)" : "") +
-      (result.task_detail_note ? ` [task-detail-note: ${result.task_detail_note}]` : "")
-  );
-
-  revalidatePath(`/dashboard/employees/${employee_id}`);
-  // location_id is needed for revalidation but the helper already updated it.
-  // Refetch a minimal record to find the location for revalidation only:
-  const { data: locOnly } = await supabase
-    .from("performance_records")
-    .select("location_id")
-    .eq("id", performance_record_id)
-    .single();
-  if (locOnly?.location_id) {
-    revalidatePath(`/dashboard/locations/${locOnly.location_id}`);
-  }
-}
+// §5-A (2026-08-19): the per-quarter-row generatePerformanceReportAction is
+// RETIRED — the profile row now links into the Reports builder pre-filled,
+// and the builder is the single generation surface. The core above stays;
+// only the row-level action wrapper is gone. (The standalone Task Detail
+// action lives on in generate-task-detail-actions.ts — the builder can only
+// bundle task detail, not generate it standalone.)

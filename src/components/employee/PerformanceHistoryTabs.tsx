@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge, ExpectationBadge } from "@/components/ui/badge";
 import { SubmitButton } from "@/components/ui/submit-button";
@@ -31,6 +32,8 @@ export interface MetricsSummary {
 export interface QuarterRow {
   id: string;
   label: string;
+  /** For the §5-A builder prefill link; null for a period-less record. */
+  report_period_id: string | null;
   attendance_pct: number | null;
   on_time_pct: number | null;
   on_time_grace_pct: number | null;
@@ -68,7 +71,14 @@ export interface PerformanceTabsProps {
   /** metric_targets rows (mig 051), loaded server-side by the page. */
   targets: MetricTargets;
   employeeId: string;
-  generateAction: (formData: FormData) => Promise<void>;
+  /** For the §5-A builder prefill link (builder_location param). */
+  locationId: string;
+  /**
+   * §5-A: performance-report generation is builder-only now, and the builder
+   * is SA-gated — the row link renders only when the session can actually
+   * use it (the page passes role === "system_admin").
+   */
+  canGenerate: boolean;
   generateTaskDetailAction: (formData: FormData) => Promise<void>;
   taskDetailReportIdByRecord: Record<string, string>;
 }
@@ -79,7 +89,8 @@ export function PerformanceHistoryTabs({
   allTime,
   targets,
   employeeId,
-  generateAction,
+  locationId,
+  canGenerate,
   generateTaskDetailAction,
   taskDetailReportIdByRecord,
 }: PerformanceTabsProps) {
@@ -177,7 +188,8 @@ export function PerformanceHistoryTabs({
                       <ReportCell
                         row={r}
                         employeeId={employeeId}
-                        generateAction={generateAction}
+                        locationId={locationId}
+                        canGenerate={canGenerate}
                         generateTaskDetailAction={generateTaskDetailAction}
                         taskDetailReportId={taskDetailReportIdByRecord[r.id] ?? null}
                       />
@@ -341,19 +353,33 @@ function SummaryView({
   );
 }
 
+/**
+ * §5-A (2026-08-19): CONSOLIDATED. The row-level Generate/Regenerate form and
+ * its separate generateAction are retired — generation happens in the Reports
+ * builder, and this row LINKS there pre-filled (location + employee +
+ * quarter). Download + stale flag stay row-level; the standalone Task Detail
+ * generator stays too (the builder only bundles task detail, it can't
+ * generate it standalone).
+ */
 function ReportCell({
   row,
   employeeId,
-  generateAction,
+  locationId,
+  canGenerate,
   generateTaskDetailAction,
   taskDetailReportId,
 }: {
   row: QuarterRow;
   employeeId: string;
-  generateAction: (formData: FormData) => Promise<void>;
+  locationId: string;
+  canGenerate: boolean;
   generateTaskDetailAction: (formData: FormData) => Promise<void>;
   taskDetailReportId: string | null;
 }) {
+  const builderHref =
+    `/dashboard/reports?builder_location=${locationId}` +
+    `&builder_employee=${employeeId}` +
+    (row.report_period_id ? `&builder_period=${row.report_period_id}` : "");
   return (
     <div className="flex flex-col gap-1.5 min-w-[260px]">
       {/* Performance report row */}
@@ -368,22 +394,14 @@ function ReportCell({
             Download
           </a>
         )}
-        <form action={generateAction} className="flex items-center gap-2 flex-wrap">
-          <input type="hidden" name="performance_record_id" value={row.id} />
-          <input type="hidden" name="employee_id" value={employeeId} />
-          <label className="flex items-center gap-1 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              name="include_task_detail"
-              value="1"
-              className="h-3 w-3"
-            />
-            +Task detail
-          </label>
-          <SubmitButton variant="outline" size="sm" pendingLabel="Generating…">
-            {row.current_report_id ? "Regenerate" : "Generate"}
-          </SubmitButton>
-        </form>
+        {canGenerate && (
+          <Link
+            href={builderHref}
+            className="text-xs text-ikes-blue underline-offset-2 hover:underline"
+          >
+            {row.current_report_id ? "Regenerate in builder" : "Generate in builder"}
+          </Link>
+        )}
         {row.feedback_updated_after_generation && row.current_report_id && (
           <span
             className="text-xs text-amber-700"
