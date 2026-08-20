@@ -79,6 +79,13 @@ export function BuilderEmployeePicker({
           <span className="text-xs text-slate-500">{selected.size} selected</span>
         )}
       </div>
+      {/* Submission rides these state-driven hidden inputs, NOT the visible
+          checkboxes — a checked employee filtered out of view unmounts their
+          checkbox, and losing that value would flip the submit into the
+          "none checked = all active" bulk path (Codex PR-2 finding 1). */}
+      {[...selected].map((id) => (
+        <input key={id} type="hidden" name="employee_ids" value={id} />
+      ))}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-1 max-h-56 overflow-y-auto rounded-md border border-slate-200 p-3">
         {visible.map((e) => (
           <label
@@ -87,8 +94,6 @@ export function BuilderEmployeePicker({
           >
             <input
               type="checkbox"
-              name="employee_ids"
-              value={e.id}
               checked={selected.has(e.id)}
               onChange={() => toggle(e.id)}
               className="h-4 w-4 accent-[#702F8A]"

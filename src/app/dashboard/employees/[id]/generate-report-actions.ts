@@ -1,10 +1,8 @@
 "use server";
-import { revalidatePath } from "next/cache";
 import { renderToBuffer } from "@react-pdf/renderer";
 import React from "react";
 import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createClient } from "@/lib/supabase/server";
 import {
   EmployeeReportDocument,
   TEMPLATE_VERSION,
