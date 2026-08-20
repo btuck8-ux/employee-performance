@@ -11,9 +11,12 @@ import {
   formatQuantity,
   formatRating,
 } from "@/lib/format";
-
-/** Neutral band around the location tip-rate average (percentage points). */
-const TIP_DELTA_NEUTRAL_PP = 0.25;
+import {
+  tipPerHourDeltaLabel,
+  tipPerHourTone,
+  tipRateDeltaLabel,
+  tipRateTone,
+} from "@/lib/tip-badges";
 
 export interface MetricsSummary {
   attendance_pct: number | null;
@@ -122,7 +125,8 @@ export function PerformanceHistoryTabs({
                   <th className="py-2 pr-4">Online review rating</th>
                   <th className="py-2 pr-4">Tip rate</th>
                   <th className="py-2 pr-4">Tip / hr</th>
-                  <th className="py-2 pr-4">vs Loc avg</th>
+                  <th className="py-2 pr-4">Rate vs store</th>
+                  <th className="py-2 pr-4">$/hr vs store</th>
                   <th className="py-2 pr-4">Report</th>
                 </tr>
               </thead>
@@ -161,6 +165,12 @@ export function PerformanceHistoryTabs({
                         deltaPp={r.tip_rate_delta_pp}
                         locationRatePct={r.location_tip_rate_pct}
                         employeeRatePct={r.tip_rate_pct}
+                      />
+                    </td>
+                    <td className="py-2 pr-4">
+                      <TipPerHourBadge
+                        tipPerHour={r.tip_per_hour}
+                        locationTipPerHour={r.location_tip_per_hour}
                       />
                     </td>
                     <td className="py-2 pr-4">
@@ -216,14 +226,16 @@ function MetricCell({
 }
 
 /**
- * Tip-rate delta badge.
+ * Tip-rate delta badge — §5-E dollar framing (2026-08-19). The visible label
+ * is the exact conversion "35¢ per $100 sold below store average" (tip rate =
+ * tips ÷ sales, so pp × 100 IS cents per $100 sold); the raw employee %,
+ * location %, and Δpp stay in the tooltip. Copy + tone bands live in
+ * src/lib/tip-badges.ts, shared with the PDF so the two can't drift.
  *
  *   delta_pp > +0.25  →  green up arrow   (employee lifts the location tip rate)
  *   delta_pp < -0.25  →  red down arrow   (employee drags the location tip rate)
  *   otherwise         →  yellow flat      (within the noise band)
  *   delta_pp is null  →  em dash          (no sales data for this period)
- *
- * Tooltip shows the underlying numbers so a manager can sanity-check.
  */
 function TipBadge({
   deltaPp,
@@ -235,12 +247,7 @@ function TipBadge({
   employeeRatePct: number | null;
 }) {
   if (deltaPp === null) return <span className="text-slate-400">—</span>;
-  const tone =
-    deltaPp > TIP_DELTA_NEUTRAL_PP
-      ? "exceeds"
-      : deltaPp < -TIP_DELTA_NEUTRAL_PP
-        ? "below"
-        : "meets";
+  const tone = tipRateTone(deltaPp);
   const arrow =
     tone === "exceeds" ? "↑" : tone === "below" ? "↓" : "→";
   const title =
@@ -250,7 +257,39 @@ function TipBadge({
   return (
     <Badge tone={tone} title={title}>
       <span aria-hidden>{arrow}</span>
-      <span className="ml-1 tabular-nums">{formatDeltaPP(deltaPp)}</span>
+      <span className="ml-1">{tipRateDeltaLabel(deltaPp)}</span>
+    </Badge>
+  );
+}
+
+/**
+ * Tip/Hour vs-store badge (§2c scope addition, Tucker-approved): the dollar
+ * gap between the employee's tips-per-hour and the location's, from two
+ * columns already on performance_records. Neutral band ±$0.25/hr
+ * (TIP_PER_HOUR_NEUTRAL_USD — delegated micro-call, see tip-badges.ts).
+ * Either side null → em dash, matching the rate badge's convention.
+ */
+function TipPerHourBadge({
+  tipPerHour,
+  locationTipPerHour,
+}: {
+  tipPerHour: number | null;
+  locationTipPerHour: number | null;
+}) {
+  if (tipPerHour === null || locationTipPerHour === null)
+    return <span className="text-slate-400">—</span>;
+  const delta = tipPerHour - locationTipPerHour;
+  const tone = tipPerHourTone(delta);
+  const arrow =
+    tone === "exceeds" ? "↑" : tone === "below" ? "↓" : "→";
+  const title =
+    `Employee: ${formatMoney(tipPerHour)}/hr  ·  ` +
+    `Location: ${formatMoney(locationTipPerHour)}/hr  ·  ` +
+    `Δ ${formatMoney(delta)}/hr`;
+  return (
+    <Badge tone={tone} title={title}>
+      <span aria-hidden>{arrow}</span>
+      <span className="ml-1">{tipPerHourDeltaLabel(delta)}</span>
     </Badge>
   );
 }
