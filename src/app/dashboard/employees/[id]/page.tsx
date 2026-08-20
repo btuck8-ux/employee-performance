@@ -28,7 +28,6 @@ import {
   TIS_ELIGIBILITY_MIN_HOURS,
 } from "@/lib/total-impact-score";
 import { generateTattleSummaryAction } from "./tattle-summary-actions";
-import { generatePerformanceReportAction } from "./generate-report-actions";
 import { generateTaskDetailReportAction } from "./generate-task-detail-actions";
 import { generateCustomRangePerformanceReportAction } from "./generate-custom-range-actions";
 import { updateManagerFeedbackAction } from "./manager-feedback-actions";
@@ -168,6 +167,7 @@ export default async function EmployeeDetailPage({
     return {
       id: r.id,
       label: r.report_periods?.label ?? "—",
+      report_period_id: r.report_periods?.id ?? null,
       attendance_pct: numOrNull(r.attendance_pct),
       on_time_pct: numOrNull(r.on_time_pct),
       on_time_grace_pct: numOrNull(r.on_time_grace_pct),
@@ -800,7 +800,8 @@ export default async function EmployeeDetailPage({
             allTime={allTime}
             targets={metricTargets}
             employeeId={emp.id}
-            generateAction={generatePerformanceReportAction}
+            locationId={loc?.id ?? ""}
+            canGenerate={role === "system_admin"}
             generateTaskDetailAction={generateTaskDetailReportAction}
             taskDetailReportIdByRecord={taskDetailReportIdByRecord}
           />

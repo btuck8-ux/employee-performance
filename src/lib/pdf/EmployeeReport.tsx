@@ -40,6 +40,7 @@ import {
   tipPerHourDeltaLabel,
   tipRateDeltaLabel,
 } from "@/lib/tip-badges";
+import type { ReportRenderOptions } from "@/lib/report-render-options";
 
 // 1.1.0 added Δ + sparkline + trend page. 1.2.0 dropped the sparkline/trend
 // page. 1.3.0 (Phase 7b) adds presence-based tip metrics — tip rate, tip per
@@ -343,6 +344,15 @@ export interface ReportData {
    * location never ingests, e.g. NOLA sales) renders neutrally as "—".
    */
   category_currency?: CategoryCurrencyEntry[];
+  /**
+   * §5-B/§5-C (2026-08-19): per-PDF render selection from the Reports
+   * builder. RENDERING ONLY — every metric is still computed and stored the
+   * same way; an excluded key just doesn't print (the include_task_detail
+   * pattern). Omitted → render everything (all pre-builder callers).
+   * Excluding customer_service_score also hides its breakdown sub-section;
+   * excluding the kitchen keys hides the kitchen legend note.
+   */
+  render_options?: ReportRenderOptions;
 }
 
 // ---- Metric kind table ----
@@ -779,6 +789,14 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
 
   const trailing = data.trailing_quarters;
 
+  // §5-B render selection: null restriction = every row (pre-builder callers
+  // pass no render_options and get today's PDF byte-for-byte).
+  const includedKeys = data.render_options?.included_metric_keys ?? null;
+  const included = includedKeys === null ? null : new Set(includedKeys);
+  const rowIncluded = (key: string) => included === null || included.has(key);
+  // §5-C: exclusion hides the section on THIS PDF only — stored text untouched.
+  const showFeedback = data.render_options?.include_manager_feedback !== false;
+
   return (
     <Document>
       <Page size="LETTER" style={styles.page}>
@@ -832,7 +850,7 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
 
           {(() => {
             const visible = METRIC_DEFS.filter(
-              (def) => !def.showIf || def.showIf(m)
+              (def) => (!def.showIf || def.showIf(m)) && rowIncluded(def.key)
             );
             return visible.map((def, i) => {
               const current = num(m[def.key]);
@@ -916,7 +934,7 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
           })()}
         </View>
 
-        {hasKitchenData(m) && (
+        {hasKitchenData(m) && rowIncluded("kitchen_residual_seconds") && (
           <Text style={[styles.currencyLine, { marginTop: 4 }]}>
             Kitchen Speed reflects how the kitchen ran during shifts this
             employee worked (tickets fired 10am–8pm, vs this store&apos;s own
@@ -928,7 +946,7 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
           </Text>
         )}
 
-        {m.customer_service_score !== null && (
+        {m.customer_service_score !== null && rowIncluded("customer_service_score") && (
           <CustomerServiceBreakdown
             metrics={m}
             weights={data.customer_service_weights ?? DEFAULT_CS_WEIGHTS}
@@ -960,14 +978,18 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
           );
         })()}
 
-        <Text style={styles.sectionTitle}>Manager Feedback</Text>
-        <View style={styles.feedbackBox}>
-          <Text>
-            {data.manager_feedback?.trim()
-              ? data.manager_feedback
-              : "No feedback recorded for this period."}
-          </Text>
-        </View>
+        {showFeedback && (
+          <>
+            <Text style={styles.sectionTitle}>Manager Feedback</Text>
+            <View style={styles.feedbackBox}>
+              <Text>
+                {data.manager_feedback?.trim()
+                  ? data.manager_feedback
+                  : "No feedback recorded for this period."}
+              </Text>
+            </View>
+          </>
+        )}
 
         <Text style={styles.sectionTitle}>Signatures</Text>
         <View style={styles.signatureRow}>

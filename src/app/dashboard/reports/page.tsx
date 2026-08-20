@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSessionRole } from "@/lib/authz";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { BuilderEmployeePicker } from "@/components/reports/BuilderEmployeePicker";
+import { ReportContentPicker } from "@/components/reports/ReportContentPicker";
 import { generateReportsBuilderAction } from "./builder-actions";
 
 // The builder can fan out over a whole location (PDF render per employee) —
@@ -35,6 +37,10 @@ export default async function ReportsPage({
   const isSA = role === "system_admin";
   const builderLocation = pickStr(search.builder_location);
   const builderError = pickStr(search.builder_error);
+  // §5-A consolidation prefill: the profile per-quarter row links here with
+  // location + employee + period so the builder opens ready to regenerate.
+  const builderEmployee = pickStr(search.builder_employee);
+  const builderPeriod = pickStr(search.builder_period);
 
   // ---- Builder data (SA only): locations + quarters + employees ----
   const { data: locations } = isSA
@@ -179,28 +185,11 @@ export default async function ReportsPage({
             {builderLocation && (
               <form action={generateReportsBuilderAction} className="space-y-4">
                 <input type="hidden" name="location_id" value={builderLocation} />
-                <div>
-                  <p className="text-xs text-slate-500 mb-2">
-                    Employees ({builderEmployees.length} active — none checked =
-                    all)
-                  </p>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-1 max-h-56 overflow-y-auto rounded-md border border-slate-200 p-3">
-                    {builderEmployees.map((e) => (
-                      <label
-                        key={e.id}
-                        className="flex items-center gap-2 text-sm py-0.5 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          name="employee_ids"
-                          value={e.id}
-                          className="h-4 w-4 accent-[#702F8A]"
-                        />
-                        <span className="truncate">{e.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
+                <ReportContentPicker />
+                <BuilderEmployeePicker
+                  employees={builderEmployees}
+                  defaultSelectedId={builderEmployee || undefined}
+                />
                 <div className="flex flex-wrap items-end gap-4">
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">Period</label>
@@ -218,7 +207,11 @@ export default async function ReportsPage({
                     <select
                       name="report_period_id"
                       className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                      defaultValue={builderQuarters[0]?.id ?? ""}
+                      defaultValue={
+                        builderQuarters.some((q2) => q2.id === builderPeriod)
+                          ? builderPeriod
+                          : (builderQuarters[0]?.id ?? "")
+                      }
                     >
                       {builderQuarters.map((q2) => (
                         <option key={q2.id} value={q2.id}>

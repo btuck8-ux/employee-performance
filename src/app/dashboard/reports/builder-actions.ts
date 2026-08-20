@@ -4,6 +4,11 @@ import { redirect } from "next/navigation";
 import { getSessionRole } from "@/lib/authz";
 import { renderAndStorePerformanceReport } from "@/app/dashboard/employees/[id]/generate-report-actions";
 import { renderAndStoreCustomRangeReport } from "@/app/dashboard/employees/[id]/generate-custom-range-actions";
+import { writeManagerFeedback } from "@/lib/manager-feedback";
+import {
+  resolveIncludedMetricKeys,
+  type ReportRenderOptions,
+} from "@/lib/report-render-options";
 
 /**
  * Reports-page custom builder (kickoff §5e): scope pickers + period + kind,
@@ -44,6 +49,26 @@ export async function generateReportsBuilderAction(formData: FormData) {
   const rangeStart = String(formData.get("range_start") ?? "");
   const rangeEnd = String(formData.get("range_end") ?? "");
   const includeTaskDetail = formData.get("include_task_detail") === "1";
+
+  // §5-B: metric-group checkboxes + review/tattle display toggles → the set
+  // of PDF rows that RENDER (computation untouched). All-on → null (today's
+  // full PDF, byte-identical default).
+  const selectedGroups = formData.getAll("metrics").map((v) => String(v));
+  const includeReviews = formData.get("include_reviews") === "1";
+  const includeTattles = formData.get("include_tattles") === "1";
+  // §5-C: feedback text + include/exclude toggle. Empty text = DON'T TOUCH
+  // the stored value (never a clear — clearing stays on the profile editor).
+  const feedbackText = String(formData.get("manager_feedback_text") ?? "").trim();
+  const includeFeedback = formData.get("include_manager_feedback") === "1";
+
+  const renderOptions: ReportRenderOptions = {
+    included_metric_keys: resolveIncludedMetricKeys(
+      selectedGroups,
+      includeReviews,
+      includeTattles
+    ),
+    include_manager_feedback: includeFeedback,
+  };
 
   const { supabase, user, role } = await getSessionRole();
   if (!user || role !== "system_admin") {
@@ -87,7 +112,8 @@ export async function generateReportsBuilderAction(formData: FormData) {
         supabase,
         employeeId,
         rangeStart,
-        rangeEnd
+        rangeEnd,
+        { render_options: renderOptions }
       );
       if (r.ok) generated.push(r.report_id);
       else failures.push(r.error);
@@ -105,6 +131,28 @@ export async function generateReportsBuilderAction(formData: FormData) {
     const byEmployee = new Map(
       (records ?? []).map((r) => [r.employee_id as string, r.id as string])
     );
+    // §5-C: the feedback field applies ONLY to a single-employee quarterly
+    // run (delegated micro-call: disabled rather than prompted-per-employee
+    // for multi-employee runs; the UI hides it when ≠1 selected and this
+    // guard enforces it server-side). The write happens BEFORE generation:
+    // the DB trigger stale-flags existing non-superseded reports, then the
+    // fresh insert starts feedback_updated_after_generation=false — so
+    // feedback + generate in one submission is NOT stale by construction.
+    // The shared writer skips no-op saves, so unchanged text can't
+    // stale-flag sibling (e.g. task-detail) reports.
+    if (feedbackText && targets.length === 1) {
+      const recordId = byEmployee.get(targets[0]);
+      if (recordId) {
+        const fb = await writeManagerFeedback(supabase, recordId, feedbackText);
+        if (!fb.ok) {
+          back({
+            builder_error: `Feedback save failed: ${fb.error ?? "unknown"} — report NOT generated.`,
+            builder_location: locationId,
+          });
+        }
+      }
+    }
+
     for (const employeeId of targets) {
       const recordId = byEmployee.get(employeeId);
       if (!recordId) {
@@ -114,6 +162,7 @@ export async function generateReportsBuilderAction(formData: FormData) {
       const r = await renderAndStorePerformanceReport(supabase, recordId, {
         include_task_detail: includeTaskDetail,
         generated_by: user.id,
+        render_options: renderOptions,
       });
       if (r.ok && r.report_id) generated.push(r.report_id);
       else failures.push(r.error ?? "unknown failure");

@@ -12,6 +12,7 @@ import {
 import { fetchCustomerServiceWeights } from "@/lib/customer-service-score";
 import { fetchMetricTargets } from "@/lib/metric-targets";
 import { getCategoryCurrency } from "@/lib/category-currency";
+import type { ReportRenderOptions } from "@/lib/report-render-options";
 import { computeMetricsForRange } from "@/lib/performance-recompute";
 
 /**
@@ -61,7 +62,9 @@ export async function renderAndStoreCustomRangeReport(
   supabase: Awaited<ReturnType<typeof createClient>>,
   employee_id: string,
   range_start: string,
-  range_end: string
+  range_end: string,
+  /** §5-B/§5-C builder selection — rendering only; omitted = full PDF. */
+  opts?: { render_options?: ReportRenderOptions }
 ): Promise<CustomRangeReportResult> {
   const { data: emp, error: empErr } = await supabase
     .from("employees")
@@ -179,6 +182,7 @@ export async function renderAndStoreCustomRangeReport(
     customer_service_weights: csWeights,
     metric_targets: metricTargets,
     category_currency: await getCategoryCurrency(supabase, location_id, range_end),
+    render_options: opts?.render_options,
   };
 
   const docElement = React.createElement(EmployeeReportDocument, { data: reportData });
@@ -208,6 +212,9 @@ export async function renderAndStoreCustomRangeReport(
     template_version: TEMPLATE_VERSION,
     targets: metricTargets,
     customer_service_score: { yellow: 70, green: 85 },
+    // §5-B audit rider: which rows/sections THIS PDF rendered (jsonb,
+    // write-only, no DDL). Absent = unrestricted.
+    ...(opts?.render_options ? { render_options: opts.render_options } : {}),
   };
 
   const { data: { user } = { user: null } } = await supabase.auth.getUser();
