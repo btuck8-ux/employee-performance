@@ -21,11 +21,12 @@ export default async function EmployeesPage({
   const filterClient = pickStr(search.client);
   const filterStatus = pickStr(search.status); // "" | "active" | "inactive" | "all"
   const status = filterStatus || "active"; // default
-  // Search text: `,` `(` `)` are structural in PostgREST's .or() syntax and
-  // `%`/`\` are LIKE metacharacters — neutralize rather than reject, so a
-  // paste with punctuation degrades to a broader match instead of a 400.
+  // Search text: `,` `(` `)` are structural in PostgREST's .or() syntax;
+  // `%`/`\`/`_` are LIKE metacharacters and PostgREST maps `*` to `%` —
+  // neutralize rather than reject, so a paste with punctuation degrades to a
+  // literal-ish match instead of a 400 or a silent match-everything.
   const rawQ = pickStr(search.q);
-  const filterQ = rawQ.replace(/[,()%\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  const filterQ = rawQ.replace(/[,()%\\*_]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
 
   const { role, supabase } = await getSessionRole();
   // Deactivate/reactivate renders for admin/manager tiers (Tucker's §8-B
