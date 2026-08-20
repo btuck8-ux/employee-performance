@@ -34,6 +34,12 @@ import {
   staleCategories,
   type CategoryCurrencyEntry,
 } from "@/lib/category-currency";
+import {
+  TIP_DELTA_NEUTRAL_PP,
+  TIP_PER_HOUR_NEUTRAL_USD,
+  tipPerHourDeltaLabel,
+  tipRateDeltaLabel,
+} from "@/lib/tip-badges";
 
 // 1.1.0 added Δ + sparkline + trend page. 1.2.0 dropped the sparkline/trend
 // page. 1.3.0 (Phase 7b) adds presence-based tip metrics — tip rate, tip per
@@ -379,8 +385,8 @@ interface MetricDef {
   showIf?: (snapshot: MetricSnapshot) => boolean;
 }
 
-/** Neutral band for the tip-rate vs location-average classifier. */
-const TIP_DELTA_NEUTRAL_PP = 0.25;
+// Tip vs-store neutral bands + dollar-framed labels come from
+// src/lib/tip-badges.ts, shared with the dashboard badges (§5-E).
 
 /** Neutral band (seconds) for the residual-vs-store-norm classifier. */
 const KITCHEN_DELTA_NEUTRAL_SECONDS = 15;
@@ -438,6 +444,16 @@ const METRIC_DEFS: MetricDef[] = [
     name: "Tip / Hour",
     kind: "money",
     showIf: hasTipData,
+    // §2c: vs-store classification on the same ±$0.25/hr band as the UI
+    // badge; the dollar-framed label is appended in the display special-case.
+    classifyValue: (value, s) => {
+      const locationPerHour = num(s.location_tip_per_hour);
+      if (value === null || locationPerHour === null) return null;
+      const delta = value - locationPerHour;
+      if (delta >  TIP_PER_HOUR_NEUTRAL_USD) return "Exceeds Expectations";
+      if (delta < -TIP_PER_HOUR_NEUTRAL_USD) return "Below Expectations";
+      return "Meets Expectations";
+    },
   },
   {
     key: "tip_rate_delta_pp",
@@ -832,6 +848,19 @@ export function EmployeeReportDocument({ data }: { data: ReportData }) {
               } else if (def.key === "kitchen_tickets") {
                 // 1.5.1: combined sample-size row, e.g. "1,847 / 42".
                 display = `${formatQuantity(m.kitchen_tickets)} / ${formatQuantity(m.kitchen_shifts)}`;
+              } else if (def.key === "tip_rate_delta_pp") {
+                // §5-E: mirror the dashboard badge's dollar framing verbatim.
+                display = current === null ? "—" : tipRateDeltaLabel(current);
+              } else if (def.key === "tip_per_hour") {
+                // §2c: dollar figure plus the vs-store gap when the location
+                // side exists (same shared label as the UI badge).
+                const locationPerHour = num(m.location_tip_per_hour);
+                display =
+                  current === null
+                    ? "—"
+                    : locationPerHour === null
+                      ? formatMoney(current)
+                      : `${formatMoney(current)}  (${tipPerHourDeltaLabel(current - locationPerHour)})`;
               } else if (def.kind === "pct") {
                 display = formatPercent(current);
               } else if (def.kind === "rating") {

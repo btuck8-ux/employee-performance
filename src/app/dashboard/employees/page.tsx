@@ -21,6 +21,12 @@ export default async function EmployeesPage({
   const filterClient = pickStr(search.client);
   const filterStatus = pickStr(search.status); // "" | "active" | "inactive" | "all"
   const status = filterStatus || "active"; // default
+  // Search text: `,` `(` `)` are structural in PostgREST's .or() syntax;
+  // `%`/`\`/`_` are LIKE metacharacters and PostgREST maps `*` to `%` —
+  // neutralize rather than reject, so a paste with punctuation degrades to a
+  // literal-ish match instead of a 400 or a silent match-everything.
+  const rawQ = pickStr(search.q);
+  const filterQ = rawQ.replace(/[,()%\\*_]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
 
   const { role, supabase } = await getSessionRole();
   // Deactivate/reactivate renders for admin/manager tiers (Tucker's §8-B
@@ -78,6 +84,12 @@ export default async function EmployeesPage({
     q = q.eq("locations.client_id", filterClient);
   }
 
+  // Name-or-code search composes WITH the filters above — same purview-scoped
+  // query, no separate search path.
+  if (filterQ) {
+    q = q.or(`employee_name.ilike.%${filterQ}%,employee_code.ilike.%${filterQ}%`);
+  }
+
   const { data: employees } = await q;
 
   // Build the description line.
@@ -95,6 +107,7 @@ export default async function EmployeesPage({
   if (filterClient) returnToParams.set("client", filterClient);
   if (filterLocation) returnToParams.set("location", filterLocation);
   if (filterStatus) returnToParams.set("status", filterStatus);
+  if (filterQ) returnToParams.set("q", filterQ);
   const returnTo = `/dashboard/employees${returnToParams.size > 0 ? `?${returnToParams}` : ""}`;
 
   const statusDesc =
@@ -105,7 +118,8 @@ export default async function EmployeesPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
         <p className="text-sm text-slate-500 mt-1">
-          {scopeDesc} · {statusDesc} · {employees?.length ?? 0} shown
+          {scopeDesc} · {statusDesc}
+          {filterQ ? ` · matching “${filterQ}”` : ""} · {employees?.length ?? 0} shown
         </p>
       </div>
 
@@ -157,13 +171,23 @@ export default async function EmployeesPage({
                 <option value="all">All</option>
               </select>
             </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Search</label>
+              <input
+                type="search"
+                name="q"
+                defaultValue={filterQ}
+                placeholder="Name or employee ID…"
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm min-w-[220px]"
+              />
+            </div>
             <button
               type="submit"
               className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
             >
               Apply
             </button>
-            {(filterLocation || filterClient || status !== "active") && (
+            {(filterLocation || filterClient || filterQ || status !== "active") && (
               <Link
                 href="/dashboard/employees"
                 className="text-xs text-slate-600 underline self-center"
