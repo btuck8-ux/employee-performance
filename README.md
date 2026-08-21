@@ -37,6 +37,7 @@ See [.env.example](./.env.example) for the full roster (~21 vars: Supabase, cron
 - `/dashboard/uploads` — bulk upload surface
 - `/dashboard/reports` — PDF generation + archive (`/api/reports/[id]` serves them)
 - `/dashboard/admin/scoring` — scoring administration
+- `/dashboard/admin/employee-triage` — SA-only detected-employee triage: lists CP's uncoded schedule-feed detections, enriches from the 7shifts user-detail endpoint, and mints `employees` rows on confirm (code from `employee_code_seq`); linked as the "Detected employees" chip on the Employees page
 
 ## Automated feeds
 
@@ -51,6 +52,11 @@ Vercel crons (`vercel.json`), all UTC:
 | `sync-cp-schedules` | 09:40 | CulturePulse scheduled-shifts sync (attendance/on-time inputs; first run backfills from 2026-06-01) |
 | `sync-cp-surveys` | 09:45 | CulturePulse survey sync |
 | `ingest-toast-kitchen` | 10:00 | Toast kitchen ticket times |
+
+On-demand CP direct read (no cron): the SA-only triage page reads CP
+`employee_directory` (`source='discovered_from_schedule'`, uncoded rows)
+through the same bridge credentials — the third CP read after the survey and
+schedule feeds, with the same change-notice contract (see AGENTS.md).
 
 GitHub Actions (browser harnesses):
 
@@ -74,7 +80,7 @@ Outbound feeds — polled daily in production by CulturePulse (08:45/09:00 UTC) 
 
 ## Database
 
-Schema migrations live in `supabase/migrations/` (head: 048; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
+Schema migrations live in `supabase/migrations/` (head: 052; 015 intentionally absent). They're applied to the live Supabase project as they land; these files are the canonical source of truth and reference for future re-creation.
 
 ## Build phases
 
