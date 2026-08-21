@@ -58,6 +58,13 @@ derivable from the code alone.
   the tripwire, change-notice requested via the orchestrator memo
   2026-08-14). It closed the Jun–Aug `scheduled_shifts_gap`; a store's
   FIRST run backfills from 2026-06-01.
+- **EPD's third CP direct read is `employee_directory`** (read-only, the
+  SA-only detected-employee triage page + Employees-page chip, 2026-08-21):
+  rows with `source='discovered_from_schedule'` and no CP-side code are the
+  mint queue; the EPD-side exclusion keys on the 7shifts user id (CP stores
+  it as TEXT `sevenshifts_user_id`), NEVER on name. Same interim-credential
+  bridge and change-notice contract as the survey/schedule reads — CP-side
+  schema changes break the triage surface.
 - **EPD's CP-surveys read is kind-filtered** (`fetch.ts` `.in("kind",
   ["weekly","one_off"])`, per CP mig 0055's homework reshape 2026-08-17):
   homework is deliberately excluded — training compliance is THQ's signal,
@@ -135,7 +142,7 @@ derivable from the code alone.
   policies; the signup trigger writes it) — the real role model is
   `user_roles`. Behavioral policy tests:
   `supabase/tests/phase_b_policy_tests.sql` (run via MCP, self-rolling-back).
-- Migrations: 015 intentionally absent; current head is 050. When Cowork
+- Migrations: 015 intentionally absent; current head is 052. When Cowork
   applies prod DDL via MCP, the matching migration file gets committed
   (repo↔prod parity — established pattern).
 - `@radix-ui/react-dialog` + `@radix-ui/react-select` are

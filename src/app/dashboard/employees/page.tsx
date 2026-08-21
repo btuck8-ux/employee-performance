@@ -3,6 +3,8 @@ import { getSessionRole } from "@/lib/authz";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatTenure } from "@/lib/format";
 import { EmployeeStatusButton } from "@/components/employee/EmployeeStatusButton";
+import { createCpClient } from "@/lib/ingest/culture-pulse/client";
+import { countPendingDetections } from "@/lib/triage/detections";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -33,6 +35,20 @@ export default async function EmployeesPage({
   // ruling 2026-08-14 extends it beyond SA); the server action re-checks
   // tier + row scope regardless. RLS already trims rows to purview.
   const canToggleStatus = role !== null && role !== "user";
+
+  // SA-only triage chip (kickoff-employee-triage-mint-ui 2026-08-21 §5-C).
+  // The count crosses to CP — if the bridge is unreachable (e.g. local dev
+  // without CP env) the chip still renders, just without a number.
+  let pendingDetections: number | null = null;
+  if (role === "system_admin") {
+    try {
+      pendingDetections = await countPendingDetections(createCpClient(), supabase);
+    } catch (err) {
+      console.warn("[employees] detection count unavailable", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // Locations + clients lists (for the dropdowns).
   const { data: locationsData } = await supabase
@@ -115,12 +131,27 @@ export default async function EmployeesPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          {scopeDesc} · {statusDesc}
-          {filterQ ? ` · matching “${filterQ}”` : ""} · {employees?.length ?? 0} shown
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            {scopeDesc} · {statusDesc}
+            {filterQ ? ` · matching “${filterQ}”` : ""} · {employees?.length ?? 0} shown
+          </p>
+        </div>
+        {role === "system_admin" && (
+          <Link
+            href="/dashboard/admin/employee-triage"
+            className={`inline-flex shrink-0 items-center rounded-full border px-3 py-1 text-xs ${
+              pendingDetections !== null && pendingDetections > 0
+                ? "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                : "border-slate-300 text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            Detected employees
+            {pendingDetections !== null ? ` (${pendingDetections})` : ""}
+          </Link>
+        )}
       </div>
 
       <Card>
