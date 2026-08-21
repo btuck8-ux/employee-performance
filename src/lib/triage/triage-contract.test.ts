@@ -70,6 +70,18 @@ test("the page reads CP through the bridge client and gates on SA", () => {
   assert.doesNotMatch(pageSrc, /createAdminClient/);
 });
 
+test("mint re-derives the site server-side — location is never client input", () => {
+  // Codex finding 2 (2026-08-21): a stale or tampered hidden field must not
+  // pick the store.
+  assert.match(actionsSrc, /resolveDetectionLocation\(/);
+  assert.doesNotMatch(actionsSrc, /formData\.get\("location_id"\)/);
+  const cardSrc = readFileSync(
+    join(process.cwd(), "src/components/triage/DetectionCard.tsx"),
+    "utf8"
+  );
+  assert.doesNotMatch(cardSrc, /name="location_id"/);
+});
+
 test("dismiss is keyed on seven_shifts_user_id", () => {
   assert.match(actionsSrc, /\.from\("detection_dismissals"\)/);
   assert.match(actionsSrc, /onConflict: "seven_shifts_user_id"/);

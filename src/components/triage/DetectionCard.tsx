@@ -137,12 +137,13 @@ export function DetectionCard(props: DetectionCardProps) {
       )}
 
       <form action={confirmDetectionAction} className="space-y-4">
+        {/* The site is NOT posted — the action re-derives it from CP + the
+            crosswalk (location is display-only, never client input). */}
         <input
           type="hidden"
           name="seven_shifts_user_id"
           value={sevenShiftsUserId ?? ""}
         />
-        <input type="hidden" name="location_id" value={locationId ?? ""} />
         <input type="hidden" name="wage" value={wage ?? ""} />
         <input type="hidden" name="wage_pay_type" value={wagePayType ?? ""} />
 

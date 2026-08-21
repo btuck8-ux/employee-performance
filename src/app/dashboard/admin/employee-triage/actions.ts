@@ -2,7 +2,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionRole } from "@/lib/authz";
-import { normalizeSevenShiftsUserId } from "@/lib/triage/detections";
+import { createCpClient } from "@/lib/ingest/culture-pulse/client";
+import {
+  normalizeSevenShiftsUserId,
+  resolveDetectionLocation,
+} from "@/lib/triage/detections";
 
 /**
  * Confirm-mint + dismiss for the detected-employee triage page
@@ -50,11 +54,12 @@ export async function confirmDetectionAction(formData: FormData) {
   const ssid = normalizeSevenShiftsUserId(
     String(formData.get("seven_shifts_user_id") ?? "")
   );
-  const locationId = String(formData.get("location_id") ?? "").trim();
   const name = trimmedOrNull(formData.get("employee_name"), 120);
   const email = trimmedOrNull(formData.get("email"), 254);
   const phone = trimmedOrNull(formData.get("phone"), 40);
-  // Wage rides along from the 7shifts enrichment (§5-A) when present.
+  // Wage rides along from the reviewed card (§5-A enrichment): what the
+  // admin saw and approved is exactly what's written — deliberately NOT
+  // re-fetched at confirm, where a 7shifts flake would silently drop it.
   const rawWage = String(formData.get("wage") ?? "").trim();
   const wageNum = rawWage ? Number(rawWage) : NaN;
   const wage = Number.isFinite(wageNum) && wageNum > 0 ? wageNum : null;
@@ -62,14 +67,36 @@ export async function confirmDetectionAction(formData: FormData) {
 
   // ssid > 0: 0 is the known 7shifts phantom class — dismissable, never
   // mintable.
-  if (ssid === null || ssid <= 0 || !locationId || !name) {
+  if (ssid === null || ssid <= 0 || !name) {
     redirect(
       backWith({
-        error:
-          "Mint needs a name, a crosswalked site, and a real 7shifts user id.",
+        error: "Mint needs a name and a real 7shifts user id.",
       })
     );
   }
+
+  // The site is re-derived server-side from CP + the crosswalk (Codex
+  // finding 2, 2026-08-21) — location is display-only on the card and never
+  // client input.
+  let location: { id: string; name: string } | null = null;
+  let resolveFailure: string | null = null;
+  try {
+    location = await resolveDetectionLocation(createCpClient(), supabase, ssid);
+  } catch (err) {
+    resolveFailure = err instanceof Error ? err.message : String(err);
+  }
+  if (resolveFailure) {
+    redirect(backWith({ error: `Mint failed: ${resolveFailure}` }));
+  }
+  if (!location) {
+    redirect(
+      backWith({
+        error:
+          "This detection is no longer pending in CP (or its site isn't crosswalked) — refresh and re-check.",
+      })
+    );
+  }
+  const locationId = location.id;
 
   // Idempotency guard — GLOBAL on seven_shifts_user_id, deliberately wider
   // than the per-location index, so a person re-detected at another store

@@ -184,6 +184,34 @@ export async function countPendingDetections(
   return (await loadPendingRows(cp, epd)).length;
 }
 
+/**
+ * Re-derive the mint site server-side at confirm time (Codex finding 2,
+ * 2026-08-21): the location is crosswalk-derived, never client input — a
+ * stale or tampered form must not pick the store. Looks up the still-pending
+ * CP detection by its 7shifts user id and maps its CP location to EPD; null
+ * = detection gone (already coded CP-side) or its CP location isn't in the
+ * crosswalk.
+ */
+export async function resolveDetectionLocation(
+  cp: SupabaseClient,
+  epd: SupabaseClient,
+  sevenShiftsUserId: number
+): Promise<{ id: string; name: string } | null> {
+  const { data, error } = await cp
+    .from("employee_directory")
+    .select("location_id")
+    .eq("source", "discovered_from_schedule")
+    .eq("sevenshifts_user_id", String(sevenShiftsUserId))
+    .is("employee_code", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`CP employee_directory: ${error.message}`);
+  if (!data) return null;
+  const cpLocations = await loadCpSyncLocations(epd);
+  const loc = cpLocations.find((l) => l.cp_location_id === data.location_id);
+  return loc ? { id: loc.id, name: loc.name } : null;
+}
+
 /** Full triage-page payload: pool rows + crosswalk + similar-name hints. */
 export async function fetchPendingDetections(
   cp: SupabaseClient,
