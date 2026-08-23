@@ -32,6 +32,8 @@ import { generateTaskDetailReportAction } from "./generate-task-detail-actions";
 import { generateCustomRangePerformanceReportAction } from "./generate-custom-range-actions";
 import { updateManagerFeedbackAction } from "./manager-feedback-actions";
 import { HourlyTipRateView } from "@/components/teams/HourlyTipRateView";
+import { fetchMultiLocationProfile } from "@/lib/multi-location-fetch";
+import { MultiLocationCard } from "@/components/employee/MultiLocationCard";
 import type { HourlyTipRateRow } from "@/app/dashboard/locations/[id]/teams/fetch-hourly-tip-rate-actions";
 // Server-safe module — importing these helpers from TimeWindowPicker (a
 // "use client" file) makes them client references and calling one during the
@@ -71,7 +73,7 @@ export default async function EmployeeDetailPage({
   const { data: emp } = await supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, locations(id, name, clients(id, name))"
+      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, locations(id, name, clients(id, name))"
     )
     .eq("id", id)
     .single();
@@ -81,6 +83,20 @@ export default async function EmployeeDetailPage({
     | { id: string; name: string; clients: { id: string; name: string } | null }
     | null;
   const justSaved = search.saved === "1";
+
+  // Multi-location combined view (§4-B): null for single-location people —
+  // their profile renders exactly as before, no new chrome.
+  const empSevenShiftsUserId =
+    emp.seven_shifts_user_id === null || emp.seven_shifts_user_id === undefined
+      ? null
+      : Number(emp.seven_shifts_user_id);
+  const multiLocation = await fetchMultiLocationProfile(
+    supabase,
+    emp.id,
+    Number.isSafeInteger(empSevenShiftsUserId as number)
+      ? (empSevenShiftsUserId as number)
+      : null
+  );
 
   // ---- Per-quarter records (from performance_records) ----
   const { data: records } = await supabase
@@ -569,6 +585,18 @@ export default async function EmployeeDetailPage({
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           Changes saved.
         </div>
+      )}
+
+      {multiLocation && (
+        <MultiLocationCard
+          currentEmployeeId={emp.id}
+          siblings={multiLocation.siblings}
+          quarters={multiLocation.quarters.map((q) => ({
+            id: q.id,
+            label: q.label,
+          }))}
+          perLocationQuarter={multiLocation.perLocationQuarter}
+        />
       )}
 
       <Card>
