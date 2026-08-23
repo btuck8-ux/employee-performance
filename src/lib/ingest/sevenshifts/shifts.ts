@@ -39,7 +39,7 @@
  * employee_id NULL and surfaced in run detail.
  */
 
-import { getAll } from "./client";
+import { getAllWithMeta } from "./client";
 import { rolesForCompany } from "./roles";
 import { employeeMapForLocation } from "./time";
 import { classifyShifts, missingIds, type RawShift } from "./shifts-core";
@@ -191,15 +191,17 @@ export async function ingestSevenShiftsShifts(
         rolesLookupError = err instanceof Error ? err.message : String(err);
       }
 
-      const shifts = await getAll<RawShift>(
+      // truncated comes from the client's cursor state, never a row count —
+      // a page can return fewer than `limit` rows, so counting cannot
+      // detect an unconsumed cursor (Codex finding 1). Upserts are still
+      // safe on a truncated pull; absence-tombstoning is NOT (missing ≠
+      // deleted) and is gated below.
+      const { data: shifts, truncated } = await getAllWithMeta<RawShift>(
         companyId,
         "shifts",
         { "start[gte]": sinceDate, "start[lte]": untilDate, limit: LIST_LIMIT },
         MAX_PAGES
       );
-      // A pull that fills the page cap may be missing rows — upserts are
-      // still safe, but absence-tombstoning is NOT (missing ≠ deleted).
-      const truncated = shifts.length >= LIST_LIMIT * MAX_PAGES;
 
       const userToEmployeeByLocation = new Map<string, Map<number, string>>();
       for (const loc of companyLocations) {

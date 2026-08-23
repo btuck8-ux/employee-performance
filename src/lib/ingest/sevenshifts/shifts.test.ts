@@ -196,7 +196,7 @@ test("the direct feed NEVER touches time_entries (§4-H3 collision guard)", () =
 });
 
 test("the client path is the shifts endpoint, riding the shared token routing", () => {
-  assert.match(shiftsSrc, /getAll<RawShift>\(\s*companyId,\s*"shifts"/);
+  assert.match(shiftsSrc, /getAllWithMeta<RawShift>\(\s*companyId,\s*"shifts"/);
   // Token routing stays inside client.ts (185592 must never fall back to the
   // NOLA token — a wrong token silently returns another company's data).
   assert.doesNotMatch(shiftsSrc, /process\.env/);

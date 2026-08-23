@@ -55,6 +55,7 @@ export async function confirmDetectionAction(formData: FormData) {
   const ssid = normalizeSevenShiftsUserId(
     String(formData.get("seven_shifts_user_id") ?? "")
   );
+  const cpRowId = trimmedOrNull(formData.get("cp_id"), 60);
   const name = trimmedOrNull(formData.get("employee_name"), 120);
   const email = trimmedOrNull(formData.get("email"), 254);
   const phone = trimmedOrNull(formData.get("phone"), 40);
@@ -68,21 +69,27 @@ export async function confirmDetectionAction(formData: FormData) {
 
   // ssid > 0: 0 is the known 7shifts phantom class — dismissable, never
   // mintable.
-  if (ssid === null || ssid <= 0 || !name) {
+  if (ssid === null || ssid <= 0 || !name || !cpRowId) {
     redirect(
       backWith({
-        error: "Mint needs a name and a real 7shifts user id.",
+        error: "Mint needs a name, a real 7shifts user id, and its CP row.",
       })
     );
   }
 
   // The site is re-derived server-side from CP + the crosswalk (Codex
   // finding 2, 2026-08-21) — location is display-only on the card and never
-  // client input.
+  // client input. The CP row id + 7s id must match the same pending row
+  // (Codex finding 2, 2026-08-23 — see resolveDetectionLocation).
   let location: { id: string; name: string } | null = null;
   let resolveFailure: string | null = null;
   try {
-    location = await resolveDetectionLocation(createCpClient(), supabase, ssid);
+    location = await resolveDetectionLocation(
+      createCpClient(),
+      supabase,
+      ssid,
+      cpRowId
+    );
   } catch (err) {
     resolveFailure = err instanceof Error ? err.message : String(err);
   }
@@ -197,21 +204,28 @@ export async function dismissDetectionAction(formData: FormData) {
   const ssid = normalizeSevenShiftsUserId(
     String(formData.get("seven_shifts_user_id") ?? "")
   );
+  const cpRowId = trimmedOrNull(formData.get("cp_id"), 60);
   const name = trimmedOrNull(formData.get("employee_name"), 120) ?? "detection";
   // ssid >= 0: the "7shifts user 0" phantom is exactly what dismiss is for.
-  if (ssid === null || ssid < 0) {
+  if (ssid === null || ssid < 0 || !cpRowId) {
     redirect(
-      backWith({ error: "Dismiss needs a usable 7shifts user id." })
+      backWith({ error: "Dismiss needs a usable 7shifts user id and its CP row." })
     );
   }
 
   // Dismissals are per-site since mig 053 (§4-A3), and the site is re-derived
   // server-side exactly like the mint path (Codex finding 2 doctrine:
-  // location is never client input).
+  // location is never client input; the CP row id + 7s id must match the
+  // same pending row).
   let location: { id: string; name: string } | null = null;
   let resolveFailure: string | null = null;
   try {
-    location = await resolveDetectionLocation(createCpClient(), supabase, ssid);
+    location = await resolveDetectionLocation(
+      createCpClient(),
+      supabase,
+      ssid,
+      cpRowId
+    );
   } catch (err) {
     resolveFailure = err instanceof Error ? err.message : String(err);
   }

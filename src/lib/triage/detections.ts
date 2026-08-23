@@ -272,27 +272,30 @@ export async function countPendingDetections(
 }
 
 /**
- * Re-derive the mint site server-side at confirm time (Codex finding 2,
- * 2026-08-21): the location is crosswalk-derived, never client input — a
- * stale or tampered form must not pick the store. Looks up the still-pending
- * CP detection by its 7shifts user id and maps its CP location to EPD; null
- * = detection gone (already coded CP-side) or its CP location isn't in the
- * crosswalk. (CP today holds at most one pending row per user id — its
- * ingest matcher is globally id-keyed. If CP ships per-site directory rows,
- * this limit(1) becomes ambiguous and needs the CP row id as a second key.)
+ * Re-derive the mint/dismiss site server-side at confirm time (Codex
+ * finding 2, 2026-08-21): the location is crosswalk-derived, never client
+ * input — a stale or tampered form must not pick the store. Keys on the CP
+ * row id AND the 7shifts user id together (Codex finding 2, 2026-08-23):
+ * once CP ships per-site directory rows, one user id can pend at two sites
+ * and an id-only limit(1) would resolve non-deterministically. The row id
+ * alone is equally insufficient — both must match the same still-pending
+ * row, so a tampered cpRowId that doesn't carry this user id resolves
+ * nothing. Null = detection gone (already coded CP-side), id/row mismatch,
+ * or a CP location outside the crosswalk.
  */
 export async function resolveDetectionLocation(
   cp: SupabaseClient,
   epd: SupabaseClient,
-  sevenShiftsUserId: number
+  sevenShiftsUserId: number,
+  cpRowId: string
 ): Promise<{ id: string; name: string } | null> {
   const { data, error } = await cp
     .from("employee_directory")
     .select("location_id")
+    .eq("id", cpRowId)
     .eq("source", "discovered_from_schedule")
     .eq("sevenshifts_user_id", String(sevenShiftsUserId))
     .is("employee_code", null)
-    .limit(1)
     .maybeSingle();
   if (error) throw new Error(`CP employee_directory: ${error.message}`);
   if (!data) return null;

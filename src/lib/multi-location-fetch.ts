@@ -63,6 +63,28 @@ function toNumOrNull(v: unknown): number | null {
   return typeof n === "number" && !Number.isNaN(n) ? n : null;
 }
 
+/** Page past PostgREST's 1000-row cap (Codex finding 3, 2026-08-23): a
+ * long-tenured two-site person's window can exceed it, and a silently
+ * truncated read would flow into the combiner as a wrong rate. */
+async function pagedRows<T>(
+  build: (from: number, to: number) => PromiseLike<{
+    data: unknown;
+    error: { message: string } | null;
+  }>,
+  label: string
+): Promise<T[]> {
+  const out: T[] = [];
+  const BATCH = 1000;
+  for (let from = 0; ; from += BATCH) {
+    const { data, error } = await build(from, from + BATCH - 1);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < BATCH) break;
+  }
+  return out;
+}
+
 /**
  * Null when the person has fewer than two roster rows (single-location
  * profiles must not change, §4-B1) or no usable 7shifts id (§4-B2).
@@ -155,29 +177,23 @@ export async function fetchMultiLocationProfile(
   // the §4-B4 join detail), then bucket per quarter.
   const entriesBySibling = new Map<string, TimeEntryRow[]>();
   for (const s of siblings) {
-    const { data: entries, error: entriesError } = await supabase
-      .from("time_entries")
-      .select("entry_date, entry_type, in_time")
-      .eq("employee_id", s.employeeId)
-      .gte("entry_date", windowStart)
-      .lte("entry_date", windowEnd);
-    if (entriesError)
-      throw new Error(`multi-location entries: ${entriesError.message}`);
-    entriesBySibling.set(s.employeeId, (entries ?? []) as TimeEntryRow[]);
+    const entries = await pagedRows<TimeEntryRow>(
+      (from, to) =>
+        supabase
+          .from("time_entries")
+          .select("entry_date, entry_type, in_time")
+          .eq("employee_id", s.employeeId)
+          .gte("entry_date", windowStart)
+          .lte("entry_date", windowEnd)
+          .order("entry_date", { ascending: true })
+          .range(from, to),
+      "multi-location entries"
+    );
+    entriesBySibling.set(s.employeeId, entries);
   }
 
   // Tattle + review attributions per sibling across the whole window,
   // bucketed per quarter below.
-  const { data: tattleRows, error: tattleError } = await supabase
-    .from("tattle_attributions")
-    .select(
-      "employee_id, tattle_surveys!inner(tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, date_experienced)"
-    )
-    .in("employee_id", siblingIds)
-    .gte("tattle_surveys.date_experienced", windowStart)
-    .lte("tattle_surveys.date_experienced", windowEnd);
-  if (tattleError)
-    throw new Error(`multi-location tattle: ${tattleError.message}`);
   type TattleRow = {
     employee_id: string;
     tattle_surveys: {
@@ -188,25 +204,41 @@ export async function fetchMultiLocationProfile(
       date_experienced: string;
     };
   };
-  const tattles = ((tattleRows ?? []) as unknown as TattleRow[]).filter(
-    (r) => r.tattle_surveys
-  );
+  const tattles = (
+    await pagedRows<TattleRow>(
+      (from, to) =>
+        supabase
+          .from("tattle_attributions")
+          .select(
+            "employee_id, tattle_surveys!inner(tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, date_experienced)"
+          )
+          .in("employee_id", siblingIds)
+          .gte("tattle_surveys.date_experienced", windowStart)
+          .lte("tattle_surveys.date_experienced", windowEnd)
+          .order("employee_id", { ascending: true })
+          .range(from, to),
+      "multi-location tattle"
+    )
+  ).filter((r) => r.tattle_surveys);
 
-  const { data: reviewRows, error: reviewError } = await supabase
-    .from("review_attributions")
-    .select("employee_id, customer_reviews!inner(rating, review_date)")
-    .in("employee_id", siblingIds)
-    .gte("customer_reviews.review_date", windowStart)
-    .lte("customer_reviews.review_date", windowEnd);
-  if (reviewError)
-    throw new Error(`multi-location reviews: ${reviewError.message}`);
   type ReviewRow = {
     employee_id: string;
     customer_reviews: { rating: number | string | null; review_date: string };
   };
-  const reviews = ((reviewRows ?? []) as unknown as ReviewRow[]).filter(
-    (r) => r.customer_reviews
-  );
+  const reviews = (
+    await pagedRows<ReviewRow>(
+      (from, to) =>
+        supabase
+          .from("review_attributions")
+          .select("employee_id, customer_reviews!inner(rating, review_date)")
+          .in("employee_id", siblingIds)
+          .gte("customer_reviews.review_date", windowStart)
+          .lte("customer_reviews.review_date", windowEnd)
+          .order("employee_id", { ascending: true })
+          .range(from, to),
+      "multi-location reviews"
+    )
+  ).filter((r) => r.customer_reviews);
 
   const recordBySiblingQuarter = new Map<string, RecordRow>();
   for (const r of records) {

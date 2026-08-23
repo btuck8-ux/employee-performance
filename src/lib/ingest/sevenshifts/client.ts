@@ -127,16 +127,30 @@ function stripQuery(url: string): string {
   return i === -1 ? url : url.slice(0, i);
 }
 
+export interface PagedListResult<T> {
+  data: T[];
+  /**
+   * True when the maxPages guard fired with a next-cursor still pending —
+   * the list is INCOMPLETE. Callers that infer anything from absence (the
+   * shifts feed's tombstone pass) must treat a truncated pull as unusable
+   * for that purpose; a row count can NOT detect this (pages may return
+   * fewer than `limit` rows), which is why the flag exists (Codex finding
+   * 1, 2026-08-23).
+   */
+  truncated: boolean;
+}
+
 /**
- * Fetch every page of a cursor-paginated list endpoint and return the flat
- * array. Bounded by `maxPages` as a runaway guard.
+ * Fetch every page of a cursor-paginated list endpoint. Bounded by
+ * `maxPages` as a runaway guard; `truncated` reports whether the guard cut
+ * the list short.
  */
-export async function getAll<T>(
+export async function getAllWithMeta<T>(
   companyId: number,
   path: string,
   params: QueryParams = {},
   maxPages = 100
-): Promise<T[]> {
+): Promise<PagedListResult<T>> {
   const token = tokenForCompany(companyId);
   const out: T[] = [];
   let cursor: string | undefined;
@@ -151,7 +165,18 @@ export async function getAll<T>(
     if (cursor) await sleep(PAGE_DELAY_MS);
   } while (cursor && pages < maxPages);
 
-  return out;
+  return { data: out, truncated: Boolean(cursor) };
+}
+
+/** Flat-array convenience over getAllWithMeta for callers that only upsert
+ * (an incomplete list is safe when nothing is inferred from absence). */
+export async function getAll<T>(
+  companyId: number,
+  path: string,
+  params: QueryParams = {},
+  maxPages = 100
+): Promise<T[]> {
+  return (await getAllWithMeta<T>(companyId, path, params, maxPages)).data;
 }
 
 /** Fetch a single-object endpoint (e.g. task_list_daily_summary). */

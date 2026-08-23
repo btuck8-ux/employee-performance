@@ -21,6 +21,9 @@ import {
  */
 
 export interface DetectionCardProps {
+  /** CP employee_directory row id — paired with the 7s id server-side so the
+   * site re-derivation stays deterministic once CP holds per-site rows. */
+  cpId: string;
   name: string;
   email: string | null;
   phone: string | null;
@@ -68,6 +71,7 @@ function Field({
 
 export function DetectionCard(props: DetectionCardProps) {
   const {
+    cpId,
     name,
     email,
     phone,
@@ -163,6 +167,7 @@ export function DetectionCard(props: DetectionCardProps) {
           name="seven_shifts_user_id"
           value={sevenShiftsUserId ?? ""}
         />
+        <input type="hidden" name="cp_id" value={cpId} />
         <input type="hidden" name="wage" value={wage ?? ""} />
         <input type="hidden" name="wage_pay_type" value={wagePayType ?? ""} />
 
@@ -240,6 +245,7 @@ export function DetectionCard(props: DetectionCardProps) {
                       name="seven_shifts_user_id"
                       value={sevenShiftsUserId ?? ""}
                     />
+                    <input type="hidden" name="cp_id" value={cpId} />
                     <input type="hidden" name="employee_name" value={name} />
                     <SubmitButton
                       variant="destructive"

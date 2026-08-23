@@ -87,6 +87,7 @@ export default async function EmployeeTriagePage({
             return (
               <DetectionCard
                 key={d.cpId}
+                cpId={d.cpId}
                 name={d.name}
                 email={d.email}
                 phone={d.phone}

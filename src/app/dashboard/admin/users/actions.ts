@@ -328,6 +328,38 @@ export async function revokeRoleAction(formData: FormData) {
     .eq("role", row.role);
   if (delErr) back({ error: `Revoke failed: ${delErr.message}` });
 
+  // Codex finding 4 (2026-08-23): the count-then-delete above is not atomic —
+  // two concurrent revokes of the two remaining SAs could both pass the
+  // guard. PostgREST can't express a subquery-guarded delete and an RPC
+  // would be another migration, so the race closes with a post-delete
+  // verify: if zero system_admins remain, re-grant the row just removed and
+  // refuse. (SA scope columns are all null by the CHECK, so the re-insert
+  // is complete.)
+  if (row.role === "system_admin") {
+    const { count: remaining, error: verifyErr } = await admin
+      .from("user_roles")
+      .select("user_id", { count: "exact", head: true })
+      .eq("role", "system_admin");
+    if (verifyErr || remaining === null || remaining < 1) {
+      const { error: restoreErr } = await admin.from("user_roles").insert({
+        user_id: targetUserId,
+        role: "system_admin",
+        granted_by: user.id,
+      });
+      console.error("[users] last-SA revoke race caught post-delete", {
+        actor: user.id,
+        target: targetUserId,
+        verify_error: verifyErr?.message ?? null,
+        restore_error: restoreErr?.message ?? null,
+      });
+      back({
+        error: restoreErr
+          ? `Revoke aborted: the last system_admin was about to be removed and the restore ALSO failed (${restoreErr.message}) — fix user_roles by SQL now.`
+          : "Revoke aborted: a concurrent revoke would have removed the last system_admin — the role was restored.",
+      });
+    }
+  }
+
   console.log("[users] role revoked", {
     actor: user.id,
     target: targetUserId,
