@@ -27,6 +27,12 @@ const SURFACES = [
     description:
       "Dashboard accounts: invite, scope, and revoke roles. Invitations only — sign-in credentials are set by the invitee, never here.",
   },
+  {
+    href: "/dashboard/admin/toast-crosswalk",
+    title: "Toast crosswalk",
+    description:
+      "Map Toast punch accounts to EPD employees. Unmatched accounts with punches queue here; auto-matches are listed and reversible.",
+  },
 ];
 
 export default async function AdminIndexPage() {
