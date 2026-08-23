@@ -30,6 +30,11 @@ const NAV: Record<string, NavLinkItem> = {
         icon: "triage",
       },
       { href: "/dashboard/admin/users", label: "Users", icon: "users" },
+      {
+        href: "/dashboard/admin/toast-crosswalk",
+        label: "Toast crosswalk",
+        icon: "triage",
+      },
     ],
   },
 };

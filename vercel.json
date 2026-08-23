@@ -26,6 +26,10 @@
       "schedule": "45 9 * * *"
     },
     {
+      "path": "/api/cron/sync-toast-labor",
+      "schedule": "55 9 * * *"
+    },
+    {
       "path": "/api/cron/ingest-toast-kitchen",
       "schedule": "0 10 * * *"
     }

@@ -11,7 +11,8 @@ export type IngestSource =
   | "culture_pulse"
   | "toast_kitchen"
   | "cp_schedule"
-  | "7shifts_shifts";
+  | "7shifts_shifts"
+  | "toast_labor";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {
