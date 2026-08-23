@@ -326,7 +326,12 @@ export async function GET(request: Request) {
         : { present: scopeStatus === 200, status: scopeStatus, blocking: false };
 
     // Full-window pull for one store, honouring whatever the matrix learned.
-    // businessDate fallback loops day-by-day (bounded, spaced).
+    // Anything short of "full" — including "short" (≤30-day windows work but
+    // the full window doesn't) — DELIBERATELY rides the exact day-by-day
+    // businessDate loop rather than 30-day chunking: identical data, simpler
+    // failure surface, and the request count (≤62, spaced) is trivial for a
+    // one-shot probe. The real ingest should chunk by ≤30-day windows.
+    // (Codex finding #5, 2026-08-23: dead-looking "short" branch clarified.)
     async function pullWindow(guid: string): Promise<{
       entries: Row[];
       requests: number;
