@@ -12,8 +12,17 @@
  *      IKES_CULTUREPULSE          -> company 360494 (NOLA)
  *      IKES_COLORADO_CULTUREPULSE -> company 185592 (the 6 Colorado stores)
  *
- * EPD pulls ACTUALS ONLY. No shifts/scheduled endpoints (that's Culture
- * Pulse's domain — hard fence).
+ * SCOPE (rewritten 2026-08-23 — Tucker's ruling, multi-location sprint §4-H):
+ * EPD pulls actuals AND scheduled shifts (`/shifts`) directly. The old
+ * "actuals only, no shifts endpoints" fence came from the 2026-06-01
+ * scheduling pivot, whose premise — "EPD scores off actuals, so it loses
+ * nothing by not owning schedules" — proved false: the attendance metric's
+ * denominator IS the schedule, and the CP-sourced copy could not be cleaned
+ * upstream (no deleted/draft signal in `weekly_schedule_entries`; deleted
+ * shifts vanish from the 7shifts payload and CP never prunes). This is EPD
+ * owning its own metric inputs, NOT scheduling-as-a-product — the pivot
+ * still stands for the product question, and migration 028 stays shelved.
+ * Do not "fix" the shifts pull as a fence violation.
  */
 
 export const SEVEN_SHIFTS_BASE = "https://api.7shifts.com";

@@ -88,12 +88,19 @@ function NavGroup({
   const inGroup =
     isActive(pathname, item.href) ||
     children.some((c) => isActive(pathname, c.href));
-  const [open, setOpen] = React.useState(inGroup);
-  // Landing inside the group (e.g. via the Employees-page triage chip) must
-  // reveal the children even if the group was collapsed earlier.
-  React.useEffect(() => {
-    if (inGroup) setOpen(true);
-  }, [inGroup]);
+  // Open = the chevron override when set, else whether the path is inside
+  // the group. Navigating into the group (e.g. via the Employees-page triage
+  // chip) clears any stale override so the children reveal — derived state,
+  // no effect.
+  const [override, setOverride] = React.useState<boolean | null>(null);
+  const [prevInGroup, setPrevInGroup] = React.useState(inGroup);
+  if (inGroup !== prevInGroup) {
+    setPrevInGroup(inGroup);
+    setOverride(null);
+  }
+  const open = override ?? inGroup;
+  const setOpen = (next: boolean | ((v: boolean) => boolean)) =>
+    setOverride(typeof next === "function" ? next(open) : next);
   const Icon = ICONS[item.icon] ?? Settings;
   return (
     <div>

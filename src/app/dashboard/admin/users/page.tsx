@@ -162,7 +162,7 @@ export default async function UsersPage({
     locations: { name: string } | null;
     time_entries: Array<{ entry_date: string }>;
   };
-  const todayMs = Date.now();
+  const todayMs = new Date().getTime();
   const departed = ((departedRaw ?? []) as unknown as DepartedRow[])
     .filter((e) => e.active)
     .map((e) => {
