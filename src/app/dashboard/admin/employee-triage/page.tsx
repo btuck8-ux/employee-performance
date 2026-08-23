@@ -34,6 +34,7 @@ export default async function EmployeeTriagePage({
   const dismissed = search.dismissed === "1";
   const bannerName = str(search.name);
   const bannerCode = str(search.code);
+  const bannerSite = str(search.site);
   const error = str(search.error);
 
   return (
@@ -56,18 +57,22 @@ export default async function EmployeeTriagePage({
       )}
       {minted && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          {bannerName ?? "Employee"} is now {bannerCode ?? "on the roster"}.
+          {bannerName ?? "Employee"} is now {bannerCode ?? "on the roster"}
+          {bannerSite ? ` at ${bannerSite}` : ""}.
         </div>
       )}
       {already && (
         <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
           {bannerName ?? "This person"} was already minted
-          {bannerCode ? ` as ${bannerCode}` : ""} — nothing to do.
+          {bannerCode ? ` as ${bannerCode}` : ""}
+          {bannerSite ? ` at ${bannerSite}` : ""} — nothing to do.
         </div>
       )}
       {dismissed && (
         <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          Dismissed {bannerName ?? "detection"} — it won&apos;t reappear.
+          Dismissed {bannerName ?? "detection"}
+          {bannerSite ? ` at ${bannerSite}` : ""} — it won&apos;t reappear
+          there. The same person detected at another site stays visible.
         </div>
       )}
 
@@ -82,6 +87,7 @@ export default async function EmployeeTriagePage({
             return (
               <DetectionCard
                 key={d.cpId}
+                cpId={d.cpId}
                 name={d.name}
                 email={d.email}
                 phone={d.phone}
@@ -91,6 +97,7 @@ export default async function EmployeeTriagePage({
                 locationId={d.location?.id ?? null}
                 locationName={d.location?.name ?? null}
                 similar={d.similar}
+                mintedElsewhere={d.mintedElsewhere}
                 wage={e?.wage ?? null}
                 wagePayType={e?.wagePayType ?? null}
                 enrichError={e?.error ?? null}

@@ -61,10 +61,13 @@ derivable from the code alone.
 - **EPD's third CP direct read is `employee_directory`** (read-only, the
   SA-only detected-employee triage page + Employees-page chip, 2026-08-21):
   rows with `source='discovered_from_schedule'` and no CP-side code are the
-  mint queue; the EPD-side exclusion keys on the 7shifts user id (CP stores
-  it as TEXT `sevenshifts_user_id`), NEVER on name. Same interim-credential
-  bridge and change-notice contract as the survey/schedule reads — CP-side
-  schema changes break the triage surface.
+  mint queue; the EPD-side exclusion keys on the **(7shifts user id,
+  location)** pair (2026-08-23 multi-location sprint — CP stores the id as
+  TEXT `sevenshifts_user_id`), NEVER on name. Reads are **location-aware**:
+  CP-side changes to `location_id`, `sevenshifts_user_id`, or `source`
+  semantics break EPD's triage *matching*, not merely its display. Same
+  interim-credential bridge and change-notice contract as the
+  survey/schedule reads.
 - **EPD's CP-surveys read is kind-filtered** (`fetch.ts` `.in("kind",
   ["weekly","one_off"])`, per CP mig 0055's homework reshape 2026-08-17):
   homework is deliberately excluded — training compliance is THQ's signal,
@@ -160,5 +163,10 @@ derivable from the code alone.
 
 ## Scope
 
-- Don't build CulturePulse features here — comms/schedule/surveys live in
-  CP; EPD scores off actuals.
+- Don't build CulturePulse features here — comms/scheduling-as-a-product/
+  surveys live in CP. **Nuance since 2026-08-23:** EPD DOES own a direct
+  7shifts scheduled-shift feed (its own metric input — the attendance
+  denominator), ruled by Tucker after the CP-sourced denominator proved
+  uncleanable upstream. That is not scheduling-as-a-product; the 2026-06-01
+  pivot stands for the product question. See the fence comment in
+  `src/lib/ingest/sevenshifts/client.ts`.

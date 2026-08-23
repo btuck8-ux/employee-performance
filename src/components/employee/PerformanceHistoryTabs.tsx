@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge, ExpectationBadge } from "@/components/ui/badge";
-import { SubmitButton } from "@/components/ui/submit-button";
 import { classifyVsTarget, type MetricTargets } from "@/lib/classify";
 import type { TargetLabel, TargetMetricKey } from "@/lib/types";
 import {
@@ -79,7 +78,6 @@ export interface PerformanceTabsProps {
    * use it (the page passes role === "system_admin").
    */
   canGenerate: boolean;
-  generateTaskDetailAction: (formData: FormData) => Promise<void>;
   taskDetailReportIdByRecord: Record<string, string>;
 }
 
@@ -91,7 +89,6 @@ export function PerformanceHistoryTabs({
   employeeId,
   locationId,
   canGenerate,
-  generateTaskDetailAction,
   taskDetailReportIdByRecord,
 }: PerformanceTabsProps) {
   return (
@@ -190,7 +187,6 @@ export function PerformanceHistoryTabs({
                         employeeId={employeeId}
                         locationId={locationId}
                         canGenerate={canGenerate}
-                        generateTaskDetailAction={generateTaskDetailAction}
                         taskDetailReportId={taskDetailReportIdByRecord[r.id] ?? null}
                       />
                     </td>
@@ -354,26 +350,24 @@ function SummaryView({
 }
 
 /**
- * §5-A (2026-08-19): CONSOLIDATED. The row-level Generate/Regenerate form and
- * its separate generateAction are retired — generation happens in the Reports
- * builder, and this row LINKS there pre-filled (location + employee +
- * quarter). Download + stale flag stay row-level; the standalone Task Detail
- * generator stays too (the builder only bundles task detail, it can't
- * generate it standalone).
+ * §4-E (2026-08-23): FULLY CONSOLIDATED. Both generate controls are gone —
+ * the single "Go to Report Builder" link carries the prefill (location +
+ * employee + quarter), and the 7tasks detail is a report type inside the
+ * builder's content picker. Retrieval stays row-level: Download, Download
+ * Task Detail, and the ⚠ stale indicator. The profile's 7Tasks card keeps a
+ * quick generate path that skips the builder trip.
  */
 function ReportCell({
   row,
   employeeId,
   locationId,
   canGenerate,
-  generateTaskDetailAction,
   taskDetailReportId,
 }: {
   row: QuarterRow;
   employeeId: string;
   locationId: string;
   canGenerate: boolean;
-  generateTaskDetailAction: (formData: FormData) => Promise<void>;
   taskDetailReportId: string | null;
 }) {
   const builderHref =
@@ -381,8 +375,7 @@ function ReportCell({
     `&builder_employee=${employeeId}` +
     (row.report_period_id ? `&builder_period=${row.report_period_id}` : "");
   return (
-    <div className="flex flex-col gap-1.5 min-w-[260px]">
-      {/* Performance report row */}
+    <div className="flex flex-col gap-1.5 min-w-[220px]">
       <div className="flex items-center gap-2 flex-wrap">
         {row.current_report_id && (
           <a
@@ -394,26 +387,6 @@ function ReportCell({
             Download
           </a>
         )}
-        {canGenerate && (
-          <Link
-            href={builderHref}
-            className="text-xs text-ikes-blue underline-offset-2 hover:underline"
-          >
-            {row.current_report_id ? "Regenerate in builder" : "Generate in builder"}
-          </Link>
-        )}
-        {row.feedback_updated_after_generation && row.current_report_id && (
-          <span
-            className="text-xs text-amber-700"
-            title="Manager feedback was updated after this report was generated."
-          >
-            ⚠ stale
-          </span>
-        )}
-      </div>
-
-      {/* Task Detail standalone row */}
-      <div className="flex items-center gap-2 flex-wrap">
         {taskDetailReportId && (
           <a
             href={`/api/reports/${taskDetailReportId}`}
@@ -424,18 +397,23 @@ function ReportCell({
             Download Task Detail
           </a>
         )}
-        <form action={generateTaskDetailAction}>
-          <input type="hidden" name="performance_record_id" value={row.id} />
-          <input type="hidden" name="employee_id" value={employeeId} />
-          <SubmitButton
-            variant="outline"
-            size="sm"
-            pendingLabel="Generating…"
+        {row.feedback_updated_after_generation && row.current_report_id && (
+          <span
+            className="text-xs text-amber-700"
+            title="Manager feedback was updated after this report was generated."
           >
-            {taskDetailReportId ? "Regenerate Task Detail" : "Generate Task Detail"}
-          </SubmitButton>
-        </form>
+            ⚠ stale
+          </span>
+        )}
       </div>
+      {canGenerate && (
+        <Link
+          href={builderHref}
+          className="text-xs text-ikes-blue underline-offset-2 hover:underline"
+        >
+          Go to Report Builder →
+        </Link>
+      )}
     </div>
   );
 }

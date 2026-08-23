@@ -14,7 +14,7 @@ import {
   type TotalImpactWeights,
 } from "./total-impact-score";
 
-interface TimeEntryRow {
+export interface TimeEntryRow {
   entry_date: string;
   entry_type: "scheduled" | "worked";
   in_time: string | null;

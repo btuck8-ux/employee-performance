@@ -29,6 +29,7 @@ import {
 } from "./runs";
 import { ingestTimePunches } from "./time";
 import { ingestReceipts } from "./receipts";
+import { ingestSevenShiftsShifts } from "./shifts";
 import { maybeSendFailureAlert } from "./alert";
 import { emptyStreakReasons } from "./streak";
 import {
@@ -124,6 +125,14 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
       outcomes.push(outcome);
     }
   }
+
+  // --- 7shifts_shifts: EPD's direct scheduled-shift feed (2026-08-23 §4-H).
+  // ALL crosswalked locations (NOLA included — CAKE owns its worked actuals,
+  // 7shifts still owns its schedule), one API pull per company, per-location
+  // ingest_runs rows managed inside. Parallel to cp_schedule, never
+  // time_entries; the probe measured ~10s for the full window across all
+  // three companies, comfortably inside the cron budget.
+  outcomes.push(...(await ingestSevenShiftsShifts(supabase, crosswalk)));
 
   // Per-location empty-streak guard: catch a single location drifting `empty`
   // night after night even while the same source has data elsewhere (the NOLA

@@ -12,8 +12,17 @@
  *      IKES_CULTUREPULSE          -> company 360494 (NOLA)
  *      IKES_COLORADO_CULTUREPULSE -> company 185592 (the 6 Colorado stores)
  *
- * EPD pulls ACTUALS ONLY. No shifts/scheduled endpoints (that's Culture
- * Pulse's domain — hard fence).
+ * SCOPE (rewritten 2026-08-23 — Tucker's ruling, multi-location sprint §4-H):
+ * EPD pulls actuals AND scheduled shifts (`/shifts`) directly. The old
+ * "actuals only, no shifts endpoints" fence came from the 2026-06-01
+ * scheduling pivot, whose premise — "EPD scores off actuals, so it loses
+ * nothing by not owning schedules" — proved false: the attendance metric's
+ * denominator IS the schedule, and the CP-sourced copy could not be cleaned
+ * upstream (no deleted/draft signal in `weekly_schedule_entries`; deleted
+ * shifts vanish from the 7shifts payload and CP never prunes). This is EPD
+ * owning its own metric inputs, NOT scheduling-as-a-product — the pivot
+ * still stands for the product question, and migration 028 stays shelved.
+ * Do not "fix" the shifts pull as a fence violation.
  */
 
 export const SEVEN_SHIFTS_BASE = "https://api.7shifts.com";
@@ -118,16 +127,30 @@ function stripQuery(url: string): string {
   return i === -1 ? url : url.slice(0, i);
 }
 
+export interface PagedListResult<T> {
+  data: T[];
+  /**
+   * True when the maxPages guard fired with a next-cursor still pending —
+   * the list is INCOMPLETE. Callers that infer anything from absence (the
+   * shifts feed's tombstone pass) must treat a truncated pull as unusable
+   * for that purpose; a row count can NOT detect this (pages may return
+   * fewer than `limit` rows), which is why the flag exists (Codex finding
+   * 1, 2026-08-23).
+   */
+  truncated: boolean;
+}
+
 /**
- * Fetch every page of a cursor-paginated list endpoint and return the flat
- * array. Bounded by `maxPages` as a runaway guard.
+ * Fetch every page of a cursor-paginated list endpoint. Bounded by
+ * `maxPages` as a runaway guard; `truncated` reports whether the guard cut
+ * the list short.
  */
-export async function getAll<T>(
+export async function getAllWithMeta<T>(
   companyId: number,
   path: string,
   params: QueryParams = {},
   maxPages = 100
-): Promise<T[]> {
+): Promise<PagedListResult<T>> {
   const token = tokenForCompany(companyId);
   const out: T[] = [];
   let cursor: string | undefined;
@@ -142,7 +165,18 @@ export async function getAll<T>(
     if (cursor) await sleep(PAGE_DELAY_MS);
   } while (cursor && pages < maxPages);
 
-  return out;
+  return { data: out, truncated: Boolean(cursor) };
+}
+
+/** Flat-array convenience over getAllWithMeta for callers that only upsert
+ * (an incomplete list is safe when nothing is inferred from absence). */
+export async function getAll<T>(
+  companyId: number,
+  path: string,
+  params: QueryParams = {},
+  maxPages = 100
+): Promise<T[]> {
+  return (await getAllWithMeta<T>(companyId, path, params, maxPages)).data;
 }
 
 /** Fetch a single-object endpoint (e.g. task_list_daily_summary). */

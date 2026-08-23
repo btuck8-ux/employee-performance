@@ -96,6 +96,18 @@ export function ReportContentPicker() {
           />
           Manager feedback section
         </label>
+        {/* §4-E: the 7tasks detail is a report type here, not a stray
+            checkbox next to the period controls. Quarterly-only — the
+            builder attaches it per employee when the period is a quarter. */}
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            name="include_task_detail"
+            value="1"
+            className="h-4 w-4 accent-[#702F8A]"
+          />
+          7Tasks detail report (quarterly only)
+        </label>
       </div>
     </div>
   );

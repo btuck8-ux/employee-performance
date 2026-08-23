@@ -26,16 +26,34 @@ test("both server actions re-check system_admin", () => {
   );
 });
 
-test("the mint carries the seven_shifts_user_id idempotency guard", () => {
-  // Global pre-check on the id BEFORE the insert…
-  const guardIdx = actionsSrc.indexOf('.eq("seven_shifts_user_id", ssid)');
-  const insertIdx = actionsSrc.indexOf('.insert(insertRow)');
-  assert.ok(guardIdx !== -1, "pre-check select on seven_shifts_user_id present");
+test("the mint idempotency guard is keyed on the (7s id, location) pair", () => {
+  // Pair-keyed pre-check BEFORE the insert (§4-A2, 2026-08-23 sprint): a row
+  // at ANOTHER store must not read as already-minted — second-site mints are
+  // legitimate (six live two-site people).
+  const idGuard = '.eq("seven_shifts_user_id", ssid)';
+  const guardIdx = actionsSrc.indexOf(idGuard);
+  const insertIdx = actionsSrc.indexOf(".insert(insertRow)");
+  assert.ok(guardIdx !== -1, "pre-check on the 7s id present");
   assert.ok(insertIdx !== -1, "insert present");
   assert.ok(guardIdx < insertIdx, "guard runs before the insert");
   // …and the mig-030 partial-index race lands on the calm already-minted
-  // path, not an error.
+  // path, not an error — with the SAME pair key on the re-read (§4-A2's
+  // second call site: a location-less re-read reports a different store's
+  // code). The segments loop below proves both call sites carry the pair.
   assert.match(actionsSrc, /23505/, "unique-violation race handled");
+  assert.ok(
+    actionsSrc.indexOf(idGuard, insertIdx) !== -1,
+    "the 23505 race re-read guards on the id too"
+  );
+  // No location-blind id-only guard may remain anywhere in the actions:
+  // every .eq on the 7s id must be immediately followed by the location key.
+  const segments = actionsSrc.split('.eq("seven_shifts_user_id", ssid)');
+  for (let i = 1; i < segments.length; i++) {
+    assert.ok(
+      segments[i].trimStart().startsWith('.eq("location_id", locationId)'),
+      `employees guard #${i} on the 7s id must also key on location_id`
+    );
+  }
 });
 
 test("employee_code is never set explicitly — the sequence default owns it", () => {
@@ -82,21 +100,35 @@ test("mint re-derives the site server-side — location is never client input", 
   assert.doesNotMatch(cardSrc, /name="location_id"/);
 });
 
-test("dismiss is keyed on seven_shifts_user_id", () => {
+test("dismiss is keyed on the (7s id, location) pair", () => {
   assert.match(actionsSrc, /\.from\("detection_dismissals"\)/);
-  assert.match(actionsSrc, /onConflict: "seven_shifts_user_id"/);
+  assert.match(actionsSrc, /onConflict: "seven_shifts_user_id,location_id"/);
+  // The site is re-derived server-side, same doctrine as the mint (Codex
+  // finding 2): one resolveDetectionLocation call per action.
+  const resolves = actionsSrc.match(/resolveDetectionLocation\(/g) ?? [];
+  assert.ok(
+    resolves.length >= 2,
+    `mint AND dismiss re-derive the site server-side, found ${resolves.length}`
+  );
 });
 
-// ── Migration 052 pins (file-only until Cowork/Tucker applies) ──────────────
+// ── Migration 053 pins (file-only until Cowork/Tucker applies) ──────────────
 
 const migSrc = readFileSync(
-  join(process.cwd(), "supabase/migrations/052_detection_dismissals.sql"),
+  join(
+    process.cwd(),
+    "supabase/migrations/053_detection_dismissals_per_location.sql"
+  ),
   "utf8"
 );
 
-test("mig 052 shape: pk on the 7shifts id, RLS on, SA-only policy", () => {
+test("mig 053 shape: composite pk on the pair, RLS on, SA-only policy", () => {
   assert.match(migSrc, /create table public\.detection_dismissals/);
-  assert.match(migSrc, /seven_shifts_user_id bigint primary key/);
+  assert.match(migSrc, /primary key \(seven_shifts_user_id, location_id\)/);
+  assert.match(
+    migSrc,
+    /location_id uuid not null references public\.locations\(id\)/
+  );
   assert.match(migSrc, /enable row level security/);
   assert.match(migSrc, /epd_is_system_admin/);
   // The phantom class (user id 0) must be storable.

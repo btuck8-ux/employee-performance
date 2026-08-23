@@ -18,14 +18,15 @@ import {
  * SA-only under RLS (047/052), so the policy layer enforces what the code
  * checks — never the service role here.
  *
- * Mint idempotency (§2 ⚠️): there is NO global unique constraint on
- * employees.seven_shifts_user_id (only the partial unique index on
- * (location_id, seven_shifts_user_id), mig 030) — the guard is a global
- * pre-check on seven_shifts_user_id, with the index catching the same-store
- * double-submit race; both paths land on the calm "already minted" banner,
- * never a duplicate person. employee_code is NEVER set here — the
- * employee_code_seq default owns it (mig 004). hire_date stays null — the
- * §6-B nightly backfill owns it.
+ * Mint idempotency is keyed on (seven_shifts_user_id, location_id) — the
+ * multi-location identity (2026-08-23 sprint §4-A2). The pre-check reads the
+ * pair, and mig 030's partial unique index on exactly that pair catches the
+ * same-store double-submit race; both paths land on the calm "already minted
+ * at this site" banner, never a duplicate person. A person already rostered
+ * at ANOTHER store is a genuine second-site mint, not a duplicate — the six
+ * live two-site people are two rows each by design. employee_code is NEVER
+ * set here — the employee_code_seq default owns it (mig 004). hire_date
+ * stays null — the §6-B nightly backfill owns it.
  */
 
 const BACK = "/dashboard/admin/employee-triage";
@@ -54,6 +55,7 @@ export async function confirmDetectionAction(formData: FormData) {
   const ssid = normalizeSevenShiftsUserId(
     String(formData.get("seven_shifts_user_id") ?? "")
   );
+  const cpRowId = trimmedOrNull(formData.get("cp_id"), 60);
   const name = trimmedOrNull(formData.get("employee_name"), 120);
   const email = trimmedOrNull(formData.get("email"), 254);
   const phone = trimmedOrNull(formData.get("phone"), 40);
@@ -67,21 +69,27 @@ export async function confirmDetectionAction(formData: FormData) {
 
   // ssid > 0: 0 is the known 7shifts phantom class — dismissable, never
   // mintable.
-  if (ssid === null || ssid <= 0 || !name) {
+  if (ssid === null || ssid <= 0 || !name || !cpRowId) {
     redirect(
       backWith({
-        error: "Mint needs a name and a real 7shifts user id.",
+        error: "Mint needs a name, a real 7shifts user id, and its CP row.",
       })
     );
   }
 
   // The site is re-derived server-side from CP + the crosswalk (Codex
   // finding 2, 2026-08-21) — location is display-only on the card and never
-  // client input.
+  // client input. The CP row id + 7s id must match the same pending row
+  // (Codex finding 2, 2026-08-23 — see resolveDetectionLocation).
   let location: { id: string; name: string } | null = null;
   let resolveFailure: string | null = null;
   try {
-    location = await resolveDetectionLocation(createCpClient(), supabase, ssid);
+    location = await resolveDetectionLocation(
+      createCpClient(),
+      supabase,
+      ssid,
+      cpRowId
+    );
   } catch (err) {
     resolveFailure = err instanceof Error ? err.message : String(err);
   }
@@ -98,13 +106,15 @@ export async function confirmDetectionAction(formData: FormData) {
   }
   const locationId = location.id;
 
-  // Idempotency guard — GLOBAL on seven_shifts_user_id, deliberately wider
-  // than the per-location index, so a person re-detected at another store
-  // still reads as already-minted.
+  // Idempotency guard — on the (7s id, location) pair, matching mig 030's
+  // partial unique index exactly (§4-A2). A row at another store must NOT
+  // trip this: that person picking up shifts here is a legitimate
+  // second-site mint.
   const { data: existing, error: guardError } = await supabase
     .from("employees")
     .select("employee_code, employee_name")
     .eq("seven_shifts_user_id", ssid)
+    .eq("location_id", locationId)
     .limit(1)
     .maybeSingle();
   if (guardError) {
@@ -116,6 +126,7 @@ export async function confirmDetectionAction(formData: FormData) {
         already: "1",
         name: existing.employee_name ?? name,
         code: existing.employee_code ?? "",
+        site: location.name,
       })
     );
   }
@@ -139,16 +150,24 @@ export async function confirmDetectionAction(formData: FormData) {
     .single();
   if (insertError || !minted) {
     // 23505 = the mig-030 partial unique index fired on a double-submit race
-    // — the row exists now; report it calmly, not as an error.
+    // — the row exists now; report it calmly, not as an error. The re-read
+    // is pair-keyed like the pre-check (§4-A2): a location-less read here
+    // would report a DIFFERENT store's code as "already minted".
     if (insertError?.code === "23505") {
       const { data: raced } = await supabase
         .from("employees")
         .select("employee_code")
         .eq("seven_shifts_user_id", ssid)
+        .eq("location_id", locationId)
         .limit(1)
         .maybeSingle();
       redirect(
-        backWith({ already: "1", name, code: raced?.employee_code ?? "" })
+        backWith({
+          already: "1",
+          name,
+          code: raced?.employee_code ?? "",
+          site: location.name,
+        })
       );
     }
     redirect(
@@ -167,7 +186,9 @@ export async function confirmDetectionAction(formData: FormData) {
 
   revalidatePath(BACK);
   revalidatePath("/dashboard/employees");
-  redirect(backWith({ minted: "1", name, code: minted.employee_code }));
+  redirect(
+    backWith({ minted: "1", name, code: minted.employee_code, site: location.name })
+  );
 }
 
 export async function dismissDetectionAction(formData: FormData) {
@@ -183,19 +204,52 @@ export async function dismissDetectionAction(formData: FormData) {
   const ssid = normalizeSevenShiftsUserId(
     String(formData.get("seven_shifts_user_id") ?? "")
   );
+  const cpRowId = trimmedOrNull(formData.get("cp_id"), 60);
   const name = trimmedOrNull(formData.get("employee_name"), 120) ?? "detection";
   // ssid >= 0: the "7shifts user 0" phantom is exactly what dismiss is for.
-  if (ssid === null || ssid < 0) {
+  if (ssid === null || ssid < 0 || !cpRowId) {
     redirect(
-      backWith({ error: "Dismiss needs a usable 7shifts user id." })
+      backWith({ error: "Dismiss needs a usable 7shifts user id and its CP row." })
     );
   }
 
-  // Re-dismissing is a no-op, not an error (same calm-idempotency stance as
-  // the mint guard).
+  // Dismissals are per-site since mig 053 (§4-A3), and the site is re-derived
+  // server-side exactly like the mint path (Codex finding 2 doctrine:
+  // location is never client input; the CP row id + 7s id must match the
+  // same pending row).
+  let location: { id: string; name: string } | null = null;
+  let resolveFailure: string | null = null;
+  try {
+    location = await resolveDetectionLocation(
+      createCpClient(),
+      supabase,
+      ssid,
+      cpRowId
+    );
+  } catch (err) {
+    resolveFailure = err instanceof Error ? err.message : String(err);
+  }
+  if (resolveFailure) {
+    redirect(backWith({ error: `Dismiss failed: ${resolveFailure}` }));
+  }
+  if (!location) {
+    redirect(
+      backWith({
+        error:
+          "This detection is no longer pending in CP (or its site isn't crosswalked) — refresh and re-check.",
+      })
+    );
+  }
+
+  // Re-dismissing at the same site is a no-op, not an error (same
+  // calm-idempotency stance as the mint guard).
   const { error } = await supabase.from("detection_dismissals").upsert(
-    { seven_shifts_user_id: ssid, dismissed_by: user.id },
-    { onConflict: "seven_shifts_user_id", ignoreDuplicates: true }
+    {
+      seven_shifts_user_id: ssid,
+      location_id: location.id,
+      dismissed_by: user.id,
+    },
+    { onConflict: "seven_shifts_user_id,location_id", ignoreDuplicates: true }
   );
   if (error) {
     redirect(backWith({ error: `Dismiss failed: ${error.message}` }));
@@ -204,9 +258,10 @@ export async function dismissDetectionAction(formData: FormData) {
   console.log("[triage] detection dismissed", {
     actor: user.id,
     seven_shifts_user_id: ssid,
+    location_id: location.id,
   });
 
   revalidatePath(BACK);
   revalidatePath("/dashboard/employees");
-  redirect(backWith({ dismissed: "1", name }));
+  redirect(backWith({ dismissed: "1", name, site: location.name }));
 }

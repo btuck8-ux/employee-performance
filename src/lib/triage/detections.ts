@@ -6,10 +6,19 @@
  * third CP direct read after the survey and schedule feeds — same interim-
  * credential shape and change-notice contract). The detection pool is rows
  * with source='discovered_from_schedule' and no CP-side employee_code;
- * anyone whose 7shifts user id already exists on the EPD roster (minted) or
- * in detection_dismissals (operator-dismissed, mig 052) drops off — which is
- * also what keeps the five 2026-08-21 stopgap mints (EMP-100220–100224) off
- * the page from day one.
+ * anyone whose (7shifts user id, site) pair already exists on the EPD roster
+ * (minted) or in detection_dismissals (operator-dismissed, mig 053) drops
+ * off — which is also what keeps the five 2026-08-21 stopgap mints
+ * (EMP-100220–100224) off the page from day one.
+ *
+ * EXCLUSION IS KEYED ON (seven_shifts_user_id, location_id), NOT the id
+ * alone (2026-08-23 multi-location sprint §4-A): one person working two
+ * sites is two `employees` rows by design (six live pairs, e.g. Liv
+ * Sandifer 10418605 at HRANCH + LONGM), so a person already rostered at
+ * site A must still surface as a detection at site B. The CP side of the
+ * pair is mapped to EPD through the location crosswalk; a detection whose
+ * CP site isn't crosswalked has no derivable pair and stays visible (its
+ * mint is blocked by the crosswalk warning — the fix is upstream).
  *
  * MATCHING KEYS ON THE 7SHIFTS USER ID, NEVER ON NAME (live near-misses that
  * burned a triage pass: Ryan Griffin 8585453 ≠ Connor Griffin; Amy Roberts
@@ -45,6 +54,12 @@ export interface SimilarRosterName {
   employee_name: string;
 }
 
+/** A site where the detection's 7shifts id is already minted (another store). */
+export interface MintedElsewhere {
+  locationName: string;
+  employeeCode: string | null;
+}
+
 /** One reviewable detection, ready for the triage card. */
 export interface PendingDetection {
   cpId: string;
@@ -58,6 +73,11 @@ export interface PendingDetection {
   /** EPD location via the CP crosswalk; null = CP location not in the map. */
   location: { id: string; name: string; locationCode: string } | null;
   similar: SimilarRosterName[];
+  /**
+   * Other EPD sites already holding this 7shifts id (§4-A4): confirming this
+   * card mints a SECOND, location-scoped code — the operator must see that.
+   */
+  mintedElsewhere: MintedElsewhere[];
 }
 
 /**
@@ -126,14 +146,74 @@ export function findSimilarRosterNames(
   return out;
 }
 
+/** A minted-roster or dismissal row carrying the (7s id, EPD site) pair. */
+export interface IdentityPairRow {
+  seven_shifts_user_id: number | string | null;
+  location_id: string;
+}
+
+/** The pair key the exclusion set is built on. EPD location uuid, not CP's. */
+function pairKey(ssid: number, epdLocationId: string): string {
+  return `${ssid}|${epdLocationId}`;
+}
+
+/**
+ * Build the exclusion set from minted-roster + dismissal rows: one
+ * "ssid|epdLocationId" key per pair. Rows with an unusable id contribute
+ * nothing (they cannot collide with a parsed detection id).
+ */
+export function buildExclusionPairs(rows: IdentityPairRow[]): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    // Strict per type: Number(null) and Number("") are 0, which would
+    // silently collide with the phantom class — never coerce loosely here.
+    const n =
+      typeof r.seven_shifts_user_id === "string"
+        ? normalizeSevenShiftsUserId(r.seven_shifts_user_id)
+        : r.seven_shifts_user_id;
+    if (n !== null && Number.isSafeInteger(n) && r.location_id) {
+      out.add(pairKey(n, r.location_id));
+    }
+  }
+  return out;
+}
+
+/**
+ * The §4-A exclusion rule, pure and pinned by test: a detection drops only
+ * when its (7s id, site) pair is already minted or dismissed AT THAT SITE.
+ * Unparseable ids and un-crosswalked CP sites stay visible.
+ */
+export function isDetectionExcluded(
+  ssid: number | null,
+  cpLocationId: string,
+  epdLocationIdByCpLocationId: Map<string, string>,
+  excludedPairs: Set<string>
+): boolean {
+  if (ssid === null) return false;
+  const epdLocationId = epdLocationIdByCpLocationId.get(cpLocationId);
+  if (!epdLocationId) return false;
+  return excludedPairs.has(pairKey(ssid, epdLocationId));
+}
+
+interface MintedIdentityRow extends IdentityPairRow {
+  employee_code: string | null;
+}
+
+interface PendingPool {
+  rows: CpDetectionRow[];
+  cpLocations: CpSyncLocation[];
+  minted: MintedIdentityRow[];
+}
+
 /**
  * The shared pool query: CP detections still pending after the EPD-side
- * exclusions. Throws on any read error (fail loud, house convention).
+ * pair-keyed exclusions. Throws on any read error (fail loud, house
+ * convention).
  */
-async function loadPendingRows(
+async function loadPendingPool(
   cp: SupabaseClient,
   epd: SupabaseClient
-): Promise<CpDetectionRow[]> {
+): Promise<PendingPool> {
   const { data: cpRows, error: cpError } = await cp
     .from("employee_directory")
     .select(
@@ -144,36 +224,43 @@ async function loadPendingRows(
     .order("first_seen_at", { ascending: true });
   if (cpError) throw new Error(`CP employee_directory: ${cpError.message}`);
 
-  // Exclusion sets are keyed on the 7shifts user id — the only identity the
-  // matching is allowed to use.
+  // Exclusion sets are keyed on the (7shifts user id, location) pair — the
+  // id is the only identity matching is allowed to use, and the site scopes
+  // it (§4-A: multi-site people are separate rows per store by design).
   const { data: minted, error: mintedError } = await epd
     .from("employees")
-    .select("seven_shifts_user_id")
+    .select("seven_shifts_user_id, location_id, employee_code")
     .not("seven_shifts_user_id", "is", null);
   if (mintedError) throw new Error(`EPD employees: ${mintedError.message}`);
 
   const { data: dismissed, error: dismissedError } = await epd
     .from("detection_dismissals")
-    .select("seven_shifts_user_id");
+    .select("seven_shifts_user_id, location_id");
   if (dismissedError)
     throw new Error(`EPD detection_dismissals: ${dismissedError.message}`);
 
-  const known = new Set<number>();
-  for (const r of minted ?? []) {
-    const n = Number(r.seven_shifts_user_id);
-    if (Number.isSafeInteger(n)) known.add(n);
-  }
-  for (const r of dismissed ?? []) {
-    const n = Number(r.seven_shifts_user_id);
-    if (Number.isSafeInteger(n)) known.add(n);
-  }
+  const cpLocations = await loadCpSyncLocations(epd);
+  const epdIdByCpId = new Map(
+    cpLocations.map((l) => [l.cp_location_id, l.id])
+  );
 
-  return ((cpRows ?? []) as CpDetectionRow[]).filter((row) => {
-    const ssid = normalizeSevenShiftsUserId(row.sevenshifts_user_id);
-    // Unparseable ids stay visible (a real person the admin should see —
-    // just unmintable until CP carries a usable id).
-    return ssid === null || !known.has(ssid);
-  });
+  const mintedRows = (minted ?? []) as MintedIdentityRow[];
+  const excluded = buildExclusionPairs([
+    ...mintedRows,
+    ...((dismissed ?? []) as IdentityPairRow[]),
+  ]);
+
+  const rows = ((cpRows ?? []) as CpDetectionRow[]).filter(
+    (row) =>
+      !isDetectionExcluded(
+        normalizeSevenShiftsUserId(row.sevenshifts_user_id),
+        row.location_id,
+        epdIdByCpId,
+        excluded
+      )
+  );
+
+  return { rows, cpLocations, minted: mintedRows };
 }
 
 /** Pending-detection count for the Employees-page chip. */
@@ -181,29 +268,34 @@ export async function countPendingDetections(
   cp: SupabaseClient,
   epd: SupabaseClient
 ): Promise<number> {
-  return (await loadPendingRows(cp, epd)).length;
+  return (await loadPendingPool(cp, epd)).rows.length;
 }
 
 /**
- * Re-derive the mint site server-side at confirm time (Codex finding 2,
- * 2026-08-21): the location is crosswalk-derived, never client input — a
- * stale or tampered form must not pick the store. Looks up the still-pending
- * CP detection by its 7shifts user id and maps its CP location to EPD; null
- * = detection gone (already coded CP-side) or its CP location isn't in the
- * crosswalk.
+ * Re-derive the mint/dismiss site server-side at confirm time (Codex
+ * finding 2, 2026-08-21): the location is crosswalk-derived, never client
+ * input — a stale or tampered form must not pick the store. Keys on the CP
+ * row id AND the 7shifts user id together (Codex finding 2, 2026-08-23):
+ * once CP ships per-site directory rows, one user id can pend at two sites
+ * and an id-only limit(1) would resolve non-deterministically. The row id
+ * alone is equally insufficient — both must match the same still-pending
+ * row, so a tampered cpRowId that doesn't carry this user id resolves
+ * nothing. Null = detection gone (already coded CP-side), id/row mismatch,
+ * or a CP location outside the crosswalk.
  */
 export async function resolveDetectionLocation(
   cp: SupabaseClient,
   epd: SupabaseClient,
-  sevenShiftsUserId: number
+  sevenShiftsUserId: number,
+  cpRowId: string
 ): Promise<{ id: string; name: string } | null> {
   const { data, error } = await cp
     .from("employee_directory")
     .select("location_id")
+    .eq("id", cpRowId)
     .eq("source", "discovered_from_schedule")
     .eq("sevenshifts_user_id", String(sevenShiftsUserId))
     .is("employee_code", null)
-    .limit(1)
     .maybeSingle();
   if (error) throw new Error(`CP employee_directory: ${error.message}`);
   if (!data) return null;
@@ -217,13 +309,26 @@ export async function fetchPendingDetections(
   cp: SupabaseClient,
   epd: SupabaseClient
 ): Promise<PendingDetection[]> {
-  const rows = await loadPendingRows(cp, epd);
+  const { rows, cpLocations, minted } = await loadPendingPool(cp, epd);
   if (rows.length === 0) return [];
 
-  const cpLocations = await loadCpSyncLocations(epd);
   const byCpLocationId = new Map<string, CpSyncLocation>(
     cpLocations.map((l) => [l.cp_location_id, l])
   );
+  const nameByEpdLocationId = new Map<string, string>(
+    cpLocations.map((l) => [l.id, l.name])
+  );
+
+  // Sites already holding each 7shifts id — feeds the §4-A4 "already on the
+  // roster at X" card notice for second-site mints.
+  const mintedBySsid = new Map<number, MintedIdentityRow[]>();
+  for (const m of minted) {
+    const n = Number(m.seven_shifts_user_id);
+    if (!Number.isSafeInteger(n)) continue;
+    const list = mintedBySsid.get(n) ?? [];
+    list.push(m);
+    mintedBySsid.set(n, list);
+  }
 
   const { data: rosterData, error: rosterError } = await epd
     .from("employees")
@@ -233,12 +338,23 @@ export async function fetchPendingDetections(
 
   return rows.map((row) => {
     const loc = byCpLocationId.get(row.location_id) ?? null;
+    const ssid = normalizeSevenShiftsUserId(row.sevenshifts_user_id);
+    const mintedElsewhere: MintedElsewhere[] =
+      ssid === null
+        ? []
+        : (mintedBySsid.get(ssid) ?? [])
+            .filter((m) => m.location_id !== loc?.id)
+            .map((m) => ({
+              locationName:
+                nameByEpdLocationId.get(m.location_id) ?? "another site",
+              employeeCode: m.employee_code,
+            }));
     return {
       cpId: row.id,
       name: row.employee_name,
       email: row.email,
       phone: row.phone,
-      sevenShiftsUserId: normalizeSevenShiftsUserId(row.sevenshifts_user_id),
+      sevenShiftsUserId: ssid,
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_in_schedule_at,
       location: loc
@@ -249,6 +365,7 @@ export async function fetchPendingDetections(
         loc?.id ?? null,
         roster
       ),
+      mintedElsewhere,
     };
   });
 }
