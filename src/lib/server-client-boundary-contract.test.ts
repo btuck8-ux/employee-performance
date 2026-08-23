@@ -64,3 +64,43 @@ test("server pages import window helpers from time-window, never the picker", ()
     );
   }
 });
+
+// ── 2026-08-23 sprint boundaries (§8: every new boundary is pinned here) ────
+
+test("multi-location split: pure math is server-safe, fetch is server-only, card is client", () => {
+  const metrics = read("src/lib/multi-location-metrics.ts");
+  assert.doesNotMatch(
+    metrics,
+    /^\s*["']use client["'];?\s*$/m,
+    "multi-location-metrics.ts must stay directive-free (shared both sides)"
+  );
+  assert.doesNotMatch(
+    metrics,
+    /^import /m,
+    "multi-location-metrics.ts stays dependency-free so it can cross the boundary"
+  );
+  const card = read("src/components/employee/MultiLocationCard.tsx");
+  assert.match(card, /^"use client";/);
+  assert.doesNotMatch(
+    card,
+    /multi-location-fetch/,
+    "the client card must never import the server-only fetch module"
+  );
+  const fetchMod = read("src/lib/multi-location-fetch.ts");
+  assert.doesNotMatch(fetchMod, /^\s*["']use client["'];?\s*$/m);
+});
+
+test("new client controls stay rendered-not-called by their server pages", () => {
+  for (const [page, component] of [
+    ["src/app/dashboard/reports/page.tsx", "PeriodQuarterPicker"],
+    ["src/app/dashboard/admin/users/page.tsx", "UserInviteForm"],
+  ] as const) {
+    const src = read(page);
+    assert.match(src, new RegExp(`<${component}`), `${component} rendered as JSX`);
+    assert.doesNotMatch(
+      src,
+      new RegExp(`${component}\\(`),
+      `${component} must never be CALLED from the server page`
+    );
+  }
+});

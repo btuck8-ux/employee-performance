@@ -4,6 +4,7 @@ import { getSessionRole } from "@/lib/authz";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { BuilderEmployeePicker } from "@/components/reports/BuilderEmployeePicker";
 import { ReportContentPicker } from "@/components/reports/ReportContentPicker";
+import { PeriodQuarterPicker } from "@/components/reports/PeriodQuarterPicker";
 import { generateReportsBuilderAction } from "./builder-actions";
 
 // The builder can fan out over a whole location (PDF render per employee) —
@@ -191,35 +192,17 @@ export default async function ReportsPage({
                   defaultSelectedId={builderEmployee || undefined}
                 />
                 <div className="flex flex-wrap items-end gap-4">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Period</label>
-                    <select
-                      name="period_mode"
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                      defaultValue="quarter"
-                    >
-                      <option value="quarter">Quarter</option>
-                      <option value="range">Custom range</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Quarter</label>
-                    <select
-                      name="report_period_id"
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                      defaultValue={
-                        builderQuarters.some((q2) => q2.id === builderPeriod)
-                          ? builderPeriod
-                          : (builderQuarters[0]?.id ?? "")
-                      }
-                    >
-                      {builderQuarters.map((q2) => (
-                        <option key={q2.id} value={q2.id}>
-                          {q2.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <PeriodQuarterPicker
+                    quarters={builderQuarters.map((q2) => ({
+                      id: q2.id,
+                      label: q2.label,
+                    }))}
+                    defaultQuarterId={
+                      builderQuarters.some((q2) => q2.id === builderPeriod)
+                        ? builderPeriod
+                        : (builderQuarters[0]?.id ?? "")
+                    }
+                  />
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">
                       Range start (custom)
@@ -240,15 +223,6 @@ export default async function ReportsPage({
                       className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-sm text-slate-700 mb-1.5">
-                    <input
-                      type="checkbox"
-                      name="include_task_detail"
-                      value="1"
-                      className="h-4 w-4 accent-[#702F8A]"
-                    />
-                    Attach task detail (quarterly)
-                  </label>
                   <SubmitButton pendingLabel="Generating…">Generate</SubmitButton>
                 </div>
               </form>

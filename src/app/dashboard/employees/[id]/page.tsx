@@ -830,9 +830,73 @@ export default async function EmployeeDetailPage({
             employeeId={emp.id}
             locationId={loc?.id ?? ""}
             canGenerate={role === "system_admin"}
-            generateTaskDetailAction={generateTaskDetailReportAction}
             taskDetailReportIdByRecord={taskDetailReportIdByRecord}
           />
+        </CardContent>
+      </Card>
+
+      {/* §4-E: quick 7Tasks-detail access without a trip through the builder.
+          Generation is SA-gated like the builder; retrieval is for anyone who
+          can see the profile. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>7Tasks detail reports</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {rawRows.filter((r) => r.report_periods !== null).length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No quarterly records yet — 7Tasks detail is quarterly-only.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {rawRows
+                .filter((r) => r.report_periods !== null)
+                .map((r) => {
+                  const taskDetailId = taskDetailReportIdByRecord[r.id] ?? null;
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex items-center gap-3 flex-wrap text-sm"
+                    >
+                      <span className="font-medium min-w-[90px]">
+                        {r.report_periods?.label}
+                      </span>
+                      {taskDetailId && (
+                        <a
+                          href={`/api/reports/${taskDetailId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs underline hover:text-slate-900"
+                        >
+                          Download
+                        </a>
+                      )}
+                      {role === "system_admin" && (
+                        <form action={generateTaskDetailReportAction}>
+                          <input
+                            type="hidden"
+                            name="performance_record_id"
+                            value={r.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="employee_id"
+                            value={emp.id}
+                          />
+                          <SubmitButton
+                            variant="outline"
+                            size="sm"
+                            pendingLabel="Generating…"
+                          >
+                            {taskDetailId ? "Regenerate" : "Generate"}
+                          </SubmitButton>
+                        </form>
+                      )}
+                    </li>
+                  );
+                })}
+            </ul>
+          )}
         </CardContent>
       </Card>
 
