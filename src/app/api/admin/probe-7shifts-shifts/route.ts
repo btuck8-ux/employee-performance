@@ -171,6 +171,7 @@ export async function GET(request: Request) {
   const lteKey = url.searchParams.get("lte_key") ?? "start[lte]";
   const testEmployeeCode =
     url.searchParams.get("test_employee_code") ?? "EMP-100214";
+  const deepDiveCode = url.searchParams.get("deep_dive_code") ?? "COS";
 
   try {
     const supabase = createAdminClient();
@@ -355,6 +356,16 @@ export async function GET(request: Request) {
             else slot.active += 1;
             upstreamByDate.set(d, slot);
           }
+          // attendance_status per date (first run surfaced this field:
+          // no_show / late / none — 7shifts' own per-shift attendance call).
+          const statusByDate = new Map<string, string>();
+          for (const s of shifts) {
+            if (num(s["user_id"]) !== testUserId) continue;
+            const d = datePart(s["start"]);
+            if (!d) continue;
+            if (typeof s["attendance_status"] === "string")
+              statusByDate.set(d, s["attendance_status"]);
+          }
           const perDay = storedScheduled.map((d) => {
             const up = upstreamByDate.get(d);
             return {
@@ -367,6 +378,7 @@ export async function GET(request: Request) {
                     ? "deleted"
                     : "draft"
                 : "absent",
+              attendance_status: statusByDate.get(d) ?? null,
             };
           });
           decisiveTest = {
@@ -386,9 +398,91 @@ export async function GET(request: Request) {
           };
         }
 
+        // ── Store deep-dive: classify every stored scheduled-unworked
+        // employee-day at one store against upstream state. This is the
+        // §4-C1 Step-0 evidence in one table: absent (vanished upstream) vs
+        // active_no_show / active_late / active_none (7shifts' own call).
+        let deepDive: Record<string, unknown> | null = null;
+        const deepLoc = companyLocs.find(
+          (l) => l.location_code === deepDiveCode
+        );
+        if (deepLoc) {
+          const { data: deepEmps, error: deepEmpError } = await supabase
+            .from("employees")
+            .select("id, seven_shifts_user_id")
+            .eq("location_id", deepLoc.id);
+          if (deepEmpError)
+            throw new Error(`deep-dive employees: ${deepEmpError.message}`);
+          const userIdByEmpId = new Map<string, number>();
+          for (const e of deepEmps ?? []) {
+            const uid = num(e.seven_shifts_user_id);
+            if (uid !== null) userIdByEmpId.set(String(e.id), uid);
+          }
+          const { data: deepEntries, error: deepEntriesError } = await supabase
+            .from("time_entries")
+            .select("employee_id, entry_date, entry_type")
+            .in("employee_id", (deepEmps ?? []).map((e) => e.id))
+            .gte("entry_date", start)
+            .lte("entry_date", end)
+            .in("entry_type", ["scheduled", "worked"]);
+          if (deepEntriesError)
+            throw new Error(`deep-dive entries: ${deepEntriesError.message}`);
+          const workedSet = new Set<string>();
+          const scheduledKeys: Array<{ empId: string; date: string }> = [];
+          for (const e of deepEntries ?? []) {
+            const key = `${e.employee_id}|${String(e.entry_date).slice(0, 10)}`;
+            if (e.entry_type === "worked") workedSet.add(key);
+            else scheduledKeys.push({
+              empId: String(e.employee_id),
+              date: String(e.entry_date).slice(0, 10),
+            });
+          }
+          // upstream (user_id, date) -> best status among that day's shifts
+          const upState = new Map<string, string>();
+          for (const s of shifts) {
+            const uid = num(s["user_id"]);
+            const d = datePart(s["start"]);
+            if (uid === null || !d) continue;
+            if (num(s["location_id"]) !== deepLoc.seven_shifts_location_id)
+              continue;
+            const status =
+              s["deleted"] === true
+                ? "deleted"
+                : s["draft"] === true
+                  ? "draft"
+                  : typeof s["attendance_status"] === "string"
+                    ? `active_${s["attendance_status"]}`
+                    : "active_unknown";
+            const key = `${uid}|${d}`;
+            // prefer active_* over deleted/draft when multiple shifts share a day
+            const prev = upState.get(key);
+            if (!prev || (!prev.startsWith("active") && status.startsWith("active")))
+              upState.set(key, status);
+          }
+          const classification: Record<string, number> = {};
+          let unworkedTotal = 0;
+          for (const { empId, date } of scheduledKeys) {
+            if (workedSet.has(`${empId}|${date}`)) continue;
+            unworkedTotal += 1;
+            const uid = userIdByEmpId.get(empId);
+            const state =
+              uid === undefined
+                ? "no_user_id"
+                : (upState.get(`${uid}|${date}`) ?? "absent_upstream");
+            classification[state] = (classification[state] ?? 0) + 1;
+          }
+          deepDive = {
+            location_code: deepDiveCode,
+            window: { start, end },
+            stored_scheduled_unworked_days: unworkedTotal,
+            upstream_classification: classification,
+          };
+        }
+
         companies.push({
           company_id: companyId,
           location_codes: companyCodes,
+          deep_dive: deepDive,
           recent_window: {
             start,
             end,
