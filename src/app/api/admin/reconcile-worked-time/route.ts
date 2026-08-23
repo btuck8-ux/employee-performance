@@ -61,15 +61,30 @@ export async function GET(request: Request) {
     const codeById = new Map<string, string>();
 
     for (const loc of locations) {
-      const start = startOverride ?? loc.labor_start_date;
+      // An operator override never reaches back past go-live — pre-go-live
+      // scheduled days would all read "neither" and inflate the split
+      // (Codex 2026-08-23).
+      const start =
+        startOverride && startOverride > loc.labor_start_date
+          ? startOverride
+          : loc.labor_start_date;
 
-      const { data: emps, error: empError } = await supabase
-        .from("employees")
-        .select("id, employee_code")
-        .eq("location_id", loc.id);
-      if (empError) throw new Error(`employees: ${empError.message}`);
-      const empIds = (emps ?? []).map((e) => String(e.id));
-      for (const e of emps ?? []) codeById.set(String(e.id), e.employee_code);
+      const empIds: string[] = [];
+      const EMP_BATCH = 1000;
+      for (let from = 0; ; from += EMP_BATCH) {
+        const { data: emps, error: empError } = await supabase
+          .from("employees")
+          .select("id, employee_code")
+          .eq("location_id", loc.id)
+          .order("id", { ascending: true })
+          .range(from, from + EMP_BATCH - 1);
+        if (empError) throw new Error(`employees: ${empError.message}`);
+        for (const e of emps ?? []) {
+          empIds.push(String(e.id));
+          codeById.set(String(e.id), e.employee_code);
+        }
+        if (!emps || emps.length < EMP_BATCH) break;
+      }
 
       // time_entries READ (scheduled + worked), paged.
       const scheduled: DaySets = new Map();

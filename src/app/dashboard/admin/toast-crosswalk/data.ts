@@ -72,18 +72,27 @@ export async function buildCrosswalkPageData(
   const stores: CrosswalkPageData["stores"] = [];
 
   for (const loc of locations) {
-    // Crosswalked guids at this store.
-    const { data: xwalk, error: xwalkError } = await supabase
-      .from("toast_employee_crosswalk")
-      .select("toast_employee_guid, employee_id")
-      .eq("location_id", loc.id);
-    if (xwalkError) throw new Error(`crosswalk read: ${xwalkError.message}`);
-    const mappedGuids = new Set((xwalk ?? []).map((r) => String(r.toast_employee_guid)));
-    const mappedEmployeeIds = new Set((xwalk ?? []).map((r) => String(r.employee_id)));
+    // Crosswalked guids at this store (paged past the PostgREST cap).
+    const mappedGuids = new Set<string>();
+    const mappedEmployeeIds = new Set<string>();
+    const BATCH = 1000;
+    for (let from = 0; ; from += BATCH) {
+      const { data: xwalk, error: xwalkError } = await supabase
+        .from("toast_employee_crosswalk")
+        .select("toast_employee_guid, employee_id")
+        .eq("location_id", loc.id)
+        .order("toast_employee_guid", { ascending: true })
+        .range(from, from + BATCH - 1);
+      if (xwalkError) throw new Error(`crosswalk read: ${xwalkError.message}`);
+      for (const r of xwalk ?? []) {
+        mappedGuids.add(String(r.toast_employee_guid));
+        mappedEmployeeIds.add(String(r.employee_id));
+      }
+      if (!xwalk || xwalk.length < BATCH) break;
+    }
 
     // Unmatched punches, grouped per guid (paged).
     const punchDates = new Map<string, Set<string>>();
-    const BATCH = 1000;
     for (let from = 0; ; from += BATCH) {
       const { data, error } = await supabase
         .from("toast_time_entries")
@@ -110,19 +119,28 @@ export async function buildCrosswalkPageData(
     // already-mapped employees so a wrong double-attribution takes deliberate
     // effort — matching the auto-matcher's pool. If a person legitimately
     // needs a second guid, undo the first row and re-confirm both manually.)
-    const { data: emps, error: empError } = await supabase
-      .from("employees")
-      .select("id, employee_code, employee_name, active")
-      .eq("location_id", loc.id)
-      .eq("active", true);
-    if (empError) throw new Error(`employees read: ${empError.message}`);
-    const pool = (emps ?? [])
-      .map((e) => ({
-        id: String(e.id),
-        employee_code: e.employee_code as string,
-        employee_name: e.employee_name as string,
-      }))
-      .filter((e) => !mappedEmployeeIds.has(e.id));
+    const pool: Array<{ id: string; employee_code: string; employee_name: string }> = [];
+    for (let from = 0; ; from += BATCH) {
+      const { data: emps, error: empError } = await supabase
+        .from("employees")
+        .select("id, employee_code, employee_name")
+        .eq("location_id", loc.id)
+        .eq("active", true)
+        .order("employee_code", { ascending: true })
+        .range(from, from + BATCH - 1);
+      if (empError) throw new Error(`employees read: ${empError.message}`);
+      for (const e of emps ?? []) {
+        const id = String(e.id);
+        if (!mappedEmployeeIds.has(id)) {
+          pool.push({
+            id,
+            employee_code: e.employee_code as string,
+            employee_name: e.employee_name as string,
+          });
+        }
+      }
+      if (!emps || emps.length < BATCH) break;
+    }
 
     // Scheduled dates for the pool (display-hint overlap).
     const schedByEmp = new Map<string, Set<string>>();
@@ -209,13 +227,14 @@ export async function buildCrosswalkPageData(
 
   queue.sort((a, b) => b.punch_days - a.punch_days);
 
-  // Recent auto + manual matches, undo-able (ruling §4 guard 3).
+  // Recent matches of EVERY method, undo-able (ruling §4 guard 3 — email
+  // seeds are auto-commits too; Codex blocker 2026-08-23: excluding them
+  // made a wrong email mapping irreversible from the surface).
   const { data: recent, error: recentError } = await supabase
     .from("toast_employee_crosswalk")
     .select(
       "toast_employee_guid, match_method, evidence, created_at, location_id, employees(employee_code, employee_name)"
     )
-    .in("match_method", ["auto_behavioural", "manual"])
     .order("created_at", { ascending: false })
     .limit(25);
   if (recentError) throw new Error(`recent matches read: ${recentError.message}`);

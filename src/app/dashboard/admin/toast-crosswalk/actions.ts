@@ -171,19 +171,28 @@ export async function undoToastMatchAction(formData: FormData) {
     redirect(backWith({ undone: "1" }));
   }
 
-  const { error: delErr } = await supabase
-    .from("toast_employee_crosswalk")
-    .delete()
-    .eq("toast_employee_guid", guid);
-  if (delErr) {
-    redirect(backWith({ error: `Undo failed: ${delErr.message}` }));
-  }
+  // De-attribute BEFORE deleting the row (Codex 2026-08-23): whichever half
+  // a race or failure strands, the nightly reconcileAttributions pass
+  // re-aligns punches with whatever crosswalk rows exist — both orders
+  // self-heal, but this one never leaves an attributed punch pointing at a
+  // mapping that's already gone.
   try {
     await deattributeStoredPunches(supabase, guid);
   } catch (err) {
     redirect(
       backWith({
-        error: `Row removed but punches kept their attribution — investigate: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Undo failed before any change was made: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    );
+  }
+  const { error: delErr } = await supabase
+    .from("toast_employee_crosswalk")
+    .delete()
+    .eq("toast_employee_guid", guid);
+  if (delErr) {
+    redirect(
+      backWith({
+        error: `Punches de-attributed but the mapping row remains (the nightly re-attributes it): ${delErr.message}`,
       })
     );
   }

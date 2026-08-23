@@ -119,19 +119,80 @@ export async function fetchTimeEntriesWindow(
   return { entries, requests: chunks.length };
 }
 
-/** toast_employee_guid -> employee_id for one location. */
+const PAGE = 1000;
+
+/** toast_employee_guid -> employee_id for one location, paged past
+ * PostgREST's 1000-row cap (PR #21 Codex finding 3 doctrine). */
 export async function loadCrosswalkMap(
   supabase: AdminClient,
   locationId: string
 ): Promise<Map<string, string>> {
-  const { data, error } = await supabase
-    .from("toast_employee_crosswalk")
-    .select("toast_employee_guid, employee_id")
-    .eq("location_id", locationId);
-  if (error) throw new Error(`toast crosswalk read: ${error.message}`);
-  return new Map(
-    (data ?? []).map((r) => [String(r.toast_employee_guid), String(r.employee_id)])
-  );
+  const out = new Map<string, string>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("toast_employee_crosswalk")
+      .select("toast_employee_guid, employee_id")
+      .eq("location_id", locationId)
+      .order("toast_employee_guid", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`toast crosswalk read: ${error.message}`);
+    for (const r of data ?? []) {
+      out.set(String(r.toast_employee_guid), String(r.employee_id));
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
+ * Re-align every stored punch's employee_id with the CURRENT crosswalk —
+ * the single source of attribution truth (Codex 2026-08-23 findings: a
+ * concurrent SA confirm/undo mid-run must not be clobbered by a stale
+ * snapshot, and an ignoreDuplicates race must not attribute to the losing
+ * plan). Runs after every upsert/matcher pass and each nightly, so any
+ * transient drift — including a mid-undo race on the SA surface —
+ * self-heals from DB state.
+ */
+export async function reconcileAttributions(
+  supabase: AdminClient,
+  locationId: string
+): Promise<{ attributed_guids: number; deattributed_guids: number }> {
+  const truth = await loadCrosswalkMap(supabase, locationId);
+  // Observed attribution per guid (paged): any row disagreeing with truth
+  // marks its guid for a corrective per-guid update.
+  const observed = new Map<string, Set<string | null>>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("toast_time_entries")
+      .select("toast_employee_guid, employee_id")
+      .eq("location_id", locationId)
+      .order("toast_time_entry_guid", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`attribution scan: ${error.message}`);
+    for (const r of data ?? []) {
+      const guid = String(r.toast_employee_guid);
+      const set = observed.get(guid) ?? new Set<string | null>();
+      set.add(r.employee_id ? String(r.employee_id) : null);
+      observed.set(guid, set);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  let attributed = 0;
+  let deattributed = 0;
+  for (const [guid, values] of observed) {
+    const want = truth.get(guid) ?? null;
+    const mismatch = [...values].some((v) => v !== want);
+    if (!mismatch) continue;
+    const { error } = await supabase
+      .from("toast_time_entries")
+      .update({ employee_id: want })
+      .eq("location_id", locationId)
+      .eq("toast_employee_guid", guid);
+    if (error) throw new Error(`attribution fix: ${error.message}`);
+    if (want) attributed += 1;
+    else deattributed += 1;
+  }
+  return { attributed_guids: attributed, deattributed_guids: deattributed };
 }
 
 /** Attribute stored punches for a newly crosswalked guid. Never overwrites an
@@ -162,23 +223,29 @@ export async function deattributeStoredPunches(
   if (error) throw new Error(`punch de-attribution: ${error.message}`);
 }
 
-/** Active employees at a location with NO crosswalk row there — the
- * behavioural matcher's candidate pool (an already-mapped person's second
- * Toast account queues for SA instead of auto-committing). */
-async function unmappedActiveEmployees(
+/** Employees at a location (paged), optionally active-only. */
+async function employeesAtLocation(
   supabase: AdminClient,
   locationId: string,
-  mappedEmployeeIds: Set<string>
-): Promise<Array<{ id: string }>> {
-  const { data, error } = await supabase
-    .from("employees")
-    .select("id")
-    .eq("location_id", locationId)
-    .eq("active", true);
-  if (error) throw new Error(`employees read: ${error.message}`);
-  return (data ?? [])
-    .map((r) => ({ id: String(r.id) }))
-    .filter((r) => !mappedEmployeeIds.has(r.id));
+  activeOnly: boolean
+): Promise<Array<{ id: string; email: string | null }>> {
+  const out: Array<{ id: string; email: string | null }> = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase
+      .from("employees")
+      .select("id, email, active")
+      .eq("location_id", locationId)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (activeOnly) q = q.eq("active", true);
+    const { data, error } = await q;
+    if (error) throw new Error(`employees read: ${error.message}`);
+    for (const r of data ?? []) {
+      out.push({ id: String(r.id), email: (r.email as string | null) ?? null });
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
 }
 
 /** Scheduled dates per employee (time_entries READ — scheduled rows only),
@@ -245,18 +312,12 @@ export async function ingestToastLaborForLocation(
 ): Promise<LaborLocationDetail> {
   // 1) Email seeding (deterministic; ruling §4 path 1). Roster includes
   //    deleted Toast staff — deliberate, departed people crosswalk too.
+  //    No interleaved attribution: reconcileAttributions() at the end is
+  //    the single writer of punch attribution, from fresh DB truth.
   const toastRoster = await fetchToastEmployees(loc.toast_restaurant_guid);
-  const { data: epdEmps, error: epdError } = await supabase
-    .from("employees")
-    .select("id, email")
-    .eq("location_id", loc.id);
-  if (epdError) throw new Error(`employees read: ${epdError.message}`);
+  const epdEmps = await employeesAtLocation(supabase, loc.id, false);
   const existing = await loadCrosswalkMap(supabase, loc.id);
-  const plan = planEmailSeeds(
-    toastRoster,
-    (epdEmps ?? []).map((e) => ({ id: String(e.id), email: e.email as string | null })),
-    new Set(existing.keys())
-  );
+  const plan = planEmailSeeds(toastRoster, epdEmps, new Set(existing.keys()));
   if (plan.seeds.length > 0) {
     const { error } = await supabase.from("toast_employee_crosswalk").upsert(
       plan.seeds.map((s) => ({
@@ -268,13 +329,12 @@ export async function ingestToastLaborForLocation(
       { onConflict: "toast_employee_guid", ignoreDuplicates: true }
     );
     if (error) throw new Error(`email seed upsert: ${error.message}`);
-    for (const s of plan.seeds) {
-      existing.set(s.toast_employee_guid, s.employee_id);
-      await attributeStoredPunches(supabase, s.toast_employee_guid, s.employee_id);
-    }
+    for (const s of plan.seeds) existing.set(s.toast_employee_guid, s.employee_id);
   }
 
-  // 2) Punch pull + upsert (attribution through the refreshed crosswalk).
+  // 2) Punch pull + upsert. classifyPunches attributes from the snapshot as
+  //    a first pass; the reconcile step below re-aligns from DB truth so a
+  //    concurrent SA confirm/undo can't be clobbered by this snapshot.
   await sleep(REQUEST_DELAY_MS);
   const { entries, requests } = await fetchTimeEntriesWindow(
     loc.toast_restaurant_guid,
@@ -295,9 +355,15 @@ export async function ingestToastLaborForLocation(
 
   // 3) Behavioural matcher over unmatched guids with punches (§4 path 2).
   //    Punch dates come from ALL stored punches for the guid (not just this
-  //    window) so evidence accumulates night over night.
+  //    window) so evidence accumulates night over night. TWO-PHASE (Codex
+  //    2026-08-23): every guid is scored against the FULL candidate pool
+  //    first, then commits happen — so verdicts are order-independent, and
+  //    two guids auto-resolving to the SAME employee is itself ambiguity
+  //    (both queue) rather than first-wins.
   const mappedEmployeeIds = new Set(existing.values());
-  const candidatesRaw = await unmappedActiveEmployees(supabase, loc.id, mappedEmployeeIds);
+  const candidatesRaw = (await employeesAtLocation(supabase, loc.id, true)).filter(
+    (c) => !mappedEmployeeIds.has(c.id)
+  );
   const unmatchedGuids = await storedUnmatchedPunchDates(supabase, loc.id);
   const schedules = await scheduledDatesByEmployee(
     supabase,
@@ -310,14 +376,31 @@ export async function ingestToastLaborForLocation(
     scheduledDates: schedules.get(c.id) ?? new Set<string>(),
   }));
 
+  const verdicts = [...unmatchedGuids.entries()].map(([guid, punchDates]) => ({
+    guid,
+    verdict: scoreBehaviouralMatch(punchDates, candidates),
+  }));
+  const autoTargets = new Map<string, number>();
+  for (const v of verdicts) {
+    if (v.verdict.decision === "auto" && v.verdict.best) {
+      const key = v.verdict.best.employee_id;
+      autoTargets.set(key, (autoTargets.get(key) ?? 0) + 1);
+    }
+  }
+
   let autoMatched = 0;
   let autoAmbiguous = 0;
   let autoInsufficient = 0;
-  for (const [guid, punchDates] of unmatchedGuids) {
-    const verdict = scoreBehaviouralMatch(punchDates, candidates);
+  for (const { guid, verdict } of verdicts) {
     if (verdict.decision !== "auto" || !verdict.best) {
       if (verdict.decision === "ambiguous") autoAmbiguous += 1;
       else autoInsufficient += 1;
+      continue;
+    }
+    if ((autoTargets.get(verdict.best.employee_id) ?? 0) > 1) {
+      // Two punch accounts both clearing the bar for one person — queue
+      // both for the SA rather than picking.
+      autoAmbiguous += 1;
       continue;
     }
     const employeeId = verdict.best.employee_id;
@@ -340,13 +423,6 @@ export async function ingestToastLaborForLocation(
       { onConflict: "toast_employee_guid", ignoreDuplicates: true }
     );
     if (error) throw new Error(`auto-match upsert: ${error.message}`);
-    await attributeStoredPunches(supabase, guid, employeeId);
-    existing.set(guid, employeeId);
-    // One auto-commit consumes its employee from the pool — a second guid
-    // matching the same person this run must queue, not double-commit.
-    mappedEmployeeIds.add(employeeId);
-    const idx = candidates.findIndex((c) => c.employee_id === employeeId);
-    if (idx !== -1) candidates.splice(idx, 1);
     autoMatched += 1;
     console.log("[toast-labor] behavioural auto-match", {
       location: loc.location_code,
@@ -356,7 +432,12 @@ export async function ingestToastLaborForLocation(
     });
   }
 
-  // 4) The queue after everything above: unmatched guids that still have
+  // 4) Attribution reconciliation — the single writer, from fresh DB truth
+  //    (covers email seeds, auto-matches, SA confirms/undos, and any
+  //    ignoreDuplicates race above in one idempotent pass).
+  await reconcileAttributions(supabase, loc.id);
+
+  // 5) The queue after everything above: unmatched guids that still have
   //    punches. This is what the growth alert and the SA surface watch.
   const remaining = await storedUnmatchedPunchDates(supabase, loc.id);
 
