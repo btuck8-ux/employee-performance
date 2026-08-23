@@ -30,6 +30,8 @@ export interface DetectionCardProps {
   locationId: string | null;
   locationName: string | null;
   similar: Array<{ employee_code: string; employee_name: string }>;
+  /** Other sites already holding this 7shifts id (§4-A4 second-site mints). */
+  mintedElsewhere: Array<{ locationName: string; employeeCode: string | null }>;
   wage: number | null;
   wagePayType: string | null;
   enrichError: string | null;
@@ -75,6 +77,7 @@ export function DetectionCard(props: DetectionCardProps) {
     locationId,
     locationName,
     similar,
+    mintedElsewhere,
     wage,
     wagePayType,
     enrichError,
@@ -106,6 +109,22 @@ export function DetectionCard(props: DetectionCardProps) {
           </div>
         </div>
       </div>
+
+      {mintedElsewhere.length > 0 && (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          Already on the roster at{" "}
+          {mintedElsewhere
+            .map((m) =>
+              m.employeeCode
+                ? `${m.locationName} (${m.employeeCode})`
+                : m.locationName
+            )
+            .join(", ")}
+          . Confirming mints a separate code for{" "}
+          {locationName ?? "this site"} — one person working two sites is two
+          roster rows by design.
+        </div>
+      )}
 
       {similar.length > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -199,12 +218,15 @@ export function DetectionCard(props: DetectionCardProps) {
               <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
               <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-6 shadow-lg focus:outline-none">
                 <Dialog.Title className="text-lg font-semibold">
-                  Dismiss {name}?
+                  Dismiss {name}
+                  {locationName ? ` at ${locationName}` : ""}?
                 </Dialog.Title>
                 <Dialog.Description className="text-sm text-slate-500 mt-2">
-                  The detection disappears from this page and no employee code
-                  is minted. Use this for phantom or one-off schedule artifacts
-                  — a real hire should be confirmed instead.
+                  The detection disappears from this page for{" "}
+                  {locationName ?? "this site"} only and no employee code is
+                  minted — the same person detected at another site stays
+                  visible. Use this for phantom or one-off schedule artifacts;
+                  a real hire should be confirmed instead.
                 </Dialog.Description>
                 <div className="mt-5 flex justify-end gap-3">
                   <Dialog.Close asChild>
