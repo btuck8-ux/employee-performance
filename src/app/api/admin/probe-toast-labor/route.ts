@@ -391,6 +391,10 @@ export async function GET(request: Request) {
       Awaited<ReturnType<typeof pullWindow>>
     >();
 
+    // EPD employee id -> employee_code, for every EPD employee whose email
+    // matches a Toast employee (feeds the §5.1 overlap report).
+    const emailMatchedEpdIds = new Map<string, string>();
+
     const perStore: Array<Record<string, unknown>> = [];
     for (const store of stores) {
       try {
@@ -415,6 +419,14 @@ export async function GET(request: Request) {
             .map((e) => (e.seven_shifts_user_id != null ? String(e.seven_shifts_user_id) : ""))
             .filter(Boolean)
         );
+        const epdByEmail = new Map<string, Array<{ id: string; code: string }>>();
+        for (const e of epdHere) {
+          if (typeof e.email !== "string" || !e.email.trim()) continue;
+          const key = e.email.trim().toLowerCase();
+          const list = epdByEmail.get(key) ?? [];
+          list.push({ id: String(e.id), code: e.employee_code });
+          epdByEmail.set(key, list);
+        }
         const idField = (e: Row, k: string) =>
           e[k] != null && e[k] !== "" ? String(e[k]) : null;
         let emailMatches = 0;
@@ -433,7 +445,12 @@ export async function GET(request: Request) {
             if (idField(te, k)) identityFieldCounts[k] = (identityFieldCounts[k] ?? 0) + 1;
           }
           const email = idField(te, "email");
-          if (email && epdEmails.has(email.trim().toLowerCase())) emailMatches += 1;
+          if (email && epdEmails.has(email.trim().toLowerCase())) {
+            emailMatches += 1;
+            for (const m of epdByEmail.get(email.trim().toLowerCase()) ?? []) {
+              emailMatchedEpdIds.set(m.id, m.code);
+            }
+          }
           const extEmp = idField(te, "externalEmployeeId");
           if (extEmp && epd7sIds.has(extEmp)) extEmpIdEq7s += 1;
           const ext = idField(te, "externalId");
@@ -521,6 +538,65 @@ export async function GET(request: Request) {
         });
       }
     }
+
+    // ── §5.1 overlap: email-matched ∩ broken (≥1 scheduled-unworked day) ──
+    // "Broken" per the ruling: ACTIVE EPD employees at Toast stores with at
+    // least one scheduled day with no worked entry in the window. Sizes the
+    // one-time SA setup pass before any surface is built.
+    const activeEmps = (epdEmployees ?? []).filter((e) => e.active);
+    const activeIds = activeEmps.map((e) => String(e.id));
+    const codeById = new Map(activeEmps.map((e) => [String(e.id), e.employee_code]));
+    const schedByEmp = new Map<string, Set<string>>();
+    const workedByEmp = new Map<string, Set<string>>();
+    const BATCH = 1000;
+    for (let from = 0; ; from += BATCH) {
+      const { data: teRows, error: teError } = await supabase
+        .from("time_entries")
+        .select("employee_id, entry_date, entry_type")
+        .in("employee_id", activeIds)
+        .gte("entry_date", start)
+        .lte("entry_date", end)
+        .in("entry_type", ["scheduled", "worked"])
+        .order("entry_date", { ascending: true })
+        .range(from, from + BATCH - 1);
+      if (teError) throw new Error(`overlap time_entries: ${teError.message}`);
+      for (const r of teRows ?? []) {
+        const empId = String(r.employee_id);
+        const d = String(r.entry_date).slice(0, 10);
+        const bucket = r.entry_type === "worked" ? workedByEmp : schedByEmp;
+        const set = bucket.get(empId) ?? new Set<string>();
+        set.add(d);
+        bucket.set(empId, set);
+      }
+      if (!teRows || teRows.length < BATCH) break;
+    }
+    const brokenIds = activeIds.filter((id) => {
+      const sched = schedByEmp.get(id);
+      if (!sched) return false;
+      const worked = workedByEmp.get(id) ?? new Set<string>();
+      for (const d of sched) if (!worked.has(d)) return true;
+      return false;
+    });
+    const brokenSet = new Set(brokenIds);
+    const matchedBroken = [...emailMatchedEpdIds.entries()]
+      .filter(([id]) => brokenSet.has(id))
+      .map(([, code]) => code)
+      .sort();
+    const unmatchedBroken = brokenIds
+      .filter((id) => !emailMatchedEpdIds.has(id))
+      .map((id) => codeById.get(id) ?? id)
+      .sort();
+    const overlap = {
+      window: { start, end },
+      active_epd_employees_at_toast_stores: activeIds.length,
+      broken_employees: brokenIds.length,
+      email_matched_epd_employees: emailMatchedEpdIds.size,
+      broken_and_email_matched: matchedBroken.length,
+      broken_and_email_matched_codes: matchedBroken,
+      broken_unmatched: unmatchedBroken.length,
+      broken_unmatched_codes: unmatchedBroken,
+      note: "broken = active employee with ≥1 scheduled day lacking a worked entry in the window; email-matched = EPD email equals a Toast employee email at their store",
+    };
 
     // ── Q5: acceptance — the three UI-verified employees, via email join ──
     const codeByLocationId = new Map(stores.map((l) => [String(l.id), l.location_code]));
@@ -620,6 +696,7 @@ export async function GET(request: Request) {
       time_entries_variant_matrix: variantMatrix,
       window_mode_chosen: windowMode,
       stores: perStore,
+      overlap,
       acceptance,
     });
   } catch (err) {
