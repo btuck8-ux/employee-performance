@@ -15,7 +15,23 @@ const NAV: Record<string, NavLinkItem> = {
   },
   reports: { href: "/dashboard/reports", label: "Reports", icon: "reports" },
   uploads: { href: "/dashboard/uploads", label: "Uploads", icon: "uploads" },
-  scoring: { href: "/dashboard/admin/scoring", label: "Scoring", icon: "scoring" },
+  // Settings group (2026-08-23 §4-D1): Scoring kept its route; Employee
+  // triage moved in from the Employees-header chip (the chip stays as a
+  // shortcut); Users is new. /dashboard/admin is a real index page.
+  settings: {
+    href: "/dashboard/admin",
+    label: "Settings",
+    icon: "settings",
+    children: [
+      { href: "/dashboard/admin/scoring", label: "Scoring", icon: "scoring" },
+      {
+        href: "/dashboard/admin/employee-triage",
+        label: "Employee triage",
+        icon: "triage",
+      },
+      { href: "/dashboard/admin/users", label: "Users", icon: "users" },
+    ],
+  },
 };
 
 /**
@@ -37,7 +53,7 @@ function navItemsForRole(role: EpdRole | null): NavLinkItem[] {
         NAV.guestFeedback,
         NAV.reports,
         NAV.uploads,
-        NAV.scoring,
+        NAV.settings,
       ];
     case "regional_admin":
     case "area_admin":
