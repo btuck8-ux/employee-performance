@@ -12,8 +12,10 @@
  * writer would fight it, last writer wins. Punches land in their own
  * per-punch table (mig 055) and run in parallel; switching the metric /
  * locations.actuals_source is a separate evidenced decision (the 2026-07-27
- * audit: a naive flip "kills CO labor"). This module reads time_entries
- * (scheduled rows, as behavioural-matcher evidence) and never writes it.
+ * audit: a naive flip "kills CO labor"). Since the 2026-08-24 defect fix,
+ * schedule evidence comes from seven_shifts_shifts (it carries start_at;
+ * time_entries does not) — this module no longer touches time_entries at
+ * all.
  *
  * Store scoping: strictly locations.toast_restaurant_guid (ruling §6). The
  * credential also reaches Chico CA and a stray second Fort Collins; labor

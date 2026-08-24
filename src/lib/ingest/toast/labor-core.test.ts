@@ -172,6 +172,27 @@ test("medianAbsDeltaMinutes pairs by date and is timezone-free", () => {
   assert.equal(medianAbsDeltaMinutes(new Map(), times(WEEK, 15)).median_min, null);
 });
 
+test("median averages the middle pair on even counts and drops unparseable timestamps", () => {
+  const four = WEEK.slice(0, 4);
+  // Deltas 2, 4, 6, 8 → median (4+6)/2 = 5.
+  const punches = new Map(
+    four.map((d, i) => [d, `${d}T15:${String((i + 1) * 2).padStart(2, "0")}:00.000Z`])
+  );
+  const even = medianAbsDeltaMinutes(punches, times(four, 15));
+  assert.equal(even.paired_days, 4);
+  assert.equal(even.median_min, 5);
+  const junk = new Map([["2026-08-01", "not-a-timestamp"]]);
+  assert.equal(medianAbsDeltaMinutes(junk, times(["2026-08-01"], 15)).median_min, null);
+});
+
+test("an exact margin-sized gap is still ambiguous (inclusive boundary)", () => {
+  const v = scoreTimeAwareMatch(times(WEEK, 15, 0), [
+    { employee_id: "e1", scheduleStartByDate: times(WEEK, 15, 0) }, // 0 min
+    { employee_id: "e2", scheduleStartByDate: times(WEEK, 15, 15) }, // exactly 15 min
+  ]);
+  assert.equal(v.decision, "ambiguous");
+});
+
 test("a punctual, unopposed match auto-commits with time evidence", () => {
   const v = scoreTimeAwareMatch(times(WEEK, 15, 5), [
     { employee_id: "e1", scheduleStartByDate: times(WEEK, 15) },

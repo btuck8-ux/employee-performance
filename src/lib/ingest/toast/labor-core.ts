@@ -350,10 +350,12 @@ export function scoreTimeAwareMatch(
     eligible_count: eligible.length,
   };
   if (!best) return { decision: "insufficient", ...base };
+  // "Within the margin" is inclusive (Codex 2026-08-24): an exact 15.0-min
+  // gap is still ambiguity, not a lead.
   if (
     runnerUp &&
     (runnerUp.median_clockin_delta_min ?? Infinity) -
-      (best.median_clockin_delta_min ?? Infinity) <
+      (best.median_clockin_delta_min ?? Infinity) <=
       TIME_RUNNER_UP_MARGIN_MIN
   ) {
     return { decision: "ambiguous", ...base };
