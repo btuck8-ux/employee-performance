@@ -239,3 +239,41 @@ test("scheduled but never worked: attendance 0%, punctuality null", () => {
   assert.equal(m.on_time_pct, null);
   assert.equal(m.on_time_grace_pct, null);
 });
+
+test("punches_time_clock=false EXCLUDES from the attendance denominator — null, never 0 (mig 056)", () => {
+  // The Nick Goins shape: a salaried non-puncher with a real schedule and
+  // zero worked entries. Scored normally he reads 0% forever; excluded he
+  // reads not-computable. Title/pay-type must never drive this — six of
+  // seven GMs punch normally — only the SA-set marker does.
+  const entries = [
+    entry("2026-07-01", "scheduled", "09:00:00"),
+    entry("2026-07-02", "scheduled", "09:00:00"),
+    entry("2026-07-03", "scheduled", "09:00:00"),
+  ];
+  const scored = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+  });
+  assert.equal(scored.attendance_pct, 0);
+
+  const excluded = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: false,
+  });
+  assert.equal(excluded.attendance_pct, null);
+  assert.equal(excluded.on_time_pct, null);
+  assert.equal(excluded.on_time_grace_pct, null);
+  assert.equal(excluded.scheduled_count, 0);
+  assert.equal(excluded.missed_count, 0);
+});
+
+test("punches_time_clock undefined/true scores normally — exclusion is opt-in only", () => {
+  const entries = [
+    entry("2026-07-01", "scheduled", "09:00:00"),
+    entry("2026-07-01", "worked", "09:01:00"),
+  ];
+  const t = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: true,
+  });
+  assert.equal(t.attendance_pct, 100);
+});

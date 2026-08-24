@@ -24,7 +24,7 @@ export interface TimeEntryRow {
 export const ON_TIME_GRACE_MINUTES = 3;
 
 export interface PerformanceMetrics {
-  attendance_pct: number | null;     // 0-100, null if no scheduled shifts
+  attendance_pct: number | null;     // 0-100; null if no scheduled shifts OR punches_time_clock=false (excluded, never 0)
   on_time_pct: number | null;        // strict: actual_in <= scheduled_in
   on_time_grace_pct: number | null;  // with 3-minute grace period
   covered_shifts: number;
@@ -66,7 +66,7 @@ function timeToMinutes(t: string | null | undefined): number | null {
  */
 export function computeMetricsFromEntries(
   entries: TimeEntryRow[],
-  opts?: { scheduledScoredThrough?: string }
+  opts?: { scheduledScoredThrough?: string; punchesTimeClock?: boolean }
 ): PerformanceMetrics {
   const cap =
     opts?.scheduledScoredThrough ?? new Date().toISOString().slice(0, 10);
@@ -77,6 +77,30 @@ export function computeMetricsFromEntries(
   for (const e of entries) {
     if (e.entry_type === "scheduled") scheduledByDate.set(e.entry_date, e);
     else workedByDate.set(e.entry_date, e);
+  }
+
+  // Evidenced non-puncher (mig 056, defect 2026-08-24 §11): the employee is
+  // EXCLUDED from the attendance/punctuality denominators — null per the
+  // wire contracts' not-computable discipline — never scored 0. A salaried
+  // manager who structurally doesn't clock in must not read 0% attendance
+  // forever. covered_shifts stays real (a worked entry, should one ever
+  // appear, is still a confirmed shift).
+  if (opts?.punchesTimeClock === false) {
+    let covered = 0;
+    for (const date of workedByDate.keys()) {
+      if (!scheduledByDate.has(date)) covered += 1;
+    }
+    return {
+      attendance_pct: null,
+      on_time_pct: null,
+      on_time_grace_pct: null,
+      covered_shifts: covered,
+      scheduled_count: 0,
+      attended_count: 0,
+      missed_count: 0,
+      on_time_count: 0,
+      on_time_grace_count: 0,
+    };
   }
 
   let attended = 0;
@@ -412,6 +436,14 @@ export async function computeMetricsForRange(
 
   if (error) return { ok: false, error: error.message };
 
+  // Non-puncher marker (mig 056): excluded from the attendance denominator.
+  const { data: empRow } = await supabase
+    .from("employees")
+    .select("punches_time_clock")
+    .eq("id", employeeId)
+    .maybeSingle();
+  const punchesTimeClock = empRow?.punches_time_clock !== false;
+
   // Cap attendance scoring at min(today, latest worked at this location).
   // This stops future-scheduled shifts from being counted as "missed" when
   // the schedule is uploaded ahead of time, and also handles the case where
@@ -431,7 +463,7 @@ export async function computeMetricsForRange(
 
   const shift = computeMetricsFromEntries(
     (entries ?? []) as TimeEntryRow[],
-    { scheduledScoredThrough }
+    { scheduledScoredThrough, punchesTimeClock }
   );
 
   // ---- Tattle metrics ----
@@ -741,6 +773,14 @@ export async function recomputePerformanceForQuarter(
 
   if (error) return { ok: false, error: error.message };
 
+  // Non-puncher marker (mig 056): excluded from the attendance denominator.
+  const { data: empRow } = await supabase
+    .from("employees")
+    .select("punches_time_clock")
+    .eq("id", employeeId)
+    .maybeSingle();
+  const punchesTimeClock = empRow?.punches_time_clock !== false;
+
   // Cap attendance scoring at min(today, latest worked at this location) — see
   // computeMetricsForRange for the rationale.
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -758,7 +798,7 @@ export async function recomputePerformanceForQuarter(
 
   const metrics = computeMetricsFromEntries(
     (entries ?? []) as TimeEntryRow[],
-    { scheduledScoredThrough }
+    { scheduledScoredThrough, punchesTimeClock }
   );
 
   // ---- Tattle metrics (attributed surveys whose date_experienced is in this quarter) ----

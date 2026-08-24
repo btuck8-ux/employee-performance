@@ -1,0 +1,82 @@
+/**
+ * Contract pins for employees.punches_time_clock (mig 056, defect
+ * 2026-08-24 §11) — TEXT-LEVEL pins per repo convention.
+ *
+ * The field exists because wage_pay_type is NOT ingest-immune (the employee
+ * CSV upload writes it whenever a row carries a wage), and because deriving
+ * non-puncher status from pay type or title is measured-wrong: six of seven
+ * GMs punch normally, one at 42 of 42 scheduled days. These pins hold the
+ * field to its charter: SA-set only, ingest-immune, never derived, and an
+ * EXCLUSION from the attendance denominator rather than a zero.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+
+const migSrc = read("supabase/migrations/056_punches_time_clock.sql");
+const recomputeSrc = read("src/lib/performance-recompute.ts");
+const editActionsSrc = read("src/app/dashboard/employees/[id]/edit/actions.ts");
+const editPageSrc = read("src/app/dashboard/employees/[id]/edit/page.tsx");
+const uploadActionsSrc = read("src/app/dashboard/locations/[id]/upload-actions.ts");
+const employeeImportSrc = read("src/lib/employee-import.ts");
+const triageActionsSrc = read("src/app/dashboard/admin/employee-triage/actions.ts");
+const laborSrc = read("src/lib/ingest/toast/labor.ts");
+const laborCoreSrc = read("src/lib/ingest/toast/labor-core.ts");
+
+test("mig 056: boolean not null default true, seeded false for exactly one employee", () => {
+  assert.match(migSrc, /punches_time_clock boolean not null default true/);
+  const seeds = migSrc.match(/set punches_time_clock = false/g) ?? [];
+  assert.equal(seeds.length, 1, "exactly one seed statement");
+  assert.match(migSrc, /9303203e-88f2-423f-af56-b4056a6580cc/); // Nick Goins, COS
+});
+
+test("the field is INGEST-IMMUNE: no import/upload/ingest path touches it", () => {
+  for (const [name, src] of [
+    ["employee CSV upload", uploadActionsSrc],
+    ["employee import parser", employeeImportSrc],
+    ["triage mint action", triageActionsSrc],
+    ["toast labor feed", laborSrc],
+    ["toast labor core", laborCoreSrc],
+  ] as const) {
+    assert.doesNotMatch(
+      src,
+      /punches_time_clock/,
+      `${name} must never read or write punches_time_clock`
+    );
+  }
+});
+
+test("the ONLY writer besides the migration seed is the SA employee-edit surface", () => {
+  assert.match(editActionsSrc, /punches_time_clock/);
+  assert.match(editPageSrc, /name="punches_time_clock"/);
+});
+
+test("it is never DERIVED: no code path computes it from wage_pay_type or title", () => {
+  // The edit action reads it from the form only; nothing anywhere assigns
+  // it from wage_pay_type / role / title values.
+  assert.doesNotMatch(
+    editActionsSrc,
+    /punches_time_clock\s*[:=][^=][^;\n]*wage_pay_type/,
+    "must not be assigned from wage_pay_type"
+  );
+  assert.doesNotMatch(
+    recomputeSrc,
+    /wage_pay_type/,
+    "the metric must key on punches_time_clock, never on pay type"
+  );
+});
+
+test("the attendance denominator EXCLUDES non-punchers — null, never 0", () => {
+  // The pure function early-returns nulls; both DB entry points fetch the
+  // marker and thread it through.
+  assert.match(recomputeSrc, /punchesTimeClock\?: boolean/);
+  assert.match(recomputeSrc, /opts\?\.punchesTimeClock === false/);
+  const threaded = recomputeSrc.match(/scheduledScoredThrough, punchesTimeClock \}/g) ?? [];
+  assert.equal(threaded.length, 2, "both computeMetricsForRange and recomputePerformanceForQuarter thread the marker");
+  const fetches = recomputeSrc.match(/select\("punches_time_clock"\)/g) ?? [];
+  assert.equal(fetches.length, 2, "both entry points fetch the marker");
+});

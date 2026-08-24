@@ -31,7 +31,7 @@ export default async function EditEmployeePage({
     supabase
       .from("employees")
       .select(
-        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id"
+        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock"
       )
       .eq("id", id)
       .single(),
@@ -182,6 +182,25 @@ export default async function EditEmployeePage({
             <p className="text-xs text-slate-500 -mt-2">
               Uncheck to mark inactive. Inactive employees are kept in the database but hidden
               from the main Employees list.
+            </p>
+
+            <div className="flex items-center gap-2 pt-2">
+              <input
+                id="punches_time_clock"
+                name="punches_time_clock"
+                type="checkbox"
+                defaultChecked={emp.punches_time_clock !== false}
+                value="1"
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              <Label htmlFor="punches_time_clock">Punches the time clock</Label>
+            </div>
+            <p className="text-xs text-slate-500 -mt-2">
+              Uncheck only for an evidenced non-puncher (salaried, zero clock-ins
+              against a real schedule). Excludes them from punch-based attendance
+              (reads as not-computable, never 0%). This setting is yours alone —
+              no CSV upload or ingest ever changes it, and it is deliberately not
+              tied to pay type: most salaried GMs punch normally.
             </p>
 
             <div className="flex gap-3 pt-2">

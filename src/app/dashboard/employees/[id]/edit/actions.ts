@@ -16,6 +16,11 @@ export async function updateEmployeeAction(formData: FormData) {
   const wage = wageRaw ? Number(wageRaw) : null;
   const wage_pay_type = String(formData.get("wage_pay_type") ?? "").trim() || null;
   const active = formData.get("active") === "1";
+  // Mig 056: SA-set, ingest-immune non-puncher marker. This form and the
+  // migration seed are its ONLY writers (pinned by test) — never the CSV
+  // upload (which clobbers wage_pay_type, the reason this field exists) and
+  // never derived from pay type or title.
+  const punches_time_clock = formData.get("punches_time_clock") === "1";
 
   if (!id || !employee_name || !new_location_id) {
     redirect(`/dashboard/employees/${id}/edit?error=${encodeURIComponent("Name and location are required.")}`);
@@ -45,6 +50,7 @@ export async function updateEmployeeAction(formData: FormData) {
       wage: wage !== null && !Number.isNaN(wage) ? wage : null,
       wage_pay_type,
       active,
+      punches_time_clock,
     })
     .eq("id", id);
 
