@@ -19,7 +19,10 @@ export async function updateEmployeeAction(formData: FormData) {
   // Mig 056: SA-set, ingest-immune non-puncher marker. This form and the
   // migration seed are its ONLY writers (pinned by test) — never the CSV
   // upload (which clobbers wage_pay_type, the reason this field exists) and
-  // never derived from pay type or title.
+  // never derived from pay type or title. The sentinel guard means a POST
+  // that never rendered the checkbox leaves the column untouched — absent
+  // ≠ unchecked (Codex 2026-08-24).
+  const ptcSubmitted = formData.get("punches_time_clock_present") === "1";
   const punches_time_clock = formData.get("punches_time_clock") === "1";
 
   if (!id || !employee_name || !new_location_id) {
@@ -50,7 +53,7 @@ export async function updateEmployeeAction(formData: FormData) {
       wage: wage !== null && !Number.isNaN(wage) ? wage : null,
       wage_pay_type,
       active,
-      punches_time_clock,
+      ...(ptcSubmitted ? { punches_time_clock } : {}),
     })
     .eq("id", id);
 

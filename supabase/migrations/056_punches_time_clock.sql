@@ -37,6 +37,15 @@ alter table public.employees
 comment on column public.employees.punches_time_clock is
   'false = evidenced non-puncher (salaried, no clock-ins against a real schedule; SA-confirmed). Excludes the employee from punch-based attendance denominators (null, never 0). SA-set only — deliberately untouched by every ingest and import; NOT derivable from wage_pay_type or title (6 of 7 GMs punch normally).';
 
+-- The guard makes re-applies true no-ops AND protects a later SA re-enable
+-- from being reverted by a repeated manual run.
 update public.employees
 set punches_time_clock = false, updated_at = now()
-where id = '9303203e-88f2-423f-af56-b4056a6580cc'; -- Nick Goins, COS
+where id = '9303203e-88f2-423f-af56-b4056a6580cc' -- Nick Goins, COS
+  and punches_time_clock is distinct from false;
+
+-- ⚠️ POST-APPLY: persisted performance_records rows computed BEFORE this
+-- seed still carry Nick's stale attendance values (and /api/scores serves
+-- them) until his (employee × quarter) set is recomputed — trigger a
+-- recompute (Scoring-page save or the next nightly touching him) right
+-- after applying. The seed itself cannot do this: the recompute is TS-side.

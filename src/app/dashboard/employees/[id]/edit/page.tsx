@@ -185,6 +185,12 @@ export default async function EditEmployeePage({
             </p>
 
             <div className="flex items-center gap-2 pt-2">
+              {/* Sentinel: an unchecked checkbox and an absent field are
+                  indistinguishable in a POST — without this, a stale or
+                  partial form would silently flip someone to non-puncher
+                  (Codex 2026-08-24). The action only writes the field when
+                  the sentinel arrived with it. */}
+              <input type="hidden" name="punches_time_clock_present" value="1" />
               <input
                 id="punches_time_clock"
                 name="punches_time_clock"

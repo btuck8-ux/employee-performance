@@ -38,6 +38,9 @@ export interface SiblingLocation {
   employeeCode: string;
   locationId: string;
   locationName: string;
+  /** Mig 056 non-puncher marker — each site's recompute honours its own
+   * row's flag so an excluded sibling contributes no denominators. */
+  punchesTimeClock: boolean;
 }
 
 export interface MultiLocationQuarter {
@@ -99,7 +102,7 @@ export async function fetchMultiLocationProfile(
 
   const { data: siblingRows, error: siblingError } = await supabase
     .from("employees")
-    .select("id, employee_code, location_id, locations(id, name)")
+    .select("id, employee_code, location_id, punches_time_clock, locations(id, name)")
     .eq("seven_shifts_user_id", sevenShiftsUserId);
   if (siblingError)
     throw new Error(`multi-location siblings: ${siblingError.message}`);
@@ -110,6 +113,7 @@ export async function fetchMultiLocationProfile(
       locationId: String(r.location_id),
       locationName:
         ((r.locations as { name?: string } | null)?.name as string) ?? "—",
+      punchesTimeClock: r.punches_time_clock !== false,
     })
   );
   if (siblings.length < 2) return null;
@@ -254,6 +258,7 @@ export async function fetchMultiLocationProfile(
       const qEntries = entries.filter((e) => inQuarter(e.entry_date));
       const shift = computeMetricsFromEntries(qEntries, {
         scheduledScoredThrough: capByLocation.get(s.locationId),
+        punchesTimeClock: s.punchesTimeClock,
       });
       const qTattles = tattles.filter(
         (t) =>

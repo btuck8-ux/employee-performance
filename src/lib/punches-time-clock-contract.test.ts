@@ -12,8 +12,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
@@ -53,6 +53,38 @@ test("the field is INGEST-IMMUNE: no import/upload/ingest path touches it", () =
 test("the ONLY writer besides the migration seed is the SA employee-edit surface", () => {
   assert.match(editActionsSrc, /punches_time_clock/);
   assert.match(editPageSrc, /name="punches_time_clock"/);
+  // Sentinel guard: an absent checkbox field must not silently flip anyone
+  // to non-puncher (absent ≠ unchecked).
+  assert.match(editPageSrc, /name="punches_time_clock_present"/);
+  assert.match(editActionsSrc, /\.\.\.\(ptcSubmitted \? \{ punches_time_clock \} : \{\}\)/);
+});
+
+test("structural sweep: every src file touching the column is on the allowlist", () => {
+  // Stronger than per-file pins (Codex nit 2026-08-24): any NEW code path
+  // that mentions punches_time_clock must consciously join this list.
+  const ALLOWLIST = new Set([
+    "src/lib/performance-recompute.ts",
+    "src/lib/performance-recompute.test.ts",
+    "src/lib/punches-time-clock-contract.test.ts",
+    "src/lib/multi-location-fetch.ts",
+    "src/app/dashboard/employees/[id]/page.tsx",
+    "src/app/dashboard/employees/[id]/edit/actions.ts",
+    "src/app/dashboard/employees/[id]/edit/page.tsx",
+  ]);
+  const root = process.cwd();
+  const offenders: string[] = [];
+  for (const entry of readdirSync(join(root, "src"), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile()) continue;
+    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    const full = join(entry.parentPath ?? (entry as unknown as { path: string }).path, entry.name);
+    const rel = relative(root, full);
+    if (!readFileSync(full, "utf8").includes("punches_time_clock")) continue;
+    if (!ALLOWLIST.has(rel)) offenders.push(rel);
+  }
+  assert.deepEqual(offenders, [], "unexpected files touching punches_time_clock");
 });
 
 test("it is never DERIVED: no code path computes it from wage_pay_type or title", () => {
@@ -68,6 +100,14 @@ test("it is never DERIVED: no code path computes it from wage_pay_type or title"
     /wage_pay_type/,
     "the metric must key on punches_time_clock, never on pay type"
   );
+  // …and never from a title/role either (6 of 7 GMs punch normally).
+  for (const src of [recomputeSrc, editActionsSrc]) {
+    assert.doesNotMatch(
+      src,
+      /punches_time_clock[^;\n]*(title|job|role|manager|gm)/i,
+      "must not be derived from a title or role"
+    );
+  }
 });
 
 test("the attendance denominator EXCLUDES non-punchers — null, never 0", () => {

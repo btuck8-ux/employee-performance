@@ -73,7 +73,7 @@ export default async function EmployeeDetailPage({
   const { data: emp } = await supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, locations(id, name, clients(id, name))"
+      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, punches_time_clock, locations(id, name, clients(id, name))"
     )
     .eq("id", id)
     .single();
@@ -322,8 +322,15 @@ export default async function EmployeeDetailPage({
   );
 
   type EntryRow = { entry_date: string; entry_type: "scheduled" | "worked"; in_time: string | null };
-  const allTime = computeMetricsFromEntries((allEntries ?? []) as EntryRow[]);
-  const last14Days = computeMetricsFromEntries((recentEntries ?? []) as EntryRow[]);
+  // Mig 056: a non-puncher's profile summaries read not-computable, not 0%
+  // (Codex 2026-08-24 — this surface bypassed the recompute entry points).
+  const punchesTimeClock = emp.punches_time_clock !== false;
+  const allTime = computeMetricsFromEntries((allEntries ?? []) as EntryRow[], {
+    punchesTimeClock,
+  });
+  const last14Days = computeMetricsFromEntries((recentEntries ?? []) as EntryRow[], {
+    punchesTimeClock,
+  });
 
   // ---- Recent custom-range reports for this employee ----
   const { data: customRangeRows } = await supabase
