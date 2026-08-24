@@ -36,6 +36,28 @@ export interface PerformanceMetrics {
 }
 
 /**
+ * Effective-dating for the non-puncher marker (mig 056, flip spec 2026-08-24
+ * §2a). punches_time_clock encodes a fact that can BEGIN at a date — Nick
+ * Goins punched normally for three quarters and stopped exactly at COS's
+ * Toast go-live — so the exclusion applies only to periods OVERLAPPING
+ * [since, ∞). A period that ended before the effective date scores normally
+ * (his Q4 2025 is a THQ frozen quarter; nulling it is what the
+ * frozen-quarter arrangement exists to prevent). Null since = always.
+ *
+ * Returns the effective punchesTimeClock to thread into
+ * computeMetricsFromEntries for a period ending at `periodEnd` (YYYY-MM-DD).
+ */
+export function punchesTimeClockForPeriod(
+  punchesTimeClock: boolean,
+  since: string | null,
+  periodEnd: string
+): boolean {
+  if (punchesTimeClock) return true;
+  if (!since) return false;
+  return periodEnd < since;
+}
+
+/**
  * Convert "HH:MM:SS" 24-hour time string into total minutes since midnight.
  * Returns null if the string is missing or malformed.
  */
@@ -436,13 +458,18 @@ export async function computeMetricsForRange(
 
   if (error) return { ok: false, error: error.message };
 
-  // Non-puncher marker (mig 056): excluded from the attendance denominator.
+  // Non-puncher marker (mig 056): excluded from the attendance denominator —
+  // but only for periods overlapping the effective date (§2a).
   const { data: empRow } = await supabase
     .from("employees")
-    .select("punches_time_clock")
+    .select("punches_time_clock, punches_time_clock_since")
     .eq("id", employeeId)
     .maybeSingle();
-  const punchesTimeClock = empRow?.punches_time_clock !== false;
+  const punchesTimeClock = punchesTimeClockForPeriod(
+    empRow?.punches_time_clock !== false,
+    (empRow?.punches_time_clock_since as string | null) ?? null,
+    periodEnd
+  );
 
   // Cap attendance scoring at min(today, latest worked at this location).
   // This stops future-scheduled shifts from being counted as "missed" when
@@ -773,13 +800,18 @@ export async function recomputePerformanceForQuarter(
 
   if (error) return { ok: false, error: error.message };
 
-  // Non-puncher marker (mig 056): excluded from the attendance denominator.
+  // Non-puncher marker (mig 056): excluded from the attendance denominator —
+  // but only for periods overlapping the effective date (§2a).
   const { data: empRow } = await supabase
     .from("employees")
-    .select("punches_time_clock")
+    .select("punches_time_clock, punches_time_clock_since")
     .eq("id", employeeId)
     .maybeSingle();
-  const punchesTimeClock = empRow?.punches_time_clock !== false;
+  const punchesTimeClock = punchesTimeClockForPeriod(
+    empRow?.punches_time_clock !== false,
+    (empRow?.punches_time_clock_since as string | null) ?? null,
+    periodEnd
+  );
 
   // Cap attendance scoring at min(today, latest worked at this location) — see
   // computeMetricsForRange for the rationale.

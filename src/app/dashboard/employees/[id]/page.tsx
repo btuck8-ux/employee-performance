@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatHireDate, formatTenure, numOrNull, toNum } from "@/lib/format";
-import { computeMetricsFromEntries } from "@/lib/performance-recompute";
+import {
+  computeMetricsFromEntries,
+  punchesTimeClockForPeriod,
+} from "@/lib/performance-recompute";
 import {
   PerformanceHistoryTabs,
   type QuarterRow,
@@ -73,7 +76,7 @@ export default async function EmployeeDetailPage({
   const { data: emp } = await supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, punches_time_clock, locations(id, name, clients(id, name))"
+      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, punches_time_clock, punches_time_clock_since, locations(id, name, clients(id, name))"
     )
     .eq("id", id)
     .single();
@@ -324,7 +327,13 @@ export default async function EmployeeDetailPage({
   type EntryRow = { entry_date: string; entry_type: "scheduled" | "worked"; in_time: string | null };
   // Mig 056: a non-puncher's profile summaries read not-computable, not 0%
   // (Codex 2026-08-24 — this surface bypassed the recompute entry points).
-  const punchesTimeClock = emp.punches_time_clock !== false;
+  // Both summary windows end today, so the effective-date gate (§2a) uses
+  // today as the period end.
+  const punchesTimeClock = punchesTimeClockForPeriod(
+    emp.punches_time_clock !== false,
+    emp.punches_time_clock_since ?? null,
+    new Date().toISOString().slice(0, 10)
+  );
   const allTime = computeMetricsFromEntries((allEntries ?? []) as EntryRow[], {
     punchesTimeClock,
   });

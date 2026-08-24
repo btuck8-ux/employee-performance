@@ -31,7 +31,7 @@ export default async function EditEmployeePage({
     supabase
       .from("employees")
       .select(
-        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock"
+        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock, punches_time_clock_since"
       )
       .eq("id", id)
       .single(),
@@ -208,6 +208,23 @@ export default async function EditEmployeePage({
               no CSV upload or ingest ever changes it, and it is deliberately not
               tied to pay type: most salaried GMs punch normally.
             </p>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="punches_time_clock_since">Non-puncher since</Label>
+              <Input
+                id="punches_time_clock_since"
+                name="punches_time_clock_since"
+                type="date"
+                defaultValue={emp.punches_time_clock_since ?? ""}
+              />
+              <p className="text-xs text-slate-500">
+                When they stopped punching (e.g. their store&apos;s Toast go-live).
+                Periods ending before this date keep their real attendance history;
+                only periods overlapping it read as not-computable. Leave blank for
+                someone who has never punched. Ignored while the box above is
+                checked.
+              </p>
+            </div>
 
             <div className="flex gap-3 pt-2">
               <Button type="submit">Save changes</Button>

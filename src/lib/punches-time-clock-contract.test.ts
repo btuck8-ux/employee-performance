@@ -34,6 +34,18 @@ test("mig 056: boolean not null default true, seeded false for exactly one emplo
   assert.match(migSrc, /9303203e-88f2-423f-af56-b4056a6580cc/); // Nick Goins, COS
 });
 
+test("mig 056 is EFFECTIVE-DATED (flip spec §2a): since column exists and the seed carries COS's go-live", () => {
+  // The marker encodes a fact that BEGAN in July 2026 — Nick Goins punched
+  // ~80% for three quarters (one a THQ frozen quarter) and collapsed at
+  // COS's Toast go-live. A bare boolean would null all four quarters.
+  assert.match(migSrc, /punches_time_clock_since date/);
+  assert.match(
+    migSrc,
+    /punches_time_clock_since = date '2026-07-07'/,
+    "seed must carry COS's toast_sales_start_date (mig 038)"
+  );
+});
+
 test("the field is INGEST-IMMUNE: no import/upload/ingest path touches it", () => {
   for (const [name, src] of [
     ["employee CSV upload", uploadActionsSrc],
@@ -56,7 +68,16 @@ test("the ONLY writer besides the migration seed is the SA employee-edit surface
   // Sentinel guard: an absent checkbox field must not silently flip anyone
   // to non-puncher (absent ≠ unchecked).
   assert.match(editPageSrc, /name="punches_time_clock_present"/);
-  assert.match(editActionsSrc, /\.\.\.\(ptcSubmitted \? \{ punches_time_clock \} : \{\}\)/);
+  assert.match(
+    editActionsSrc,
+    /\.\.\.\(ptcSubmitted \? \{ punches_time_clock, punches_time_clock_since \} : \{\}\)/
+  );
+  // The effective date is meaningless while the employee punches — a
+  // re-check must clear it, not leave a stale since behind.
+  assert.match(
+    editActionsSrc,
+    /punches_time_clock_since = punches_time_clock \? null :/
+  );
 });
 
 test("structural sweep: every src file touching the column is on the allowlist", () => {
@@ -117,6 +138,28 @@ test("the attendance denominator EXCLUDES non-punchers — null, never 0", () =>
   assert.match(recomputeSrc, /opts\?\.punchesTimeClock === false/);
   const threaded = recomputeSrc.match(/scheduledScoredThrough, punchesTimeClock \}/g) ?? [];
   assert.equal(threaded.length, 2, "both computeMetricsForRange and recomputePerformanceForQuarter thread the marker");
-  const fetches = recomputeSrc.match(/select\("punches_time_clock"\)/g) ?? [];
-  assert.equal(fetches.length, 2, "both entry points fetch the marker");
+  const fetches = recomputeSrc.match(/select\("punches_time_clock, punches_time_clock_since"\)/g) ?? [];
+  assert.equal(fetches.length, 2, "both entry points fetch the marker AND its effective date");
+});
+
+test("every consumer gates through punchesTimeClockForPeriod — pre-effective-date periods stay untouched", () => {
+  // Both recompute entry points, the profile summaries, and the
+  // multi-location per-quarter combiner must pass the marker through the
+  // effective-date gate, never raw. (A raw `!== false` fed straight into
+  // computeMetricsFromEntries would null frozen pre-Toast quarters.)
+  const profileSrc = read("src/app/dashboard/employees/[id]/page.tsx");
+  const multiLocSrc = read("src/lib/multi-location-fetch.ts");
+  const gateCalls = recomputeSrc.match(/punchesTimeClockForPeriod\(/g) ?? [];
+  assert.equal(
+    gateCalls.length,
+    3,
+    "the definition plus both entry points call the gate"
+  );
+  assert.match(profileSrc, /punchesTimeClockForPeriod\(/);
+  assert.match(multiLocSrc, /punchesTimeClockForPeriod\(/);
+  assert.match(
+    multiLocSrc,
+    /q\.period_end/,
+    "the multi-location combiner gates per quarter, not once"
+  );
 });

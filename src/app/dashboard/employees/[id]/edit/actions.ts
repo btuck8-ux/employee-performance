@@ -24,6 +24,11 @@ export async function updateEmployeeAction(formData: FormData) {
   // ≠ unchecked (Codex 2026-08-24).
   const ptcSubmitted = formData.get("punches_time_clock_present") === "1";
   const punches_time_clock = formData.get("punches_time_clock") === "1";
+  // Effective date (§2a): the exclusion applies only to periods overlapping
+  // [since, ∞) — pre-since history keeps scoring. Meaningless (forced null)
+  // while the employee punches; blank while a non-puncher means "always".
+  const ptcSinceRaw = String(formData.get("punches_time_clock_since") ?? "").trim();
+  const punches_time_clock_since = punches_time_clock ? null : ptcSinceRaw || null;
 
   if (!id || !employee_name || !new_location_id) {
     redirect(`/dashboard/employees/${id}/edit?error=${encodeURIComponent("Name and location are required.")}`);
@@ -53,7 +58,7 @@ export async function updateEmployeeAction(formData: FormData) {
       wage: wage !== null && !Number.isNaN(wage) ? wage : null,
       wage_pay_type,
       active,
-      ...(ptcSubmitted ? { punches_time_clock } : {}),
+      ...(ptcSubmitted ? { punches_time_clock, punches_time_clock_since } : {}),
     })
     .eq("id", id);
 
