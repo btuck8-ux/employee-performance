@@ -24,10 +24,25 @@
 /** Minimum distinct punch-days overlapping the candidate's scheduled days
  * before an auto-commit is even considered (ruling §4 guard 1). */
 export const BEHAVIOURAL_MIN_OVERLAP_DAYS = 6;
-/** The best candidate must lead the runner-up by at least this many
- * overlapping days, or the match is ambiguous and queues for SA review
- * (ruling §4 guard 2 — identical schedules are a known real shape). */
-export const BEHAVIOURAL_RUNNER_UP_MARGIN = 3;
+/**
+ * §5b (defect 2026-08-24): clock-in proximity is REQUIRED, not advisory. No
+ * auto-commit where the median |clock-in − scheduled start| exceeds this.
+ * Set from the live distribution, not adopted from the defect note: the 26
+ * corroborated matches' worst median was 45.3 min and every other row sat
+ * ≤ 45; the two wrong/suspect attributions measured 124 and 302 min. 60
+ * splits the clusters with headroom on both sides.
+ */
+export const TIME_CEILING_MIN = 60;
+/**
+ * §5b ranking guard: when two eligible candidates' medians are within this
+ * many minutes, the time signal cannot separate them — ambiguous, queue.
+ * Correct-vs-wrong separations measured ≥ 60 min; same-schedule colleagues
+ * (the Griffin case) separated by well over this.
+ */
+export const TIME_RUNNER_UP_MARGIN_MIN = 15;
+/** §5c audit: rows with fewer paired days than this yield too noisy a
+ * median to flag on. */
+export const AUDIT_MIN_PAIRED_DAYS = 5;
 
 /** A Toast /labor/v1/timeEntries row (probe-verified field list). */
 export interface RawToastTimeEntry {
@@ -225,55 +240,144 @@ export function planEmailSeeds(
   return { seeds, ambiguousEmails };
 }
 
-export interface BehaviouralCandidate {
-  employee_id: string;
-  scheduledDates: Set<string>;
+/**
+ * Median |punch clock-in − scheduled start| in minutes over the dates both
+ * maps share. Timestamps are absolute (timestamptz ISO), so the difference
+ * needs no timezone conversion; pairing rides the store-local dates both
+ * sides already carry (Toast businessDate / 7shifts entry_date).
+ */
+export function medianAbsDeltaMinutes(
+  punchInByDate: Map<string, string>,
+  scheduleStartByDate: Map<string, string>
+): { paired_days: number; median_min: number | null } {
+  const deltas: number[] = [];
+  for (const [date, inAt] of punchInByDate) {
+    const startAt = scheduleStartByDate.get(date);
+    if (!startAt) continue;
+    const delta = Math.abs(Date.parse(inAt) - Date.parse(startAt)) / 60000;
+    if (Number.isFinite(delta)) deltas.push(delta);
+  }
+  if (deltas.length === 0) return { paired_days: 0, median_min: null };
+  deltas.sort((a, b) => a - b);
+  const mid = Math.floor(deltas.length / 2);
+  const median =
+    deltas.length % 2 === 1 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
+  return { paired_days: deltas.length, median_min: median };
 }
 
-export interface BehaviouralScore {
+export interface TimeAwareCandidate {
+  employee_id: string;
+  /** Store-local date -> earliest scheduled start (timestamptz ISO). */
+  scheduleStartByDate: Map<string, string>;
+}
+
+export interface TimeAwareScore {
   employee_id: string;
   overlap_days: number;
+  median_clockin_delta_min: number | null;
 }
 
-export interface BehaviouralVerdict {
+export interface TimeAwareVerdict {
   decision: "auto" | "ambiguous" | "insufficient";
-  best: BehaviouralScore | null;
-  runner_up: BehaviouralScore | null;
+  best: TimeAwareScore | null;
+  runner_up: TimeAwareScore | null;
   punch_days: number;
+  /** §5d: a null runner-up must be distinguishable from a walkover — pool
+   * size and eligible count travel with every verdict. */
+  candidate_pool_size: number;
+  eligible_count: number;
 }
 
 /**
- * Score one unmatched Toast guid's punch dates against candidate employees'
- * scheduled dates (ruling §4 path 2). Auto only when the best candidate
- * clears BEHAVIOURAL_MIN_OVERLAP_DAYS AND leads any runner-up by at least
- * BEHAVIOURAL_RUNNER_UP_MARGIN. Candidates are the CALLER's responsibility
- * to restrict to the same store and to employees without an existing
- * crosswalk row (a recreated Toast account for an already-mapped person
- * queues for SA instead of guessing).
+ * Time-aware behavioural scorer (defect 2026-08-24 §5b — replaces the
+ * day-overlap-only scorer whose CPD mis-attribution triggered the defect).
+ *
+ * Eligibility: overlap ≥ BEHAVIOURAL_MIN_OVERLAP_DAYS (the day floor keeps
+ * the median meaningful) AND median clock-in delta ≤ TIME_CEILING_MIN (a
+ * person clocks in near their scheduled start; 124-min and 302-min medians
+ * are the measured signatures of wrong attributions).
+ *
+ * Ranking: TIME WINS. Day overlap barely separates anyone at stores where
+ * most of the roster works most days (HOU: 13 of 14 ≥24 of ~55 days);
+ * clock-in proximity separated every measured case cleanly. Where the two
+ * eligible medians sit within TIME_RUNNER_UP_MARGIN_MIN of each other the
+ * signal can't tell them apart — ambiguous, queue for SA.
+ *
+ * Candidates are the CALLER's responsibility to restrict to the same store
+ * and to §5a's eligibility (an employee is blocked only by a mapping that
+ * actually carries punches — a zero-punch mapping must not hide the true
+ * owner, which is exactly how the CPD mis-attribution happened).
  */
-export function scoreBehaviouralMatch(
-  punchDates: Set<string>,
-  candidates: BehaviouralCandidate[]
-): BehaviouralVerdict {
-  const scores: BehaviouralScore[] = candidates
+export function scoreTimeAwareMatch(
+  punchInByDate: Map<string, string>,
+  candidates: TimeAwareCandidate[]
+): TimeAwareVerdict {
+  const scores: TimeAwareScore[] = candidates
     .map((c) => {
-      let overlap = 0;
-      for (const d of punchDates) if (c.scheduledDates.has(d)) overlap += 1;
-      return { employee_id: c.employee_id, overlap_days: overlap };
+      const { paired_days, median_min } = medianAbsDeltaMinutes(
+        punchInByDate,
+        c.scheduleStartByDate
+      );
+      return {
+        employee_id: c.employee_id,
+        overlap_days: paired_days,
+        median_clockin_delta_min:
+          median_min === null ? null : Math.round(median_min * 10) / 10,
+      };
     })
-    .filter((s) => s.overlap_days > 0)
-    .sort((a, b) => b.overlap_days - a.overlap_days);
+    .filter((s) => s.overlap_days > 0);
 
-  const best = scores[0] ?? null;
-  const runnerUp = scores[1] ?? null;
-  const base = { best, runner_up: runnerUp, punch_days: punchDates.size };
-  if (!best || best.overlap_days < BEHAVIOURAL_MIN_OVERLAP_DAYS) {
-    return { decision: "insufficient", ...base };
-  }
-  if (runnerUp && best.overlap_days - runnerUp.overlap_days < BEHAVIOURAL_RUNNER_UP_MARGIN) {
+  const eligible = scores
+    .filter(
+      (s) =>
+        s.overlap_days >= BEHAVIOURAL_MIN_OVERLAP_DAYS &&
+        s.median_clockin_delta_min !== null &&
+        s.median_clockin_delta_min <= TIME_CEILING_MIN
+    )
+    .sort(
+      (a, b) =>
+        (a.median_clockin_delta_min ?? Infinity) -
+        (b.median_clockin_delta_min ?? Infinity)
+    );
+
+  const best = eligible[0] ?? null;
+  const runnerUp = eligible[1] ?? null;
+  const base = {
+    best,
+    runner_up: runnerUp,
+    punch_days: punchInByDate.size,
+    candidate_pool_size: candidates.length,
+    eligible_count: eligible.length,
+  };
+  if (!best) return { decision: "insufficient", ...base };
+  // "Within the margin" is inclusive (Codex 2026-08-24): an exact 15.0-min
+  // gap is still ambiguity, not a lead.
+  if (
+    runnerUp &&
+    (runnerUp.median_clockin_delta_min ?? Infinity) -
+      (best.median_clockin_delta_min ?? Infinity) <=
+      TIME_RUNNER_UP_MARGIN_MIN
+  ) {
     return { decision: "ambiguous", ...base };
   }
   return { decision: "auto", ...base };
+}
+
+/**
+ * §5a: which employees are BLOCKED from behavioural candidacy. Only a
+ * mapping whose Toast account actually carries punches blocks its owner; a
+ * zero-punch mapping (a stale or superseded POS account) leaves the
+ * employee eligible — otherwise the true owner is invisible and their
+ * punches go to the best remaining wrong candidate (the CPD defect).
+ */
+export function blockedEmployeeIds(
+  crosswalkRows: Array<{ employee_id: string; punch_count: number }>
+): Set<string> {
+  const out = new Set<string>();
+  for (const r of crosswalkRows) {
+    if (r.punch_count > 0) out.add(r.employee_id);
+  }
+  return out;
 }
 
 /** Chunk [sinceDate, untilDate] (YYYY-MM-DD, inclusive) into ≤maxDays

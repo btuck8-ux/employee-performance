@@ -12,8 +12,10 @@
  * writer would fight it, last writer wins. Punches land in their own
  * per-punch table (mig 055) and run in parallel; switching the metric /
  * locations.actuals_source is a separate evidenced decision (the 2026-07-27
- * audit: a naive flip "kills CO labor"). This module reads time_entries
- * (scheduled rows, as behavioural-matcher evidence) and never writes it.
+ * audit: a naive flip "kills CO labor"). Since the 2026-08-24 defect fix,
+ * schedule evidence comes from seven_shifts_shifts (it carries start_at;
+ * time_entries does not) — this module no longer touches time_entries at
+ * all.
  *
  * Store scoping: strictly locations.toast_restaurant_guid (ruling §6). The
  * credential also reaches Chico CA and a stray second Fort Collins; labor
@@ -43,13 +45,17 @@ import { maybeSendFailureAlert } from "../sevenshifts/alert";
 import {
   classifyPunches,
   planEmailSeeds,
-  scoreBehaviouralMatch,
+  scoreTimeAwareMatch,
+  medianAbsDeltaMinutes,
+  blockedEmployeeIds,
   chunkWindows,
   BEHAVIOURAL_MIN_OVERLAP_DAYS,
-  BEHAVIOURAL_RUNNER_UP_MARGIN,
+  TIME_CEILING_MIN,
+  TIME_RUNNER_UP_MARGIN_MIN,
+  AUDIT_MIN_PAIRED_DAYS,
   type RawToastEmployee,
   type RawToastTimeEntry,
-  type BehaviouralCandidate,
+  type TimeAwareCandidate,
 } from "./labor-core";
 
 export const TOAST_LABOR_SOURCE = "toast_labor" as const;
@@ -195,10 +201,15 @@ export async function reconcileAttributions(
   return { attributed_guids: attributed, deattributed_guids: deattributed };
 }
 
-/** Attribute stored punches for a newly crosswalked guid. Never overwrites an
- * existing attribution (employee_id must be null). Shared by the seeder, the
- * behavioural matcher, and the SA manual-confirm action. */
-export async function attributeStoredPunches(
+/**
+ * Re-stamp EVERY stored punch for a guid to its (new) owner — §5e: a
+ * crosswalk edit must reach the punch rows, including rows previously
+ * stamped for someone else. The old attribute-only-null version left 31
+ * punch rows pointing at the wrong employee after the 2026-08-24
+ * correction. Used by the SA confirm action; the nightly's
+ * reconcileAttributions covers the same invariant continuously.
+ */
+export async function restampPunches(
   supabase: AdminClient,
   toastEmployeeGuid: string,
   employeeId: string
@@ -206,9 +217,8 @@ export async function attributeStoredPunches(
   const { error } = await supabase
     .from("toast_time_entries")
     .update({ employee_id: employeeId })
-    .eq("toast_employee_guid", toastEmployeeGuid)
-    .is("employee_id", null);
-  if (error) throw new Error(`punch attribution: ${error.message}`);
+    .eq("toast_employee_guid", toastEmployeeGuid);
+  if (error) throw new Error(`punch re-stamp: ${error.message}`);
 }
 
 /** Undo path: clear the attribution a removed crosswalk row created. */
@@ -248,37 +258,120 @@ async function employeesAtLocation(
   return out;
 }
 
-/** Scheduled dates per employee (time_entries READ — scheduled rows only),
- * paged past PostgREST's 1000-row cap. */
-async function scheduledDatesByEmployee(
+/**
+ * Scheduled START TIMES per employee per store-local date, from the direct
+ * 7shifts feed (seven_shifts_shifts — it carries start_at; time_entries
+ * does not). §5b's time evidence rides this. Earliest shift wins a
+ * multi-shift day, matching the earliest-punch pairing on the Toast side.
+ * Tombstoned/deleted/draft shifts are excluded.
+ */
+async function scheduledStartsByEmployee(
   supabase: AdminClient,
   employeeIds: string[],
   sinceDate: string,
   untilDate: string
-): Promise<Map<string, Set<string>>> {
-  const out = new Map<string, Set<string>>();
+): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>();
   if (employeeIds.length === 0) return out;
   const BATCH = 1000;
   for (let from = 0; ; from += BATCH) {
     const { data, error } = await supabase
-      .from("time_entries")
-      .select("employee_id, entry_date")
+      .from("seven_shifts_shifts")
+      .select("employee_id, entry_date, start_at")
       .in("employee_id", employeeIds)
-      .eq("entry_type", "scheduled")
+      .is("missing_upstream_since", null)
+      .eq("deleted", false)
+      .eq("draft", false)
       .gte("entry_date", sinceDate)
       .lte("entry_date", untilDate)
-      .order("entry_date", { ascending: true })
+      .order("seven_shifts_shift_id", { ascending: true })
       .range(from, from + BATCH - 1);
-    if (error) throw new Error(`scheduled dates read: ${error.message}`);
+    if (error) throw new Error(`scheduled starts read: ${error.message}`);
     for (const r of data ?? []) {
       const id = String(r.employee_id);
-      const set = out.get(id) ?? new Set<string>();
-      set.add(String(r.entry_date).slice(0, 10));
-      out.set(id, set);
+      const date = String(r.entry_date).slice(0, 10);
+      const startAt = String(r.start_at);
+      const byDate = out.get(id) ?? new Map<string, string>();
+      const prev = byDate.get(date);
+      if (!prev || startAt < prev) byDate.set(date, startAt);
+      out.set(id, byDate);
     }
     if (!data || data.length < BATCH) break;
   }
   return out;
+}
+
+interface PunchIndex {
+  /** guid -> store-local date -> earliest clock-in (non-deleted punches). */
+  inByGuid: Map<string, Map<string, string>>;
+  /** guid -> total non-deleted punch rows. */
+  punchCountByGuid: Map<string, number>;
+}
+
+/** One paged pass over a store's stored punches — feeds §5a eligibility,
+ * the matcher's evidence, the §5c audit, and the queue, without re-reading. */
+async function loadPunchIndex(
+  supabase: AdminClient,
+  locationId: string
+): Promise<PunchIndex> {
+  const inByGuid = new Map<string, Map<string, string>>();
+  const punchCountByGuid = new Map<string, number>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("toast_time_entries")
+      .select("toast_employee_guid, entry_date, in_at")
+      .eq("location_id", locationId)
+      .eq("deleted", false)
+      .order("toast_time_entry_guid", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`punch index read: ${error.message}`);
+    for (const r of data ?? []) {
+      const guid = String(r.toast_employee_guid);
+      const date = String(r.entry_date).slice(0, 10);
+      const inAt = String(r.in_at);
+      punchCountByGuid.set(guid, (punchCountByGuid.get(guid) ?? 0) + 1);
+      const byDate = inByGuid.get(guid) ?? new Map<string, string>();
+      const prev = byDate.get(date);
+      if (!prev || inAt < prev) byDate.set(date, inAt);
+      inByGuid.set(guid, byDate);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return { inByGuid, punchCountByGuid };
+}
+
+/** Crosswalk rows (guid, employee, method) at a location, paged. */
+async function crosswalkRowsAtLocation(
+  supabase: AdminClient,
+  locationId: string
+): Promise<Array<{ toast_employee_guid: string; employee_id: string; match_method: string }>> {
+  const out: Array<{ toast_employee_guid: string; employee_id: string; match_method: string }> = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("toast_employee_crosswalk")
+      .select("toast_employee_guid, employee_id, match_method")
+      .eq("location_id", locationId)
+      .order("toast_employee_guid", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`crosswalk rows read: ${error.message}`);
+    for (const r of data ?? []) {
+      out.push({
+        toast_employee_guid: String(r.toast_employee_guid),
+        employee_id: String(r.employee_id),
+        match_method: String(r.match_method),
+      });
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+
+export interface AttributionAuditFlag {
+  toast_employee_guid: string;
+  employee_id: string;
+  match_method: string;
+  paired_days: number;
+  median_clockin_delta_min: number;
 }
 
 export interface LaborLocationDetail {
@@ -293,6 +386,9 @@ export interface LaborLocationDetail {
   /** Unmatched Toast guids that HAVE punches after this run — the SA queue. */
   unmatched_queue_size: number;
   unmatched_toast_employee_guids: string[];
+  /** §5c: crosswalk rows (ANY method) whose punches don't land near the
+   * mapped employee's scheduled starts — surfaced every run, alerted on. */
+  attribution_audit_flags: AttributionAuditFlag[];
   skipped_no_guid: number;
   skipped_no_date: number;
   skipped_no_in: number;
@@ -353,32 +449,47 @@ export async function ingestToastLaborForLocation(
     upserted += batch.length;
   }
 
-  // 3) Behavioural matcher over unmatched guids with punches (§4 path 2).
-  //    Punch dates come from ALL stored punches for the guid (not just this
-  //    window) so evidence accumulates night over night. TWO-PHASE (Codex
-  //    2026-08-23): every guid is scored against the FULL candidate pool
-  //    first, then commits happen — so verdicts are order-independent, and
-  //    two guids auto-resolving to the SAME employee is itself ambiguity
-  //    (both queue) rather than first-wins.
-  const mappedEmployeeIds = new Set(existing.values());
-  const candidatesRaw = (await employeesAtLocation(supabase, loc.id, true)).filter(
-    (c) => !mappedEmployeeIds.has(c.id)
+  // 3) Time-aware behavioural matcher (defect 2026-08-24 §5b) over
+  //    unmatched guids with punches. Punch evidence comes from ALL stored
+  //    punches for the guid so it accumulates night over night. TWO-PHASE
+  //    (Codex 2026-08-23): every guid scores against the full pool first;
+  //    two guids auto-resolving to the same employee is itself ambiguity.
+  const punchIndex = await loadPunchIndex(supabase, loc.id);
+  const xwalkRows = await crosswalkRowsAtLocation(supabase, loc.id);
+  const mappedGuids = new Set(xwalkRows.map((r) => r.toast_employee_guid));
+  // §5a: only a mapping that actually carries punches blocks its owner. A
+  // zero-punch mapping (stale POS account) leaves the employee eligible —
+  // the CPD mis-attribution happened because the true owner was excluded
+  // on the strength of an account he never punched on.
+  const blocked = blockedEmployeeIds(
+    xwalkRows.map((r) => ({
+      employee_id: r.employee_id,
+      punch_count: punchIndex.punchCountByGuid.get(r.toast_employee_guid) ?? 0,
+    }))
   );
-  const unmatchedGuids = await storedUnmatchedPunchDates(supabase, loc.id);
-  const schedules = await scheduledDatesByEmployee(
+  const candidatesRaw = (await employeesAtLocation(supabase, loc.id, true)).filter(
+    (c) => !blocked.has(c.id)
+  );
+  const scheduleIds = [
+    ...new Set([...candidatesRaw.map((c) => c.id), ...xwalkRows.map((r) => r.employee_id)]),
+  ];
+  const schedules = await scheduledStartsByEmployee(
     supabase,
-    candidatesRaw.map((c) => c.id),
+    scheduleIds,
     loc.labor_start_date,
     untilDate
   );
-  const candidates: BehaviouralCandidate[] = candidatesRaw.map((c) => ({
+  const candidates: TimeAwareCandidate[] = candidatesRaw.map((c) => ({
     employee_id: c.id,
-    scheduledDates: schedules.get(c.id) ?? new Set<string>(),
+    scheduleStartByDate: schedules.get(c.id) ?? new Map<string, string>(),
   }));
 
-  const verdicts = [...unmatchedGuids.entries()].map(([guid, punchDates]) => ({
+  const unmatchedEntries = [...punchIndex.inByGuid.entries()].filter(
+    ([guid]) => !mappedGuids.has(guid)
+  );
+  const verdicts = unmatchedEntries.map(([guid, punchInByDate]) => ({
     guid,
-    verdict: scoreBehaviouralMatch(punchDates, candidates),
+    verdict: scoreTimeAwareMatch(punchInByDate, candidates),
   }));
   const autoTargets = new Map<string, number>();
   for (const v of verdicts) {
@@ -410,12 +521,22 @@ export async function ingestToastLaborForLocation(
         employee_id: employeeId,
         location_id: loc.id,
         match_method: "auto_behavioural",
+        // §5b + §5d: time evidence and pool visibility on every auto row —
+        // a null runner-up is distinguishable from a walkover.
         evidence: {
           punch_days: verdict.punch_days,
           best_overlap_days: verdict.best.overlap_days,
+          median_clockin_delta_min: verdict.best.median_clockin_delta_min,
           runner_up_overlap_days: verdict.runner_up?.overlap_days ?? null,
-          min_overlap_threshold: BEHAVIOURAL_MIN_OVERLAP_DAYS,
-          runner_up_margin: BEHAVIOURAL_RUNNER_UP_MARGIN,
+          runner_up_median_clockin_delta_min:
+            verdict.runner_up?.median_clockin_delta_min ?? null,
+          candidate_pool_size: verdict.candidate_pool_size,
+          eligible_count: verdict.eligible_count,
+          thresholds: {
+            min_overlap_days: BEHAVIOURAL_MIN_OVERLAP_DAYS,
+            time_ceiling_min: TIME_CEILING_MIN,
+            time_margin_min: TIME_RUNNER_UP_MARGIN_MIN,
+          },
           window: { since: loc.labor_start_date, until: untilDate },
           decided_at: nowIso,
         },
@@ -429,6 +550,7 @@ export async function ingestToastLaborForLocation(
       toast_employee_guid: guid,
       employee_id: employeeId,
       overlap_days: verdict.best.overlap_days,
+      median_clockin_delta_min: verdict.best.median_clockin_delta_min,
     });
   }
 
@@ -437,9 +559,36 @@ export async function ingestToastLaborForLocation(
   //    ignoreDuplicates race above in one idempotent pass).
   await reconcileAttributions(supabase, loc.id);
 
-  // 5) The queue after everything above: unmatched guids that still have
+  // 5) §5c audit — EVERY crosswalk row, whatever method created it, gets
+  //    the independent clock-in-vs-scheduled-start check each run. Email
+  //    determinism is not correctness (the 302-minute email row proved it).
+  const freshRows = await crosswalkRowsAtLocation(supabase, loc.id);
+  const auditFlags: AttributionAuditFlag[] = [];
+  for (const row of freshRows) {
+    const punchInByDate = punchIndex.inByGuid.get(row.toast_employee_guid);
+    if (!punchInByDate) continue;
+    const sched = schedules.get(row.employee_id);
+    if (!sched) continue;
+    const { paired_days, median_min } = medianAbsDeltaMinutes(punchInByDate, sched);
+    if (
+      paired_days >= AUDIT_MIN_PAIRED_DAYS &&
+      median_min !== null &&
+      median_min > TIME_CEILING_MIN
+    ) {
+      auditFlags.push({
+        toast_employee_guid: row.toast_employee_guid,
+        employee_id: row.employee_id,
+        match_method: row.match_method,
+        paired_days,
+        median_clockin_delta_min: Math.round(median_min * 10) / 10,
+      });
+    }
+  }
+
+  // 6) The queue after everything above: unmatched guids that still have
   //    punches. This is what the growth alert and the SA surface watch.
-  const remaining = await storedUnmatchedPunchDates(supabase, loc.id);
+  const freshMapped = new Set(freshRows.map((r) => r.toast_employee_guid));
+  const remaining = [...punchIndex.inByGuid.keys()].filter((g) => !freshMapped.has(g));
 
   return {
     requests,
@@ -450,40 +599,13 @@ export async function ingestToastLaborForLocation(
     auto_matched: autoMatched,
     auto_ambiguous: autoAmbiguous,
     auto_insufficient: autoInsufficient,
-    unmatched_queue_size: remaining.size,
-    unmatched_toast_employee_guids: [...remaining.keys()].slice(0, 20),
+    unmatched_queue_size: remaining.length,
+    unmatched_toast_employee_guids: remaining.slice(0, 20),
+    attribution_audit_flags: auditFlags,
     skipped_no_guid: classified.skippedNoGuid,
     skipped_no_date: classified.skippedNoDate,
     skipped_no_in: classified.skippedNoIn,
   };
-}
-
-/** Distinct punch dates per unmatched guid from STORED punches (paged). */
-async function storedUnmatchedPunchDates(
-  supabase: AdminClient,
-  locationId: string
-): Promise<Map<string, Set<string>>> {
-  const out = new Map<string, Set<string>>();
-  const BATCH = 1000;
-  for (let from = 0; ; from += BATCH) {
-    const { data, error } = await supabase
-      .from("toast_time_entries")
-      .select("toast_employee_guid, entry_date")
-      .eq("location_id", locationId)
-      .is("employee_id", null)
-      .eq("deleted", false)
-      .order("entry_date", { ascending: true })
-      .range(from, from + BATCH - 1);
-    if (error) throw new Error(`unmatched punches read: ${error.message}`);
-    for (const r of data ?? []) {
-      const guid = String(r.toast_employee_guid);
-      const set = out.get(guid) ?? new Set<string>();
-      set.add(String(r.entry_date).slice(0, 10));
-      out.set(guid, set);
-    }
-    if (!data || data.length < BATCH) break;
-  }
-  return out;
 }
 
 /** Previous run's queue size for the growth alert (ruling §4 guard 4). */
@@ -608,6 +730,13 @@ export async function runToastLaborIngest(
       if (prevQueue !== null && detail.unmatched_queue_size > prevQueue) {
         extraReasons.push(
           `toast_labor unmatched crosswalk queue grew at ${loc.location_code}: ${prevQueue} → ${detail.unmatched_queue_size}`
+        );
+      }
+      // §5c: a crosswalk row failing the independent clock-in audit must
+      // reach someone, whatever method created it.
+      if (detail.attribution_audit_flags.length > 0) {
+        extraReasons.push(
+          `toast_labor attribution audit flagged ${detail.attribution_audit_flags.length} row(s) at ${loc.location_code} (median clock-in deviation > ${TIME_CEILING_MIN}m)`
         );
       }
     } catch (err) {

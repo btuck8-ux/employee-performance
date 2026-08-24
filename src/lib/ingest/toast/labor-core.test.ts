@@ -5,9 +5,12 @@ import {
   chunkWindows,
   classifyPunches,
   planEmailSeeds,
-  scoreBehaviouralMatch,
+  scoreTimeAwareMatch,
+  medianAbsDeltaMinutes,
+  blockedEmployeeIds,
   BEHAVIOURAL_MIN_OVERLAP_DAYS,
-  BEHAVIOURAL_RUNNER_UP_MARGIN,
+  TIME_CEILING_MIN,
+  TIME_RUNNER_UP_MARGIN_MIN,
   type RawToastTimeEntry,
 } from "./labor-core.ts";
 
@@ -136,45 +139,116 @@ test("an already-mapped guid never re-seeds", () => {
   assert.equal(plan.seeds.length, 0);
 });
 
-// ── scoreBehaviouralMatch (ruling §4 guards, thresholds stated) ──────────
+// ── time-aware scorer (defect 2026-08-24 §5b, thresholds stated) ─────────
 
-const days = (...d: string[]) => new Set(d);
-const week1 = ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"];
+const WEEK = ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"];
 
-test("the stated thresholds are 6 overlap days and a 3-day runner-up margin", () => {
-  // The PR body states these numbers; this pin stops silent drift.
+/** date -> timestamp at `hour`:`min` UTC on that date. */
+function times(dates: string[], hour: number, min = 0): Map<string, string> {
+  return new Map(
+    dates.map((d) => [
+      d,
+      `${d}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:00.000Z`,
+    ])
+  );
+}
+
+test("the stated thresholds: 6 overlap days, 60-minute ceiling, 15-minute time margin", () => {
+  // The PR body states these numbers; this pin stops silent drift. The 60
+  // was set from the measured distribution (correct rows ≤ 45.3 min; wrong
+  // attributions 124 and 302 min).
   assert.equal(BEHAVIOURAL_MIN_OVERLAP_DAYS, 6);
-  assert.equal(BEHAVIOURAL_RUNNER_UP_MARGIN, 3);
+  assert.equal(TIME_CEILING_MIN, 60);
+  assert.equal(TIME_RUNNER_UP_MARGIN_MIN, 15);
 });
 
-test("unambiguous match auto-commits", () => {
-  const v = scoreBehaviouralMatch(days(...week1), [
-    { employee_id: "e1", scheduledDates: days(...week1) },
-    { employee_id: "e2", scheduledDates: days("2026-08-01", "2026-08-02") },
-  ]);
-  assert.equal(v.decision, "auto");
-  assert.equal(v.best?.employee_id, "e1");
+test("medianAbsDeltaMinutes pairs by date and is timezone-free", () => {
+  const { paired_days, median_min } = medianAbsDeltaMinutes(
+    times(WEEK, 15, 10), // clock-ins 15:10Z
+    times(WEEK, 15, 0) // scheduled 15:00Z
+  );
+  assert.equal(paired_days, 6);
+  assert.equal(median_min, 10);
+  assert.equal(medianAbsDeltaMinutes(new Map(), times(WEEK, 15)).median_min, null);
 });
 
-test("a runner-up inside the margin makes it ambiguous — identical schedules never auto-commit", () => {
-  const v = scoreBehaviouralMatch(days(...week1), [
-    { employee_id: "e1", scheduledDates: days(...week1) },
-    { employee_id: "e2", scheduledDates: days(...week1) },
+test("median averages the middle pair on even counts and drops unparseable timestamps", () => {
+  const four = WEEK.slice(0, 4);
+  // Deltas 2, 4, 6, 8 → median (4+6)/2 = 5.
+  const punches = new Map(
+    four.map((d, i) => [d, `${d}T15:${String((i + 1) * 2).padStart(2, "0")}:00.000Z`])
+  );
+  const even = medianAbsDeltaMinutes(punches, times(four, 15));
+  assert.equal(even.paired_days, 4);
+  assert.equal(even.median_min, 5);
+  const junk = new Map([["2026-08-01", "not-a-timestamp"]]);
+  assert.equal(medianAbsDeltaMinutes(junk, times(["2026-08-01"], 15)).median_min, null);
+});
+
+test("an exact margin-sized gap is still ambiguous (inclusive boundary)", () => {
+  const v = scoreTimeAwareMatch(times(WEEK, 15, 0), [
+    { employee_id: "e1", scheduleStartByDate: times(WEEK, 15, 0) }, // 0 min
+    { employee_id: "e2", scheduleStartByDate: times(WEEK, 15, 15) }, // exactly 15 min
   ]);
   assert.equal(v.decision, "ambiguous");
 });
 
-test("below the minimum overlap nothing commits, however clear the lead", () => {
-  const v = scoreBehaviouralMatch(days("2026-08-01", "2026-08-02"), [
-    { employee_id: "e1", scheduledDates: days("2026-08-01", "2026-08-02") },
+test("a punctual, unopposed match auto-commits with time evidence", () => {
+  const v = scoreTimeAwareMatch(times(WEEK, 15, 5), [
+    { employee_id: "e1", scheduleStartByDate: times(WEEK, 15) },
+    { employee_id: "e2", scheduleStartByDate: times(["2026-08-01"], 15) },
+  ]);
+  assert.equal(v.decision, "auto");
+  assert.equal(v.best?.employee_id, "e1");
+  assert.equal(v.best?.median_clockin_delta_min, 5);
+  assert.equal(v.candidate_pool_size, 2);
+  assert.equal(v.eligible_count, 1);
+});
+
+test("the time ceiling is REQUIRED: a 124-minute median never auto-commits, whatever the overlap", () => {
+  // The CPD mis-attribution shape: big unopposed day-overlap, wrong person.
+  const v = scoreTimeAwareMatch(times(WEEK, 17, 4), [
+    { employee_id: "wrong", scheduleStartByDate: times(WEEK, 15) },
+  ]);
+  assert.equal(v.decision, "insufficient");
+  assert.equal(v.eligible_count, 0);
+});
+
+test("time wins over day-overlap when the two disagree", () => {
+  // A has more overlapping days but clocks in ~40 min off; B has fewer
+  // days at a 2-minute median. B is the person.
+  const wide = [...WEEK, "2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10"];
+  const punches = new Map([...times(wide, 15, 2)]);
+  const v = scoreTimeAwareMatch(punches, [
+    { employee_id: "A", scheduleStartByDate: times(wide, 14, 20) },
+    { employee_id: "B", scheduleStartByDate: times(WEEK, 15) },
+  ]);
+  assert.equal(v.decision, "auto");
+  assert.equal(v.best?.employee_id, "B");
+});
+
+test("two eligible candidates within the time margin are ambiguous — identical schedules queue", () => {
+  const v = scoreTimeAwareMatch(times(WEEK, 15, 5), [
+    { employee_id: "e1", scheduleStartByDate: times(WEEK, 15) },
+    { employee_id: "e2", scheduleStartByDate: times(WEEK, 15, 10) },
+  ]);
+  assert.equal(v.decision, "ambiguous");
+});
+
+test("below the day floor nothing commits, however punctual", () => {
+  const v = scoreTimeAwareMatch(times(["2026-08-01", "2026-08-02"], 15, 1), [
+    { employee_id: "e1", scheduleStartByDate: times(["2026-08-01", "2026-08-02"], 15) },
   ]);
   assert.equal(v.decision, "insufficient");
 });
 
-test("no overlapping candidate at all is insufficient", () => {
-  const v = scoreBehaviouralMatch(days(...week1), [
-    { employee_id: "e1", scheduledDates: days("2026-01-01") },
+// ── §5a eligibility: zero-punch mappings must not block their owner ──────
+
+test("a zero-punch mapping leaves its employee eligible; a punched one blocks", () => {
+  const blocked = blockedEmployeeIds([
+    { employee_id: "jesus", punch_count: 0 }, // stale email-matched account
+    { employee_id: "liv", punch_count: 42 },
   ]);
-  assert.equal(v.decision, "insufficient");
-  assert.equal(v.best, null);
+  assert.equal(blocked.has("jesus"), false);
+  assert.equal(blocked.has("liv"), true);
 });
