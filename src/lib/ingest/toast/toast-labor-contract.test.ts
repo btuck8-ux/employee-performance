@@ -17,6 +17,7 @@ const coreSrc = read("src/lib/ingest/toast/labor-core.ts");
 const cronSrc = read("src/app/api/cron/sync-toast-labor/route.ts");
 const backfillSrc = read("src/app/api/admin/backfill-toast-labor/route.ts");
 const reconcileSrc = read("src/app/api/admin/reconcile-worked-time/route.ts");
+const restampSrc = read("src/app/api/admin/restamp-toast-attributions/route.ts");
 const actionsSrc = read("src/app/dashboard/admin/toast-crosswalk/actions.ts");
 const migSrc = read("supabase/migrations/055_toast_labor_feed.sql");
 const vercelJson = read("vercel.json");
@@ -27,6 +28,7 @@ const ALL_FEED_SOURCES = [
   ["sync-toast-labor route", cronSrc],
   ["backfill route", backfillSrc],
   ["reconcile route", reconcileSrc],
+  ["restamp route", restampSrc],
   ["crosswalk actions", actionsSrc],
 ] as const;
 
@@ -121,6 +123,43 @@ test("auto-commits store their evidence and the unmatched path survives (never g
   // Unmatched punches are STORED with employee_id null, not dropped.
   assert.match(coreSrc, /employee_id: employeeId/);
   assert.match(coreSrc, /unmatchedPunchDates/);
+});
+
+test("§5b time evidence is required, ranked on, and stored (defect 2026-08-24)", () => {
+  // Ceiling + margin live in labor-core (pinned at 60/15 by its unit
+  // tests); every auto row's evidence carries the medians and §5d's pool
+  // visibility so a null runner-up is distinguishable from a walkover.
+  assert.match(laborSrc, /median_clockin_delta_min: verdict\.best\.median_clockin_delta_min/);
+  assert.match(laborSrc, /runner_up_median_clockin_delta_min/);
+  assert.match(laborSrc, /candidate_pool_size/);
+  assert.match(laborSrc, /eligible_count/);
+  assert.match(laborSrc, /time_ceiling_min: TIME_CEILING_MIN/);
+});
+
+test("§5a: candidacy is blocked only by mappings that carry punches", () => {
+  assert.match(laborSrc, /blockedEmployeeIds\(/);
+  assert.match(laborSrc, /punch_count: punchIndex\.punchCountByGuid\.get/);
+});
+
+test("§5c: the clock-in audit runs over EVERY crosswalk row and reaches the alert path", () => {
+  assert.match(laborSrc, /attribution_audit_flags/);
+  assert.match(laborSrc, /attribution audit flagged/);
+  // The audit covers every method — it iterates crosswalk rows, not a
+  // method-filtered subset.
+  assert.doesNotMatch(
+    laborSrc.split("§5c audit")[1]?.slice(0, 1200) ?? "",
+    /match_method[^,\n]*===/,
+    "the audit must not filter by match_method"
+  );
+});
+
+test("§5e: the SA confirm re-stamps every punch row, and the one-shot reconciler exists", () => {
+  assert.match(actionsSrc, /restampPunches\(supabase, guid, employeeId\)/);
+  // restampPunches must NOT carry the null-only guard that stranded 31 rows.
+  const restampFn = laborSrc.split("export async function restampPunches")[1]?.split("export")[0] ?? "";
+  assert.ok(restampFn.length > 0, "restampPunches present");
+  assert.doesNotMatch(restampFn, /\.is\("employee_id", null\)/, "re-stamp must move wrong-stamped rows too");
+  assert.match(restampSrc, /reconcileAttributions\(supabase, loc\.id\)/);
 });
 
 test("the queue-growth alert rides the existing ingest-alert path (§4 guard 4)", () => {

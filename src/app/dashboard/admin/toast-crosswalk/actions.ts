@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionRole } from "@/lib/authz";
 import {
-  attributeStoredPunches,
+  restampPunches,
   deattributeStoredPunches,
 } from "@/lib/ingest/toast/labor";
 import type { AdminClient } from "@/lib/ingest/sevenshifts/crosswalk";
@@ -123,12 +123,15 @@ export async function confirmToastMatchAction(formData: FormData) {
   if (insertErr) {
     redirect(backWith({ error: `Confirm failed: ${insertErr.message}` }));
   }
+  // §5e (defect 2026-08-24): re-stamp EVERY punch row for the guid — a
+  // confirm that repoints a previously-wrong mapping must move rows already
+  // stamped for someone else, not just the null ones.
   try {
-    await attributeStoredPunches(supabase, guid, employeeId);
+    await restampPunches(supabase, guid, employeeId);
   } catch (err) {
     redirect(
       backWith({
-        error: `Mapping saved but punch attribution failed — re-run the backfill lever: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Mapping saved but punch re-stamp failed — run /api/admin/restamp-toast-attributions: ${err instanceof Error ? err.message : String(err)}`,
       })
     );
   }
