@@ -19,7 +19,11 @@ import { runToastLaborIngest } from "@/lib/ingest/toast/labor";
  *   GET /api/admin/backfill-toast-labor
  *     ?location_code=COS   restrict to one store (default: all 7)
  *     &since=YYYY-MM-DD    window start (floored at each store's go-live;
- *                          default: the go-live floor itself)
+ *                          default: each store's OWN go-live — deliberately
+ *                          NO constant default. A hardcoded July-1st default
+ *                          here out-maxed Houston's 2026-04-30 go-live and
+ *                          hid 501 punches for two months; §1, addendum
+ *                          2026-08-25)
  */
 
 export const dynamic = "force-dynamic";
@@ -31,7 +35,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const locationCode = url.searchParams.get("location_code") ?? undefined;
-  const since = url.searchParams.get("since") ?? "2026-07-01";
+  const since = url.searchParams.get("since") ?? undefined;
 
   try {
     const summary = await runToastLaborIngest({ locationCode, since });

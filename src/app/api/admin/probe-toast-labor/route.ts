@@ -241,8 +241,20 @@ export async function GET(request: Request) {
   if (denied) return denied;
 
   const url = new URL(request.url);
-  const start = url.searchParams.get("start") ?? "2026-07-01";
-  const end = url.searchParams.get("end") ?? "2026-08-20";
+  // §1 (addendum 2026-08-25): no default window. A July-1st default here
+  // preserved the exact Houston blind spot the sprint just retracted — a
+  // probe measurement must STATE its window, never inherit one (§7).
+  const startParam = url.searchParams.get("start");
+  const endParam = url.searchParams.get("end");
+  if (!startParam || !endParam) {
+    return NextResponse.json(
+      { error: "start and end (YYYY-MM-DD) are required — a probe states its window explicitly" },
+      { status: 400 }
+    );
+  }
+  // Rebound so the narrowing survives the nested probe closures.
+  const start: string = startParam;
+  const end: string = endParam;
   const businessDate = url.searchParams.get("business_date") ?? end;
   const sampleDays = Math.min(
     Number(url.searchParams.get("sample_days") ?? 3) || 3,

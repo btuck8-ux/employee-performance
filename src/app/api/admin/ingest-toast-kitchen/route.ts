@@ -6,9 +6,10 @@ import { runToastKitchenIngest } from "@/lib/ingest/toast/kitchen-ingest";
  * Operator backfill for the Toast Kitchen feed (handoff 2026-07-28 §5.4).
  *
  * Pulls one store (or all kitchen-enabled stores) over an explicit inclusive
- * from/to local-date window; each store is clamped to its go-live floor
- * (toast_sales_start_date, or 2026-07-01 for HOU), so kitchen history starts
- * exactly where Toast history exists. Idempotent: rows upsert on the natural
+ * from/to local-date window; each store is clamped to its go-live floor —
+ * its OWN toast_sales_start_date, no constant fallback (§1, addendum
+ * 2026-08-25) — so kitchen history starts exactly where Toast history
+ * exists. Idempotent: rows upsert on the natural
  * (location, ticket, selection, station, level) key and the recompute is
  * deterministic — re-running a window is 0 inserted, N updated.
  *

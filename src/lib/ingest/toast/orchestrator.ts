@@ -57,15 +57,25 @@ export async function loadToastCrosswalk(
   if (error) {
     throw new Error(`Failed to load Toast crosswalk: ${error.message}`);
   }
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    name: r.name as string,
-    location_code: r.location_code as string,
-    toast_restaurant_guid: r.toast_restaurant_guid as string,
-    // A wired location without a start date is a config bug; floor at the
-    // earliest CO go-live rather than pulling into Cake's backfilled window.
-    toast_sales_start_date: (r.toast_sales_start_date as string | null) ?? "2026-07-01",
-  }));
+  return (data ?? []).map((r) => {
+    const goLive = (r.toast_sales_start_date as string | null) ?? null;
+    // Same rule as the labor/kitchen loaders (§1, addendum 2026-08-25): the
+    // store's own go-live is the only floor. A constant fallback here is the
+    // exact defect that hid Houston's pre-July punches — a sales-enabled
+    // store without a go-live is a config error that fails loudly.
+    if (!goLive) {
+      throw new Error(
+        `Toast sales: ${String(r.location_code)} is sales-enabled but has no toast_sales_start_date — set the store's go-live before ingesting`
+      );
+    }
+    return {
+      id: r.id as string,
+      name: r.name as string,
+      location_code: r.location_code as string,
+      toast_restaurant_guid: r.toast_restaurant_guid as string,
+      toast_sales_start_date: goLive,
+    };
+  });
 }
 
 export interface ToastIngestSummary {
