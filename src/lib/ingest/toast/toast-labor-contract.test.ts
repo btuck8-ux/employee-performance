@@ -228,3 +228,31 @@ test("§1: the resolved window is logged and returned on every run", () => {
   assert.match(laborSrc, /window_start: o\.window_start/);
   assert.match(laborSrc, /window_end: o\.window_end/);
 });
+
+test("a route named backfill BACKFILLS: floor intent by default; the cron stays incremental", () => {
+  // 2026-08-25, second window defect: once punches exist, the shared
+  // no-since path is always the 3-day high-water incremental — the estate
+  // re-backfill silently ran window_start 2026-08-22 at every store. The
+  // backfill route must declare floor intent; the cron must never.
+  assert.match(backfillSrc, /fromFloor: !since/);
+  assert.doesNotMatch(cronSrc, /fromFloor/);
+  // The intent branch precedes the high-water branch in the resolution.
+  const fromFloorBranch = laborSrc.indexOf("options.fromFloor");
+  const highWater = laborSrc.indexOf("lastSuccessfulWindowEnd(supabase, TOAST_LABOR_SOURCE");
+  assert.ok(
+    fromFloorBranch > 0 && highWater > 0 && fromFloorBranch < highWater,
+    "fromFloor must be resolved before the incremental high-water mark"
+  );
+});
+
+test("an explicit since WINS over fromFloor — the intent flag can never widen a deliberate window", () => {
+  // Codex 2026-08-25: source-order alone would pass if a bare
+  // `if (options.fromFloor)` overrode since. Pin the branch STRUCTURE:
+  // fromFloor is an `else if` behind the since branch, so when both are
+  // set the resolved start is the (go-live-floored) since, never the floor.
+  assert.match(
+    laborSrc,
+    /if \(options\.since\) \{\s*\n\s*sinceDate =\s*\n?\s*options\.since > loc\.labor_start_date \? options\.since : loc\.labor_start_date;\s*\n\s*\} else if \(options\.fromFloor\) \{/,
+    "fromFloor must be the else-if behind the since branch"
+  );
+});

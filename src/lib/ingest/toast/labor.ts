@@ -667,6 +667,14 @@ export interface ToastLaborOptions {
   /** Operator window-start override (YYYY-MM-DD), still floored at each
    * store's go-live. The beat-1 backfill lever passes the floor itself. */
   since?: string;
+  /** Window INTENT (2026-08-25, post-re-backfill defect): true = start at
+   * each store's go-live floor regardless of the high-water mark. Without
+   * this, once punches exist the no-since path is ALWAYS the incremental
+   * high-water branch — the estate "re-backfill" silently ran a 3-day
+   * window, the same narrower-than-the-caller-expects shape §1 fixed. The
+   * backfill route sets this whenever no explicit since is given; the cron
+   * never does (incremental is its correct behaviour). */
+  fromFloor?: boolean;
 }
 
 export async function runToastLaborIngest(
@@ -706,6 +714,11 @@ export async function runToastLaborIngest(
     if (options.since) {
       sinceDate =
         options.since > loc.labor_start_date ? options.since : loc.labor_start_date;
+    } else if (options.fromFloor) {
+      // Explicit backfill intent: the store's own go-live, always. The
+      // "first run starts at the floor" fallback below can never fire again
+      // once a store has a successful run, so a backfill must say so.
+      sinceDate = loc.labor_start_date;
     } else {
       const prior = await lastSuccessfulWindowEnd(supabase, TOAST_LABOR_SOURCE, loc.id);
       if (prior) {
