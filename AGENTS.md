@@ -111,6 +111,13 @@ derivable from the code alone.
   cross-project key; EPD mints `employee_code` (location-scoped). CP-side
   uncoded hires = triage aliases before minting new codes (the Lortz
   class).
+- **`/api/scores` is STORED, `/api/scores/range` is LIVE.** Consumers (CP
+  09:00 UTC, THQ 11:15 UTC) poll the STORED one — range is polled by
+  neither. A deploy changes what the next recompute produces; it changes
+  nothing already stored. A restatement is not real until
+  `performance_records` is rewritten (announce it with the `computed_at`
+  watermark it will be visible above). This reached a partner wrong once —
+  pinned by `scores-wire-contract.test.ts`.
 - NOLA: `actuals_source='cake'` — excluded from the 7shifts time fan-out;
   its labor rides the cake-nightly Playwright Action. `pos_via_7shifts` =
   Houston only — **superseded for SALES by Tucker's 2026-08-25 ruling**:

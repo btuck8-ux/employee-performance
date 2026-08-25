@@ -29,7 +29,7 @@ import {
 } from "./runs";
 import { ingestTimePunches } from "./time";
 import { ingestReceipts } from "./receipts";
-import { ingestSevenShiftsShifts } from "./shifts";
+import { ingestSevenShiftsShifts, tombstoneAlertReasons } from "./shifts";
 import { maybeSendFailureAlert } from "./alert";
 import { emptyStreakReasons } from "./streak";
 import {
@@ -149,6 +149,10 @@ export async function runNightlyIngest(): Promise<NightlyIngestSummary> {
   const alert = await maybeSendFailureAlert(outcomes, [
     ...streakReasons,
     ...coverageReasons(coverage, coverageWindow.label),
+    // An implausible tombstone share must reach a human (2026-08-25): the
+    // pruned denominator the flip rests on depends on tombstoning being
+    // right, and its guards were never exercised before tonight.
+    ...tombstoneAlertReasons(outcomes),
   ]);
 
   const byStatus: Record<string, number> = {};

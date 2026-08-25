@@ -7,6 +7,15 @@ import { LOCATION_CODES } from "@/lib/location-codes";
  * EPD performance-scores feed (consumers: Culture Pulse daily 09:00 UTC,
  * Training HQ daily 11:15 UTC).
  *
+ * ⚠️ THIS IS THE CONSUMER WIRE, AND IT IS STORED (2026-08-25, pinned).
+ * This route reads v_employee_scores → performance_records; computed_at IS
+ * pr.updated_at. Its sibling /api/scores/range computes LIVE per request
+ * and is polled by NEITHER consumer. The distinction reached a partner the
+ * wrong way once: a deploy changes what the next recompute will produce —
+ * it changes NOTHING already stored. A restatement is not real on this
+ * wire until performance_records is rewritten, and it should be announced
+ * with the computed_at watermark it will be visible above.
+ *
  * Read-only REST endpoint backed by the `v_employee_scores` view (and
  * `v_employee_scores_latest` for the default `period=latest`). Consumers pull
  * per-employee Customer Service Score + Total Impact Score plus, since
