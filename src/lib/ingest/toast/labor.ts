@@ -501,6 +501,16 @@ export async function ingestToastLaborForLocation(
   // Mutual-exclusion evidence (spec 2026-08-25 §5b): days each candidate
   // already punched via their OWN mapped GUID(s). Built from the punch
   // index the matcher already holds — no extra reads.
+  //
+  // ⚠️ LAYERING (Codex 2026-08-25): in THIS pipeline §5a already removes
+  // every punched-mapping owner from candidacy at the ACCOUNT level, so
+  // the day-level exclusion below is defense-in-depth here — its live
+  // count is expected to be 0 (zero-punch-mapping owners have no punch
+  // days; unmapped candidates have no own GUID). The primitive earns its
+  // keep in scoreTimeAwareMatch itself, which full-pool scorings (the
+  // 6c62e9c8 re-rank, audit tooling) call WITHOUT the §5a filter — and it
+  // guards this pipeline if §5a's shape ever changes. A 0 in the evidence
+  // means "no conflicts among the residual pool", not "no conflicts".
   const ownPunchDaysByEmployee = new Map<string, Set<string>>();
   for (const r of xwalkRows) {
     const dates = punchIndex.inByGuid.get(r.toast_employee_guid);
@@ -564,6 +574,7 @@ export async function ingestToastLaborForLocation(
             verdict.runner_up?.median_clockin_delta_min ?? null,
           candidate_pool_size: verdict.candidate_pool_size,
           eligible_count: verdict.eligible_count,
+          mutually_excluded_count: verdict.mutually_excluded_count,
           thresholds: {
             min_overlap_days: BEHAVIOURAL_MIN_OVERLAP_DAYS,
             time_ceiling_min: TIME_CEILING_MIN,

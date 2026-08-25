@@ -25,6 +25,15 @@ import type { AdminClient } from "@/lib/ingest/sevenshifts/crosswalk";
 
 const BACK = "/dashboard/admin/toast-crosswalk";
 
+/** Active state renders on the employees list, the profile, and the
+ * location page — revalidate them all (the employee-status-actions
+ * doctrine; Codex 2026-08-25), not just this surface. */
+function revalidatePaths(employeeId: string): void {
+  revalidatePath(BACK);
+  revalidatePath("/dashboard/employees");
+  revalidatePath(`/dashboard/employees/${employeeId}`);
+}
+
 function backWith(params: Record<string, string>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) p.set(k, v);
@@ -269,7 +278,7 @@ export async function archiveEmployeeAction(formData: FormData) {
     redirect(backWith({ error: `Archive failed: ${error.message}` }));
   }
 
-  revalidatePath(BACK);
+  revalidatePaths(employeeId);
   redirect(
     backWith({ archived: "1", code: String(emp.employee_code), emp: employeeId })
   );
@@ -291,11 +300,16 @@ export async function unarchiveEmployeeAction(formData: FormData) {
     redirect(backWith({ error: "Unarchive: no employee selected." }));
   }
 
-  const { data: emp } = await supabase
+  const { data: emp, error: empErr } = await supabase
     .from("employees")
     .select("employee_code")
     .eq("id", employeeId)
     .maybeSingle();
+  if (empErr || !emp) {
+    // Mirrors the archive path's guard (Codex 2026-08-25): a stale or
+    // wrong id must not redirect as success after a zero-row update.
+    redirect(backWith({ error: "Unarchive: employee lookup failed." }));
+  }
 
   const { error } = await supabase
     .from("employees")
@@ -305,6 +319,6 @@ export async function unarchiveEmployeeAction(formData: FormData) {
     redirect(backWith({ error: `Unarchive failed: ${error.message}` }));
   }
 
-  revalidatePath(BACK);
-  redirect(backWith({ unarchived: "1", code: String(emp?.employee_code ?? "") }));
+  revalidatePaths(employeeId);
+  redirect(backWith({ unarchived: "1", code: String(emp.employee_code) }));
 }
