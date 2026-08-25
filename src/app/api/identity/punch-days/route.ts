@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { timezoneForLocationCode } from "@/lib/ingest/sevenshifts/tz";
+import { isValidIsoDate } from "@/lib/range-feed";
 import {
   addDaysIso,
   buildCoverageEntry,
@@ -39,10 +40,14 @@ import {
  * NOLA), store-local dates by construction. A shift whose local end date
  * exceeds its start date marks BOTH dates (after-midnight landings).
  *
- * Auth + envelope: `Authorization: Bearer <SCORES_FEED_TOKEN>` and the
+ * Auth + envelope: `Authorization: Bearer <SCORES_FEED_TOKEN>`; the
  * identity feed's `{ data, pagination: { limit, offset, count, has_more } }`
- * envelope; rides proxy.ts's existing /api/identity prefix carve-out
- * (startsWith — no proxy diff, the /api/scores/range pattern).
+ * envelope, DELIBERATELY EXTENDED with top-level `range` and `coverage`
+ * keys — coverage is this feed's raison d'être, not drift; data/pagination
+ * stay shape-compatible with the identity feed. Rides proxy.ts's existing
+ * /api/identity prefix carve-out (startsWith — no proxy diff, the
+ * /api/scores/range pattern). Wire shape pinned in punch-days.test.ts —
+ * changes need CP-side coordination like every cross-project feed.
  */
 
 export const dynamic = "force-dynamic";
@@ -52,7 +57,6 @@ export const maxDuration = 300;
 
 const MAX_LIMIT = 1000;
 const PAGE = 1000;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** Range cap, matching the range feed's window bound. */
 const MAX_RANGE_DAYS = 366;
 
@@ -77,9 +81,9 @@ export async function GET(request: Request) {
   const locationParam = url.searchParams.get("location_code");
   const employeeCode = url.searchParams.get("employee_code");
 
-  if (!from || !to || !ISO_DATE.test(from) || !ISO_DATE.test(to)) {
+  if (!from || !to || !isValidIsoDate(from) || !isValidIsoDate(to)) {
     return NextResponse.json(
-      { error: "from and to are required as YYYY-MM-DD" },
+      { error: "from and to are required as calendar-valid YYYY-MM-DD" },
       { status: 400 }
     );
   }
@@ -212,8 +216,14 @@ export async function GET(request: Request) {
         .in("location_id", scopeIds)
         .gte("entry_date", fetchFrom)
         .lte("entry_date", to)
+        // TOTAL order (the #36 lesson, and the view emits multiple rows per
+        // (employee, date) at Toast stores — per punch): without the
+        // shift_start/shift_end tiebreakers, offset paging can skip or
+        // duplicate rows at page boundaries (Codex should-fix 2026-08-25).
         .order("employee_id", { ascending: true })
         .order("entry_date", { ascending: true })
+        .order("shift_start", { ascending: true })
+        .order("shift_end", { ascending: true })
         .range(page, page + PAGE - 1);
       if (error) throw new Error(`v_worked_intervals read: ${error.message}`);
       for (const row of (data ?? []) as IntervalRow[]) {

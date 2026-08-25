@@ -95,7 +95,7 @@ test("window_end earlier than the clock bound wins (LEAST) — a clamped fetch n
     "2026-08-25T20:00:00Z",
     "America/Denver"
   );
-  // local date of window_end = 2026-08-19 (17:00 on 08-19 Denver) < 08-24.
+  // local date of window_end = 2026-08-19 (18:00 on 08-19 in MDT) < 08-24.
   assert.equal(through, "2026-08-19");
 });
 
@@ -175,6 +175,24 @@ test("a fully-covered range carries not_answerable: null — nothing withheld, n
   );
   assert.deepEqual(entry.answerable, { from: "2026-08-01", to: "2026-08-20" });
   assert.equal(entry.not_answerable, null);
+});
+
+test("exact boundaries: coverage_through == rangeTo is fully answerable; == rangeFrom - 1 is fully not", () => {
+  const run = {
+    window_end: "2026-08-25T09:55:00Z",
+    finished_at: "2026-08-25T09:55:00Z",
+  }; // coverage_through 2026-08-24 in Denver
+  const exact = buildCoverageEntry(
+    "CPD", "toast", run, "America/Denver", "2026-08-01", "2026-08-24"
+  );
+  assert.deepEqual(exact.answerable, { from: "2026-08-01", to: "2026-08-24" });
+  assert.equal(exact.not_answerable, null);
+
+  const justPast = buildCoverageEntry(
+    "CPD", "toast", run, "America/Denver", "2026-08-25", "2026-08-25"
+  );
+  assert.equal(justPast.answerable, null);
+  assert.deepEqual(justPast.not_answerable, { from: "2026-08-25", to: "2026-08-25" });
 });
 
 // ---------------------------------------------------------------------------
@@ -265,4 +283,61 @@ test("route: punch source of record is v_worked_intervals — the flip's single 
   assert.match(routeSrc, /from\("v_worked_intervals"\)/);
   assert.doesNotMatch(routeSrc, /from\("toast_time_entries"\)/);
   assert.doesNotMatch(routeSrc, /from\("time_entries"\)/);
+});
+
+test("route: interval paging carries a TOTAL order — the view emits multiple rows per (employee, date)", () => {
+  // Without the shift tiebreakers, offset paging can skip or duplicate rows
+  // at page boundaries (Codex should-fix 2026-08-25; the #36 lesson).
+  const q = routeSrc.indexOf('from("v_worked_intervals")');
+  const block = routeSrc.slice(q, routeSrc.indexOf(".range(", q));
+  for (const key of ["employee_id", "entry_date", "shift_start", "shift_end"]) {
+    assert.ok(block.includes(`order("${key}"`), `interval paging orders by ${key}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Wire-shape pins — cross-project contract weight, like scores-feed-contract.
+// ---------------------------------------------------------------------------
+
+test("wire: top-level envelope is exactly range + coverage + data + pagination (extension is deliberate, pinned)", () => {
+  // The identity envelope (data + pagination) deliberately extended with
+  // range + coverage — coverage is the feed's raison d'être. Pinning the
+  // extension is what separates it from drift.
+  const ret = routeSrc.indexOf("return NextResponse.json({\n      range:");
+  assert.ok(ret > 0, "success response starts with the pinned envelope");
+  const block = routeSrc.slice(ret, routeSrc.indexOf("});", ret));
+  for (const key of ["range:", "coverage,", "data: pageRows", "pagination:"]) {
+    assert.ok(block.includes(key), `envelope carries ${key}`);
+  }
+});
+
+test("wire: coverage entry fields are the CoverageEntry contract — every field, no omissions", () => {
+  const libSrc = read("src/lib/punch-days.ts");
+  const iface = libSrc.indexOf("export interface CoverageEntry");
+  const block = libSrc.slice(iface, libSrc.indexOf("\n}", iface));
+  for (const field of [
+    "location_code",
+    "punch_source",
+    "coverage_through",
+    "state",
+    "answerable",
+    "not_answerable",
+  ]) {
+    assert.ok(block.includes(field), `CoverageEntry carries ${field}`);
+  }
+  assert.match(block, /"ok" \| "no_punch_source" \| "no_successful_run"/);
+});
+
+test("wire: data rows carry both CP join keys (employee_code AND seven_shifts_user_id) plus location + punch_days", () => {
+  const iface = routeSrc.indexOf("interface DataRow");
+  const block = routeSrc.slice(iface, routeSrc.indexOf("\n    }", iface));
+  for (const field of [
+    "employee_code",
+    "employee_name",
+    "seven_shifts_user_id",
+    "location_code",
+    "punch_days",
+  ]) {
+    assert.ok(block.includes(field), `data row carries ${field}`);
+  }
 });

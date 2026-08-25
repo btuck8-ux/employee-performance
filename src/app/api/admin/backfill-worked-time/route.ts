@@ -10,6 +10,7 @@ import {
   quarterCoverageWindow,
 } from "@/lib/ingest/sevenshifts/coverage";
 import { currentQuarter, quarterOfDate } from "@/lib/quarter";
+import { isValidIsoDate } from "@/lib/range-feed";
 
 /**
  * Stage 2 — one-shot WORKED-TIME backfill for a single 7shifts location.
@@ -89,14 +90,13 @@ export async function GET(request: Request) {
       { status: 400 }
     );
   }
-  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
   for (const [name, value] of [
     ["entry_from", entryFromParam],
     ["entry_to", entryToParam],
   ] as const) {
-    if (value && !ISO_DATE.test(value)) {
+    if (value && !isValidIsoDate(value)) {
       return NextResponse.json(
-        { error: `${name} must be YYYY-MM-DD (got "${value}")` },
+        { error: `${name} must be a calendar-valid YYYY-MM-DD date (got "${value}")` },
         { status: 400 }
       );
     }
