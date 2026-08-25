@@ -157,8 +157,18 @@ export function computeMetricsFromEntries(
   }
 
   let covered = 0;
+  // The guard's cover count is CAP-BOUNDED (Codex blocker, 2026-08-25):
+  // covered_shifts itself deliberately counts beyond the cap (a confirmed
+  // worked shift is a covered shift whenever it happened), but the guard
+  // compares covers against the CAPPED scheduled denominator — post-cap
+  // covers in the ratio would null attendance for someone who simply
+  // worked extra shifts after the scored-through date.
+  let coveredThroughCap = 0;
   for (const date of workedByDate.keys()) {
-    if (!scheduledByDate.has(date)) covered += 1;
+    if (!scheduledByDate.has(date)) {
+      covered += 1;
+      if (date <= cap) coveredThroughCap += 1;
+    }
   }
 
   const scheduledCount = attended + missed;
@@ -174,7 +184,7 @@ export function computeMetricsFromEntries(
   // person's working days were unscheduled, and `covered >= 5` keeps a
   // part-timer's 2-cover week from tripping it. Counts stay real; only
   // the percentages go not-computable.
-  const coverDominated = covered > scheduledCount && covered >= 5;
+  const coverDominated = coveredThroughCap > scheduledCount && coveredThroughCap >= 5;
 
   const attendance_pct =
     !coverDominated && scheduledCount > 0 ? (attended / scheduledCount) * 100 : null;

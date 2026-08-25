@@ -397,3 +397,28 @@ test("cover-ratio guard does NOT fire on normal shapes — real absence still sc
   });
   assert.equal(p.cover_dominated, false);
 });
+
+test("cover-ratio guard is CAP-BOUNDED: post-cap covers never null a legitimate employee (Codex blocker)", () => {
+  // 4 scheduled+worked days, 4 in-window covers, 2 POST-cap covers. The
+  // published covered_shifts counts all 6; the guard's ratio must see only
+  // the 4 capped covers — 4 > 4 is false, no trip. (Uncapped it would read
+  // 6 > 4 && 6 >= 5 → a wrong null for someone who worked extra shifts
+  // after the scored-through date.)
+  const entries: ReturnType<typeof entry>[] = [];
+  for (let d = 1; d <= 4; d++) {
+    entries.push(entry(`2026-06-0${d}`, "scheduled", "09:00:00"));
+    entries.push(entry(`2026-06-0${d}`, "worked", "08:59:00"));
+  }
+  for (let d = 10; d <= 13; d++) {
+    entries.push(entry(`2026-06-${d}`, "worked", "09:00:00")); // capped covers
+  }
+  entries.push(entry("2026-07-01", "worked", "09:00:00")); // post-cap cover
+  entries.push(entry("2026-07-02", "worked", "09:00:00")); // post-cap cover
+  const m = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-06-30",
+    punchesTimeClock: true,
+  });
+  assert.equal(m.covered_shifts, 6, "the published count stays uncapped");
+  assert.equal(m.cover_dominated, false, "the guard ratio is capped");
+  assert.equal(m.attendance_pct, 100);
+});
