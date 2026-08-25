@@ -28,17 +28,19 @@ test("dry-run is the default; the report returns BEFORE any write path", () => {
   );
 });
 
-test("write requires confirm_quarters; pre-2026 quarters require override_frozen_quarter — both named exactly", () => {
+test("write requires confirm_quarters, named exactly; frozen-ness is the ASSET's guard, not this caller's", () => {
   assert.match(routeSrc, /confirm_quarters/);
-  assert.match(routeSrc, /year < 2026/);
-  assert.match(routeSrc, /override_frozen_quarter/);
-  // Both guards precede the write in the GET body.
   const body = routeSrc.indexOf("export async function GET");
-  const frozen = routeSrc.indexOf("override_frozen_quarter", body);
   const confirm = routeSrc.indexOf('searchParams.get("confirm_quarters")', body);
   const writeCall = routeSrc.indexOf("runRecomputeJobs(", body);
-  assert.ok(frozen > 0 && frozen < writeCall, "frozen guard precedes the write");
   assert.ok(confirm > 0 && confirm < writeCall, "confirm guard precedes the write");
+  // The frozen-quarter check moved INTO recomputePerformanceForQuarter
+  // (frozen-quarter spec 2026-08-25 §1b): the lever's duplicate hardcoded
+  // year comparison is DELETED — exactly one implementation — and the
+  // override merely threads through as allowFrozenQuarter.
+  assert.doesNotMatch(routeSrc, /year < 2026/);
+  assert.match(routeSrc, /override_frozen_quarter/);
+  assert.match(routeSrc, /allowFrozenQuarter:\s*overrideFrozenQuarter/);
   // Explicit params, never defaulted to "current".
   assert.doesNotMatch(routeSrc, /currentQuarter\(/);
 });

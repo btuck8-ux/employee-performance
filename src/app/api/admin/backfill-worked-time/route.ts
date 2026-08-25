@@ -43,15 +43,27 @@ import { currentQuarter } from "@/lib/quarter";
  * backfill, and returns before/after worked-day coverage for that store so the
  * operator can verify the hole closed before moving to the next.
  *
- * WINDOW SEMANTICS: ingestTimePunches pulls via `modified_since = windowStart`
- * (not a punch-date range). A quarter-start windowStart therefore re-fetches
- * every punch modified since the quarter began, which in practice covers the
- * quarter's worked days (punches finalize at clock-out within the quarter). An
- * optional `since=YYYY-MM-DD` override widens/narrows that floor when needed.
+ * WINDOW SEMANTICS — TWO DIFFERENT AXES (frozen-quarter spec 2026-08-25 §2):
+ *
+ *   `since=YYYY-MM-DD`  bounds MODIFICATION time — the 7shifts fetch
+ *     (`modified_since = windowStart`). It says "re-pull punches edited
+ *     since this date". It CANNOT express "this quarter only": a punch
+ *     worked in October and edited after April comes back under
+ *     since=2026-04-01, which is how one intended-for-Q2 run fanned its
+ *     recompute across four quarters (2026-08-25 incident).
+ *
+ *   `entry_from` / `entry_to` (YYYY-MM-DD, inclusive) bound ENTRY DATE —
+ *     when the work actually happened. Applied to the collapsed punches
+ *     after fetch, before the write and before the recompute quarter set is
+ *     derived. This is the parameter that means "Q2 only".
+ *
+ * The response reports BOTH windows — the modification window fetched and
+ * the entry-date window written. The incident run reported only the former,
+ * which is why nothing looked wrong at the time.
  *
  * AUTH: Bearer <CRON_SECRET>, mirroring the nightly cron route. Invoke per store:
  *   curl -H "Authorization: Bearer $CRON_SECRET" \
- *     "$BASE/api/admin/backfill-worked-time?location=COS"
+ *     "$BASE/api/admin/backfill-worked-time?location=COS&entry_from=2026-04-01&entry_to=2026-06-30"
  */
 
 export const dynamic = "force-dynamic";
@@ -66,12 +78,39 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const locationParam = (url.searchParams.get("location") ?? "").trim();
   const sinceParam = (url.searchParams.get("since") ?? "").trim();
+  const entryFromParam = (url.searchParams.get("entry_from") ?? "").trim();
+  const entryToParam = (url.searchParams.get("entry_to") ?? "").trim();
   if (!locationParam) {
     return NextResponse.json(
       { error: "Missing ?location=<location_code> (one location per invocation)" },
       { status: 400 }
     );
   }
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+  for (const [name, value] of [
+    ["entry_from", entryFromParam],
+    ["entry_to", entryToParam],
+  ] as const) {
+    if (value && !ISO_DATE.test(value)) {
+      return NextResponse.json(
+        { error: `${name} must be YYYY-MM-DD (got "${value}")` },
+        { status: 400 }
+      );
+    }
+  }
+  if (entryFromParam && entryToParam && entryFromParam > entryToParam) {
+    return NextResponse.json(
+      { error: `entry_from (${entryFromParam}) must not be after entry_to (${entryToParam})` },
+      { status: 400 }
+    );
+  }
+  const entryWindow =
+    entryFromParam || entryToParam
+      ? {
+          ...(entryFromParam ? { from: entryFromParam } : {}),
+          ...(entryToParam ? { to: entryToParam } : {}),
+        }
+      : undefined;
 
   try {
     const supabase = createAdminClient();
@@ -99,7 +138,11 @@ export async function GET(request: Request) {
       );
     }
 
-    // Window: default to the current quarter start; allow an explicit floor.
+    // MODIFICATION window: default to the current quarter start; allow an
+    // explicit floor. This bounds which punches the fetch returns (edited
+    // since the floor) — NOT when the work happened. entryWindow above is
+    // the entry-date bound; see the header for why they must not be
+    // conflated.
     const windowStart = sinceParam
       ? `${sinceParam}T00:00:00.000Z`
       : currentQuarter().periodStart.toISOString();
@@ -113,7 +156,9 @@ export async function GET(request: Request) {
     const coverageBefore = await quarterWorkedCoverage(supabase, [loc], coverageWindow);
 
     const runId = await startRun(supabase, "7shifts_time", loc.id, windowStart, windowEnd);
-    const outcome = await ingestTimePunches(supabase, loc, windowStart, windowEnd);
+    const outcome = await ingestTimePunches(supabase, loc, windowStart, windowEnd, {
+      entryWindow,
+    });
     await finishRun(supabase, runId, outcome);
 
     const coverageAfter = await quarterWorkedCoverage(supabase, [loc], coverageWindow);
@@ -121,7 +166,13 @@ export async function GET(request: Request) {
     return NextResponse.json({
       backfill: "worked-time",
       location_code: loc.location_code,
-      window: { start: windowStart, end: windowEnd },
+      // Both windows, always (§2): what was FETCHED (modification time) and
+      // what was WRITTEN (entry date). null entry bounds = unbounded.
+      modification_window_fetched: { start: windowStart, end: windowEnd },
+      entry_window_written: {
+        from: entryWindow?.from ?? null,
+        to: entryWindow?.to ?? null,
+      },
       identities,
       outcome: {
         status: outcome.status,

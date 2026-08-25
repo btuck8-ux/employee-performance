@@ -10,7 +10,10 @@ import {
   fetchTotalImpactWeights,
   type TotalImpactWeights,
 } from "@/lib/total-impact-score";
-import { recomputePerformanceForQuarter } from "@/lib/performance-recompute";
+import {
+  recomputePerformanceForQuarter,
+  FROZEN_REFUSAL_PREFIX,
+} from "@/lib/performance-recompute";
 import { fetchMetricTargets, TARGET_METRICS } from "@/lib/metric-targets";
 import type { Quarter } from "@/lib/quarter";
 
@@ -107,6 +110,11 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
   // to save weights without rerunning the heavy job.
   let recomputed = 0;
   let failures = 0;
+  // Frozen quarters the walk skipped (frozen-quarter spec 2026-08-25 §1b):
+  // this recompute walks EVERY performance_records row in every quarter, so
+  // the asset-side guard refusing the frozen ones is the guard WORKING — it
+  // must be surfaced to the operator, not swallowed into the failure count.
+  const frozenSkipped = new Set<string>();
   if (recompute) {
     const csWeights: CustomerServiceWeights = await fetchCustomerServiceWeights(supabase);
     const { data: prRows } = await supabase
@@ -142,7 +150,9 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
           { csWeights }
         );
         if (result.ok) recomputed += 1;
-        else failures += 1;
+        else if (result.error.startsWith(FROZEN_REFUSAL_PREFIX)) {
+          frozenSkipped.add(`Q${job.quarter}-${job.year}`);
+        } else failures += 1;
       }
     }
     await Promise.all(
@@ -159,6 +169,9 @@ export async function updateCustomerServiceWeightsAction(formData: FormData) {
   if (recompute) {
     params.set("recomputed", String(recomputed));
     if (failures > 0) params.set("failures", String(failures));
+    if (frozenSkipped.size > 0) {
+      params.set("frozen_skipped", [...frozenSkipped].sort().join(","));
+    }
   }
   redirect(`${back}?${params.toString()}`);
 }
@@ -238,6 +251,8 @@ export async function updateTotalImpactWeightsAction(formData: FormData) {
 
   let recomputed = 0;
   let failures = 0;
+  // Frozen skips surfaced, not swallowed — see the CS action's note.
+  const frozenSkipped = new Set<string>();
   if (recompute) {
     // Reuse pre-fetched CS weights too so each recompute job avoids two
     // separate singleton round-trips.
@@ -274,7 +289,9 @@ export async function updateTotalImpactWeightsAction(formData: FormData) {
           { csWeights, tisWeights }
         );
         if (result.ok) recomputed += 1;
-        else failures += 1;
+        else if (result.error.startsWith(FROZEN_REFUSAL_PREFIX)) {
+          frozenSkipped.add(`Q${job.quarter}-${job.year}`);
+        } else failures += 1;
       }
     }
     await Promise.all(
@@ -291,6 +308,9 @@ export async function updateTotalImpactWeightsAction(formData: FormData) {
   if (recompute) {
     params.set("tis_recomputed", String(recomputed));
     if (failures > 0) params.set("tis_failures", String(failures));
+    if (frozenSkipped.size > 0) {
+      params.set("tis_frozen_skipped", [...frozenSkipped].sort().join(","));
+    }
   }
   redirect(`${back}?${params.toString()}`);
 }

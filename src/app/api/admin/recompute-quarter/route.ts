@@ -37,10 +37,14 @@ import { quarterInfo, type Quarter } from "@/lib/quarter";
  * GUARDS (the gap-filler's discipline):
  *  - dry_run is the DEFAULT; a missing write param means report only.
  *  - write=1 requires confirm_quarters echoing the exact quarter (Q3-2026).
- *  - any quarter earlier than 2026 Q1 additionally requires
- *    override_frozen_quarter echoing it — Q3/Q4 2025 are frozen by
- *    agreement with Training HQ, and recomputing one must be a deliberate,
- *    named act, never a side effect of a wide parameter.
+ *  - FROZEN QUARTERS (report_periods.frozen, mig 063): the guard lives in
+ *    recomputePerformanceForQuarter — the asset, not this caller (frozen-
+ *    quarter spec 2026-08-25 §1; the lever's own duplicate check was
+ *    deleted so there is exactly ONE implementation). This route only
+ *    threads override_frozen_quarter through as allowFrozenQuarter; a
+ *    frozen-quarter write without it fails per job, loudly, in
+ *    recompute_failures. Q3/Q4 2025 are frozen by agreement with Training
+ *    HQ, and recomputing one must be a deliberate, named act.
  *  - one location per invocation, like backfill-worked-time.
  *
  * AUTH: Bearer <CRON_SECRET>.
@@ -49,7 +53,7 @@ import { quarterInfo, type Quarter } from "@/lib/quarter";
  *     &year=2026&quarter=3     both explicit — never defaulted to "current"
  *     &write=1                 optional; default is the dry-run report
  *     &confirm_quarters=Q3-2026            required when write=1
- *     &override_frozen_quarter=Q4-2025     required for pre-2026 quarters
+ *     &override_frozen_quarter=Q4-2025     required to write a frozen quarter
  */
 
 export const dynamic = "force-dynamic";
@@ -111,18 +115,10 @@ export async function GET(request: Request) {
   const quarter = quarterNum as Quarter;
   const quarterLabel = `Q${quarter}-${year}`;
 
-  // Frozen-quarter guard: pre-2026 recomputes must be named acts.
-  if (year < 2026) {
-    const override = url.searchParams.get("override_frozen_quarter");
-    if (override !== quarterLabel) {
-      return NextResponse.json(
-        {
-          error: `quarters before 2026 Q1 are frozen by the THQ arrangement — recomputing one requires override_frozen_quarter="${quarterLabel}", named exactly`,
-        },
-        { status: 400 }
-      );
-    }
-  }
+  // Frozen-quarter handling moved INTO recomputePerformanceForQuarter (mig
+  // 063 + frozen-quarter spec §1b) — the override just threads through.
+  const overrideFrozenQuarter =
+    url.searchParams.get("override_frozen_quarter") ?? undefined;
   if (write) {
     const confirmed = url.searchParams.get("confirm_quarters");
     if (confirmed !== quarterLabel) {
@@ -397,12 +393,19 @@ export async function GET(request: Request) {
       year,
       quarter,
     }));
-    const rc = await runRecomputeJobs(supabase, locationId, jobs);
+    const rc = await runRecomputeJobs(supabase, locationId, jobs, {
+      allowFrozenQuarter: overrideFrozenQuarter,
+    });
 
+    // created / updated / skipped reported SEPARATELY (§3) — "employees
+    // touched" concealed two row-conjuring incidents.
     return NextResponse.json({
       ...summary,
       employees: reports,
       recomputed: rc.recomputed,
+      records_created: rc.created,
+      records_updated: rc.updated,
+      records_skipped_no_activity: rc.skipped_no_activity,
       recompute_failures: rc.failures,
     });
   } catch (err) {
