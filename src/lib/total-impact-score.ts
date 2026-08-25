@@ -249,22 +249,18 @@ export async function fetchTotalImpactWeights(
  * Sum of all worked hours at a location for tenure-proxy eligibility.
  * Eligibility rule: active = true AND all-time worked hours ≥ 40.
  *
- * We sum the four pay-bucket hour columns (regular + ot + double_ot +
- * holiday) on worked time_entries. These are populated by the time CSV
- * importer (see time-entries-import.ts column map). Returns 0 when there
- * are no worked entries.
+ * Reads v_worked_intervals (mig 058) — the flip's single worked-time
+ * source — whose `hours` column keeps the pay-bucket semantics on every
+ * side (time_entries' four buckets; Toast punches' regular+overtime).
+ * Reading the same view the SQL rankings function reads keeps TS↔SQL
+ * parity by construction. Returns 0 when there are no worked intervals.
  */
 export async function fetchAllTimeWorkedHours(
   supabase: SupabaseClient,
   employeeId: string,
   locationId: string
 ): Promise<number> {
-  type Row = {
-    regular_hours: number | string | null;
-    ot_hours: number | string | null;
-    double_ot_hours: number | string | null;
-    holiday_hours: number | string | null;
-  };
+  type Row = { hours: number | string | null };
   let total = 0;
   const PAGE = 1000;
   let from = 0;
@@ -272,19 +268,20 @@ export async function fetchAllTimeWorkedHours(
   // easily have a few thousand worked entries across multiple years.
   for (;;) {
     const { data, error } = await supabase
-      .from("time_entries")
-      .select("regular_hours, ot_hours, double_ot_hours, holiday_hours")
+      .from("v_worked_intervals")
+      .select("hours")
       .eq("employee_id", employeeId)
       .eq("location_id", locationId)
-      .eq("entry_type", "worked")
       .range(from, from + PAGE - 1);
     if (error) break;
     const rows = (data ?? []) as Row[];
     for (const r of rows) {
-      const toNum = (v: number | string | null) =>
-        v === null || v === undefined ? 0 : typeof v === "string" ? Number(v) || 0 : v;
-      total += toNum(r.regular_hours) + toNum(r.ot_hours)
-        + toNum(r.double_ot_hours) + toNum(r.holiday_hours);
+      total +=
+        r.hours === null || r.hours === undefined
+          ? 0
+          : typeof r.hours === "string"
+            ? Number(r.hours) || 0
+            : r.hours;
     }
     if (rows.length < PAGE) break;
     from += PAGE;
