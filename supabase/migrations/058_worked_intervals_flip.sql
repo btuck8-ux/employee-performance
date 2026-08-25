@@ -36,11 +36,14 @@
 -- pointed at the view; every scoring formula, the $175 cap, interval clamps,
 -- null rules, and signatures are byte-identical to their prior definitions.
 --
--- ⚠️ DELIBERATELY NOT REWIRED: compute_kitchen_speed (mig 043) matches
--- kitchen staff on time_entries.role — a 7shifts field that Toast punches do
--- not carry. Rewiring it needs a role-equivalence decision (Toast
--- job_reference_guid ↔ role) that is an OPEN TUCKER DECISION, not an
--- oversight. Kitchen Speed stays on time_entries until that ruling lands.
+-- ⚠️ DELIBERATELY NOT REWIRED — KNOWN LIMITATION (accepted, addendum 2 §3):
+-- compute_kitchen_speed (mig 043) matches kitchen staff on
+-- time_entries.role, a 7shifts field Toast punches do not carry. Kitchen
+-- Speed stays on time_entries. Closing it needs a maintained Toast
+-- jobReference→role-name mapping (Toast's /labor/v1/jobs endpoint names
+-- jobs per store) joined through toast_time_entries.job_reference_guid,
+-- plus a kitchen_role_config equivalence review — a small feature, not a
+-- blocker; the PDF is Kitchen Speed's only surface today.
 --
 -- ⚠️ FILE-ONLY until Cowork/Tucker applies via MCP (repo↔prod parity
 -- pattern). Unlike 055/056 this is NOT safe ahead of the code: it moves
@@ -89,9 +92,13 @@ update public.locations
 -- lives in time_entries, May onward in toast_time_entries. An
 -- all-or-nothing store split would silently erase every Toast store's
 -- pre-Toast history from tips, hours, and eligibility (and HOU's Feb–Apr).
--- A GUID store with a NULL go-live contributes nothing from either side
--- (both date comparisons are null) — the §1 loud-failure in the loaders is
--- the guard that config state never persists.
+-- A GUID store with a NULL go-live keeps its time_entries history (the
+-- `or cfg.go_live is null` branch below). ⚠️ LOAD-BEARING PAIR with §1's
+-- loud-failure in the ingest loaders (labor.ts header carries the mirror
+-- of this note): that failure guarantees no Toast rows can be ingested for
+-- such a store, which is exactly why keeping the time_entries path here is
+-- lossless. Neither behaviour is safe to remove without the other
+-- (addendum 2, 2026-08-25 §3).
 --
 -- `hours`: paid-hours buckets, NOT interval spans — time_entries carries
 -- regular/ot/double_ot/holiday and toast_time_entries carries
@@ -857,3 +864,40 @@ create policy seven_shifts_shifts_read on public.seven_shifts_shifts
     location_id = any ((select public.epd_authorized_location_ids())::uuid[])
     or employee_id = (select public.epd_self_employee_id())
   );
+
+-- ----------------------------------------------------------------------------
+-- 10) Column-level grants (addendum 2, 2026-08-25 §1 — Tucker's RLS ruling).
+--
+-- The Class-1 widening above is APPROVED: managers with location purview may
+-- see wages/tips (they already can, via time_entries.wage and the POS), and
+-- the employee tier is self-only BY POLICY SHAPE — epd_authorized_location_ids()
+-- returns '{}' for the user tier, so the purview disjunct can never match and
+-- only employee_id = epd_self_employee_id() remains. That isolation is the
+-- one property here that must survive every future change (pinned by test).
+--
+-- RLS is row-level; the wage/tip exposure question is COLUMN-level:
+-- toast_time_entries.raw carries the entire Toast payload (hourlyWage,
+-- declaredCashTips, nonCashTips, tipsWithheld, cashSales, nonCashSales,
+-- breaks, jobReference, employeeReference). Grant only what the view and
+-- the SA surfaces consume — never raw. The ingest writes ride the service
+-- role, whose grants are untouched.
+--
+-- seven_shifts_shifts gets the same narrowing by the same reasoning (its
+-- raw jsonb is the full 7shifts payload; no session-client surface reads
+-- it — judgement call recorded in PR #28). time_entries is deliberately
+-- LEFT table-wide: it has no vendor blob, its wage column is exactly the
+-- manager-visible exposure Tucker approved, and narrowing it would risk
+-- breaking existing surfaces for zero exposure gain.
+-- ----------------------------------------------------------------------------
+revoke select on public.toast_time_entries from authenticated;
+grant select (
+  toast_time_entry_guid, location_id, toast_employee_guid, employee_id,
+  entry_date, in_at, out_at, regular_hours, overtime_hours, deleted
+) on public.toast_time_entries to authenticated;
+
+revoke select on public.seven_shifts_shifts from authenticated;
+grant select (
+  seven_shifts_shift_id, location_id, employee_id, seven_shifts_user_id,
+  entry_date, start_at, end_at, role, deleted, draft, publish_status,
+  attendance_status, late_minutes, missing_upstream_since
+) on public.seven_shifts_shifts to authenticated;
