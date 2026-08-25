@@ -122,3 +122,56 @@ test("kitchen speed is deliberately NOT rewired (role-equivalence is an open Tuc
 test("the migration declares itself apply-WITH-the-flip — it moves published numbers", () => {
   assert.match(migSrc, /applied WITH the flip PR, not before/);
 });
+
+test("EMPLOYEE-TIER ISOLATION (non-negotiable, addendum 2 §5): both disjuncts, self-only by policy shape", () => {
+  // epd_authorized_location_ids() returns '{}' for the user tier, so the
+  // purview disjunct can never match for them — only self remains. That
+  // isolation is a property of the POLICY SHAPE: a purview-only policy
+  // would break self-service for the user tier; a self-only policy would
+  // break every manager surface. Both disjuncts must survive every future
+  // change to these tables.
+  for (const table of ["toast_time_entries", "seven_shifts_shifts"] as const) {
+    const policy = migSrc.slice(migSrc.indexOf(`create policy ${table}_read`));
+    const head = policy.slice(0, policy.indexOf(";"));
+    assert.match(
+      head,
+      /location_id = any \(\(select public\.epd_authorized_location_ids\(\)\)::uuid\[\]\)/,
+      `${table}_read must carry the purview disjunct`
+    );
+    assert.match(
+      head,
+      /or employee_id = \(select public\.epd_self_employee_id\(\)\)/,
+      `${table}_read must carry the self disjunct`
+    );
+  }
+});
+
+test("column grants (addendum 2 §1): raw is NEVER granted; only what the surfaces consume", () => {
+  // toast_time_entries.raw carries the entire Toast payload (hourlyWage,
+  // declared/nonCash tips, sales, breaks). RLS is row-level; this exposure
+  // is column-level.
+  assert.match(migSrc, /revoke select on public\.toast_time_entries from authenticated/);
+  assert.match(migSrc, /revoke select on public\.seven_shifts_shifts from authenticated/);
+  const grants = migSrc.match(/grant select \(([\s\S]*?)\) on public\.(toast_time_entries|seven_shifts_shifts) to authenticated/g) ?? [];
+  assert.equal(grants.length, 2, "one column-list grant per narrowed table");
+  for (const g of grants) {
+    assert.ok(!/\braw\b/.test(g), "raw must never appear in a grant list");
+  }
+  // The view's inputs stay granted — the metric must keep working.
+  assert.match(grants[0], /in_at, out_at, regular_hours, overtime_hours/);
+  assert.match(grants[1], /entry_date, start_at/);
+});
+
+test("v_location_flip_config exposes exactly its three config columns and nothing else", () => {
+  const def = migSrc.slice(
+    migSrc.indexOf("create or replace view public.v_location_flip_config"),
+    migSrc.indexOf("comment on view public.v_location_flip_config")
+  );
+  assert.match(def, /\(l\.toast_restaurant_guid is not null\) as is_toast/);
+  assert.match(def, /l\.toast_sales_start_date\s+as go_live/);
+  assert.match(def, /l\.timezone\s+as tz/);
+  // Nothing sensitive rides along: no name, no aliases, no tokens, and the
+  // select list is exactly four output columns (location_id + the three).
+  const selects = def.match(/\bas \w+/g) ?? [];
+  assert.equal(selects.length, 4, "location_id, is_toast, go_live, tz — and nothing else");
+});
