@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LOCATION_CODES } from "@/lib/location-codes";
+import { hasMore } from "@/lib/scores-paging";
 
 /**
  * EPD performance-scores feed (consumers: Culture Pulse daily 09:00 UTC,
@@ -41,6 +42,23 @@ export async function GET(request: Request) {
   if (denied) return denied;
 
   const url = new URL(request.url);
+
+  // `page` is NOT a supported parameter, and it must fail LOUDLY (THQ
+  // paging contract, 2026-08-25 §4a): their fallback path may send it, and
+  // a silently-ignored paging param serves page one forever with
+  // has_more=true — an infinite loop or silent truncation, the same
+  // undetectable-corruption class as the partial-order sort. Offset is the
+  // paging parameter.
+  if (url.searchParams.has("page")) {
+    return NextResponse.json(
+      {
+        error:
+          "page is not a supported parameter — use offset-based paging (pagination.offset / pagination.has_more)",
+      },
+      { status: 400 }
+    );
+  }
+
   const locationCode = url.searchParams.get("location_code");
   const period = url.searchParams.get("period") ?? "latest";
   const since = url.searchParams.get("since");
@@ -120,7 +138,7 @@ export async function GET(request: Request) {
       limit,
       offset,
       count: total,
-      has_more: offset + rows.length < total,
+      has_more: hasMore(offset, rows.length, total),
     },
   });
 }

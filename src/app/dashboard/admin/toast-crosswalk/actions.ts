@@ -25,6 +25,15 @@ import type { AdminClient } from "@/lib/ingest/sevenshifts/crosswalk";
 
 const BACK = "/dashboard/admin/toast-crosswalk";
 
+/** Active state renders on the employees list, the profile, and the
+ * location page — revalidate them all (the employee-status-actions
+ * doctrine; Codex 2026-08-25), not just this surface. */
+function revalidatePaths(employeeId: string): void {
+  revalidatePath(BACK);
+  revalidatePath("/dashboard/employees");
+  revalidatePath(`/dashboard/employees/${employeeId}`);
+}
+
 function backWith(params: Record<string, string>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) p.set(k, v);
@@ -208,4 +217,108 @@ export async function undoToastMatchAction(formData: FormData) {
   });
   revalidatePath(BACK);
   redirect(backWith({ undone: "1" }));
+}
+
+/**
+ * Archive / unarchive from the triage surface (spec 2026-08-25 §2, Tucker's
+ * request): departed people holding open queue entries or reverse-check
+ * rows. Sets active=false + stamps archived_at — NOTHING is deleted, and
+ * schedule rows are never pruned (Eland Tell's 3 shifts are 7shifts' real
+ * record and CP's departure-detector case; archiving is EPD's roster fact,
+ * the schedule is the vendor's record — never falsify one to tidy the
+ * other).
+ *
+ * ⚠️ THE CONSEQUENCE IS NAMED, NOT SILENT: archiving removes the
+ * employee's rows from v_employee_scores and therefore from CP's and THQ's
+ * feeds (the deactivation tombstone that will make that visible to THQ is
+ * queued behind their paging fix — spec §3). The form carries an explicit
+ * confirm field; the action refuses without it.
+ */
+export async function archiveEmployeeAction(formData: FormData) {
+  const { role, user, supabase } = await getSessionRole();
+  if (!user || role !== "system_admin") {
+    console.warn("[toast-crosswalk] archive denied (tier)", {
+      user_id: user?.id ?? null,
+      role,
+    });
+    redirect("/dashboard");
+  }
+
+  const employeeId = String(formData.get("employee_id") ?? "").trim();
+  const confirmed = formData.get("confirm_feed_consequence") === "1";
+  if (!employeeId) {
+    redirect(backWith({ error: "Archive: no employee selected." }));
+  }
+  if (!confirmed) {
+    redirect(
+      backWith({
+        error:
+          "Archive requires confirming the feed consequence — this removes the employee from CP's and THQ's score feeds.",
+      })
+    );
+  }
+
+  const { data: emp, error: empErr } = await supabase
+    .from("employees")
+    .select("id, employee_code, active")
+    .eq("id", employeeId)
+    .maybeSingle();
+  if (empErr || !emp) {
+    redirect(backWith({ error: `Archive: employee lookup failed.` }));
+  }
+  if (emp.active === false) {
+    redirect(backWith({ already: "1", code: String(emp.employee_code) }));
+  }
+
+  const { error } = await supabase
+    .from("employees")
+    .update({ active: false, archived_at: new Date().toISOString() })
+    .eq("id", employeeId);
+  if (error) {
+    redirect(backWith({ error: `Archive failed: ${error.message}` }));
+  }
+
+  revalidatePaths(employeeId);
+  redirect(
+    backWith({ archived: "1", code: String(emp.employee_code), emp: employeeId })
+  );
+}
+
+/** Undo for a just-archived employee — the undoToastMatchAction doctrine. */
+export async function unarchiveEmployeeAction(formData: FormData) {
+  const { role, user, supabase } = await getSessionRole();
+  if (!user || role !== "system_admin") {
+    console.warn("[toast-crosswalk] unarchive denied (tier)", {
+      user_id: user?.id ?? null,
+      role,
+    });
+    redirect("/dashboard");
+  }
+
+  const employeeId = String(formData.get("employee_id") ?? "").trim();
+  if (!employeeId) {
+    redirect(backWith({ error: "Unarchive: no employee selected." }));
+  }
+
+  const { data: emp, error: empErr } = await supabase
+    .from("employees")
+    .select("employee_code")
+    .eq("id", employeeId)
+    .maybeSingle();
+  if (empErr || !emp) {
+    // Mirrors the archive path's guard (Codex 2026-08-25): a stale or
+    // wrong id must not redirect as success after a zero-row update.
+    redirect(backWith({ error: "Unarchive: employee lookup failed." }));
+  }
+
+  const { error } = await supabase
+    .from("employees")
+    .update({ active: true, archived_at: null })
+    .eq("id", employeeId);
+  if (error) {
+    redirect(backWith({ error: `Unarchive failed: ${error.message}` }));
+  }
+
+  revalidatePaths(employeeId);
+  redirect(backWith({ unarchived: "1", code: String(emp.employee_code) }));
 }

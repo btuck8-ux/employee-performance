@@ -252,3 +252,39 @@ test("a zero-punch mapping leaves its employee eligible; a punched one blocks", 
   assert.equal(blocked.has("jesus"), false);
   assert.equal(blocked.has("liv"), true);
 });
+
+test("MUTUAL EXCLUSION (§5b, 2026-08-25): a candidate punched in on their OWN account cannot be the disputed GUID", () => {
+  // The 6c62e9c8 fixture: three candidates inside the ambiguity margin —
+  // clock-in proximity collapses where every scheduled start is 15:00
+  // (variance is the discriminator's fuel). Both rivals were already
+  // punched in on their own GUIDs on the disputed days (one 26 seconds
+  // apart); the sole candidate with no competing punch is the answer.
+  const disputed = times(WEEK, 15, 2);
+  const identical = times(WEEK, 15, 0);
+  const v = scoreTimeAwareMatch(disputed, [
+    // Keara Beck shape: own-account punch on a disputed day.
+    { employee_id: "beck", scheduleStartByDate: identical, ownPunchDays: new Set([WEEK[0]]) },
+    // Oliver Pearson shape: own-account punch on another disputed day.
+    { employee_id: "pearson", scheduleStartByDate: identical, ownPunchDays: new Set([WEEK[1]]) },
+    // Michael Lee shape: no competing punch anywhere.
+    { employee_id: "lee", scheduleStartByDate: identical },
+  ]);
+  assert.equal(v.mutually_excluded_count, 2);
+  assert.equal(v.decision, "auto");
+  assert.equal(v.best?.employee_id, "lee");
+});
+
+test("mutual exclusion only fires on OVERLAPPING days — an own punch elsewhere is not a conflict", () => {
+  const disputed = times(WEEK.slice(0, 6), 15, 1);
+  const v = scoreTimeAwareMatch(disputed, [
+    {
+      employee_id: "e1",
+      scheduleStartByDate: times(WEEK.slice(0, 6), 15, 0),
+      // Own punch on a NON-disputed day: no conflict, still a candidate.
+      ownPunchDays: new Set(["2026-01-01"]),
+    },
+  ]);
+  assert.equal(v.mutually_excluded_count, 0);
+  assert.equal(v.decision, "auto");
+  assert.equal(v.best?.employee_id, "e1");
+});
