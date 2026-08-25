@@ -99,8 +99,33 @@ test("the ONLY writer besides the migration seed is the SA employee-edit surface
   );
 });
 
+test("store-wide reporting shows BOTH ways from summed parts, on the flip's sources", () => {
+  const storeAttendanceSrc = read("src/lib/store-attendance.ts");
+  assert.match(storeAttendanceSrc, /allStaff/);
+  assert.match(storeAttendanceSrc, /excludingManagement/);
+  // The combining rule: sums of counts, rates recomputed from the sums.
+  assert.match(storeAttendanceSrc, /scheduled \+= metrics\.scheduled_count/);
+  assert.match(storeAttendanceSrc, /attended \+= metrics\.attended_count/);
+  assert.doesNotMatch(
+    storeAttendanceSrc,
+    /attendance_pct\s*\+/,
+    "must never sum or average per-employee percentages"
+  );
+  // The split's reason (Tucker 2026-08-24): Toast stores read the flip's
+  // sources — pruned direct-feed schedule + Toast punches — never
+  // time_entries (73.1% at CPD against an actual 97.3%). time_entries
+  // remains only as the non-Toast (NOLA/CAKE) fallback.
+  assert.match(storeAttendanceSrc, /from\("seven_shifts_shifts"\)/);
+  assert.match(storeAttendanceSrc, /\.is\("missing_upstream_since", null\)/);
+  assert.match(storeAttendanceSrc, /from\("toast_time_entries"\)/);
+  assert.match(storeAttendanceSrc, /toast_restaurant_guid/);
+  // Non-punchers ride the same mig 056 effective-date gate as the recompute.
+  assert.match(storeAttendanceSrc, /punchesTimeClockForPeriod\(/);
+});
+
 test("structural sweep: every src file touching the flag is on the allowlist", () => {
   const ALLOWLIST = new Set([
+    "src/lib/store-attendance.ts",
     "src/lib/gm-classification-contract.test.ts",
     "src/app/dashboard/employees/page.tsx",
     "src/app/dashboard/employees/[id]/page.tsx",
