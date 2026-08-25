@@ -133,10 +133,22 @@ function isoDateOffset(days: number): string {
  */
 export async function ingestSevenShiftsShifts(
   supabase: AdminClient,
-  crosswalk: LocationCrosswalk[]
+  crosswalk: LocationCrosswalk[],
+  opts?: {
+    /**
+     * Explicit entry-date window (YYYY-MM-DD, inclusive) — the §3f
+     * historical extension (Q2 punch-recovery spec 2026-08-25). Overrides
+     * BOTH the rolling window and the first-run floor. The floor
+     * (SHIFTS_BACKFILL_FLOOR, 2026-06-01) exists because pre-June history
+     * feeds the flip's day-conditional scheduled source — an explicit
+     * window is a deliberate, operator-driven act via
+     * /api/admin/backfill-shifts-window, never a nightly default.
+     */
+    window?: { since: string; until: string };
+  }
 ): Promise<RunOutcome[]> {
   const nowIso = new Date().toISOString();
-  const untilDate = isoDateOffset(LOOKAHEAD_DAYS);
+  const untilDateDefault = isoDateOffset(LOOKAHEAD_DAYS);
   const outcomes: RunOutcome[] = [];
 
   const byCompany = new Map<number, LocationCrosswalk[]>();
@@ -148,13 +160,20 @@ export async function ingestSevenShiftsShifts(
 
   for (const [companyId, companyLocations] of byCompany) {
     // First run for ANY of the company's stores widens to the backfill
-    // floor (the whole company rides one pull).
+    // floor (the whole company rides one pull). An explicit window wins
+    // over both.
     let sinceDate = isoDateOffset(-LOOKBACK_DAYS);
-    for (const loc of companyLocations) {
-      const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id);
-      if (!prior) {
-        sinceDate = SHIFTS_BACKFILL_FLOOR;
-        break;
+    let untilDate = untilDateDefault;
+    if (opts?.window) {
+      sinceDate = opts.window.since;
+      untilDate = opts.window.until;
+    } else {
+      for (const loc of companyLocations) {
+        const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id);
+        if (!prior) {
+          sinceDate = SHIFTS_BACKFILL_FLOOR;
+          break;
+        }
       }
     }
     const windowStart = `${sinceDate}T00:00:00.000Z`;

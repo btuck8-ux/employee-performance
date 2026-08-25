@@ -130,6 +130,11 @@ test("reader sweep: every remaining direct time_entries reader is consciously al
     // history fallback's source) — a writer, named in mig 061's accepted
     // consequences.
     "src/app/api/cron/sync-cp-schedules/route.ts",
+    // Departure-candidate report (§7b, Q2 punch-recovery spec 2026-08-25):
+    // reads time_entries SCHEDULED rows only (entry_type='scheduled'), as
+    // one of the two schedule-history sources; its punch side rides
+    // v_worked_intervals. Read-only diagnostic; states its window/source.
+    "src/app/api/admin/departure-candidates/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];
