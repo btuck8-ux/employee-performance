@@ -241,12 +241,11 @@ export default async function EditEmployeePage({
               <Label htmlFor="is_general_manager">General manager</Label>
             </div>
             <p className="text-xs text-slate-500 -mt-2">
-              Labels them as a GM across the app; store-wide reporting will
-              also show an &ldquo;excluding management&rdquo; figure alongside
-              once the actuals switch ships. Never changes any computed metric
-              — GMs stay in store-wide attendance and punctuality. Like the
-              punch setting, this is yours alone; no upload or ingest touches
-              it.
+              Labels them as a GM across the app and adds them to the
+              &ldquo;excluding management&rdquo; side of store-wide reporting.
+              Never changes any computed metric — GMs stay in store-wide
+              attendance and punctuality. Like the punch setting, this is yours
+              alone; no upload or ingest touches it.
             </p>
 
             <div className="flex gap-3 pt-2">

@@ -602,8 +602,8 @@ export default async function EmployeeDetailPage({
           <p className="text-xs text-slate-500 mt-1">
             GM punch patterns are expected to be irregular — offsite work and
             on-call time never reach a time clock. Their attendance still counts
-            in store-wide numbers; once the actuals switch ships, the store view
-            will also report an excluding-management figure alongside.
+            in store-wide numbers; the store view also reports an
+            excluding-management figure alongside.
           </p>
         )}
       </div>

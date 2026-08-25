@@ -23,6 +23,8 @@ import { uploadSurveyCsvAction } from "./upload-survey-actions";
 import { uploadTasksCsvAction } from "./upload-tasks-actions";
 import { uploadPOSCsvAction } from "./upload-pos-actions";
 import { generateBulkLocationReportsAction } from "./generate-bulk-reports-actions";
+import { computeStoreAttendance, type StoreAttendanceBothWays } from "@/lib/store-attendance";
+import { currentQuarter } from "@/lib/quarter";
 
 export default async function LocationDetailPage({
   params,
@@ -49,6 +51,24 @@ export default async function LocationDetailPage({
     .select("id, employee_code, employee_name, hire_date, wage, wage_pay_type, active")
     .eq("location_id", id)
     .order("employee_name");
+
+  // Store-wide attendance & punctuality, both ways (mig 057 §1): all staff
+  // AND excluding management, side by side — neither is "the" number. GMs
+  // stay in the metric; a fetch failure degrades to no card, never a 500.
+  const storeQuarter = currentQuarter();
+  let storeAttendance: StoreAttendanceBothWays | null = null;
+  try {
+    storeAttendance = await computeStoreAttendance(
+      supabase,
+      id,
+      storeQuarter.periodStart.toISOString().slice(0, 10),
+      storeQuarter.periodEnd.toISOString().slice(0, 10)
+    );
+  } catch (err) {
+    console.warn("[location] store attendance unavailable", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Quarters this location has performance_records for — used to populate
   // the bulk-generate dropdown. Sorted newest-first so the most recent
@@ -256,6 +276,82 @@ export default async function LocationDetailPage({
           </span>
         )}
       </ImportSummaryBanner>
+
+      {storeAttendance && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              Store attendance &amp; punctuality — {storeQuarter.label} to date
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <table className="w-full max-w-2xl text-sm">
+              <thead className="text-left text-xs text-slate-500 uppercase border-b border-slate-200">
+                <tr>
+                  <th className="py-2 pr-4" />
+                  <th className="py-2 pr-4">All staff</th>
+                  <th className="py-2 pr-4">
+                    Excluding management ({storeAttendance.gmCount} GM
+                    {storeAttendance.gmCount === 1 ? "" : "s"})
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(
+                  [
+                    {
+                      label: "Attendance",
+                      all: storeAttendance.allStaff.attendancePct,
+                      excl: storeAttendance.excludingManagement.attendancePct,
+                      allDetail: `${storeAttendance.allStaff.parts.attended}/${storeAttendance.allStaff.parts.scheduled}`,
+                      exclDetail: `${storeAttendance.excludingManagement.parts.attended}/${storeAttendance.excludingManagement.parts.scheduled}`,
+                    },
+                    {
+                      label: "On time",
+                      all: storeAttendance.allStaff.onTimePct,
+                      excl: storeAttendance.excludingManagement.onTimePct,
+                      allDetail: `${storeAttendance.allStaff.parts.onTime}/${storeAttendance.allStaff.parts.attended}`,
+                      exclDetail: `${storeAttendance.excludingManagement.parts.onTime}/${storeAttendance.excludingManagement.parts.attended}`,
+                    },
+                    {
+                      label: "On time (3-min grace)",
+                      all: storeAttendance.allStaff.onTimeGracePct,
+                      excl: storeAttendance.excludingManagement.onTimeGracePct,
+                      allDetail: `${storeAttendance.allStaff.parts.onTimeGrace}/${storeAttendance.allStaff.parts.attended}`,
+                      exclDetail: `${storeAttendance.excludingManagement.parts.onTimeGrace}/${storeAttendance.excludingManagement.parts.attended}`,
+                    },
+                  ] as const
+                ).map((row) => (
+                  <tr key={row.label}>
+                    <td className="py-2 pr-4 text-slate-600">{row.label}</td>
+                    <td className="py-2 pr-4">
+                      {row.all !== null ? `${row.all.toFixed(1)}%` : "—"}
+                      <span className="ml-1.5 text-xs text-slate-400">
+                        {row.allDetail}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-4">
+                      {row.excl !== null ? `${row.excl.toFixed(1)}%` : "—"}
+                      <span className="ml-1.5 text-xs text-slate-400">
+                        {row.exclDetail}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-xs text-slate-500 mt-3">
+              Both figures are computed from summed shift counts, never averaged
+              percentages, and neither is &ldquo;the&rdquo; number — GMs stay in
+              store metrics. GM punch patterns are expected to be irregular
+              (offsite work, on-call time that never reaches a time clock).
+              Evidenced non-punchers are excluded from both sides. Toast stores
+              count the pruned 7shifts schedule against Toast punches — the
+              same sources as the employee metrics.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
