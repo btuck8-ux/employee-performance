@@ -61,6 +61,11 @@ import { recomputeAfterSalesUpsert } from "@/lib/ingest/sevenshifts/recompute";
  *     &from=2026-04-30&to=2026-05-30   required local business dates,
  *                               floored at the store's toast_sales_start_date
  *     &write=1                  optional; default is the dry-run report
+ *     &confirm_quarters=Q2-2026 write mode: must name every affected quarter
+ *     &override_double_count_days=YYYY-MM-DD,…  write mode, only when the
+ *                               dry-run flagged days: must echo the exact
+ *                               flagged set (spec §4 — explicit and in
+ *                               writing, never a loosened check)
  */
 
 export const dynamic = "force-dynamic";
@@ -280,6 +285,29 @@ export async function GET(request: Request) {
         },
         { status: 400 }
       );
+    }
+
+    // Houston-to-Toast spec 2026-08-25 §4: a flagged day can be a correct
+    // trigger AND a false positive (the 04-30 → 05-04 overlap is
+    // complementary — legacy delivery + Toast in-store sum to Houston's
+    // real day). The override is EXPLICIT AND IN WRITING — the operator
+    // echoes the exact flagged-day set — never a loosening of the check.
+    const flaggedDays = summary.days_with_double_count_risk;
+    if (flaggedDays.length > 0) {
+      const acknowledged = (url.searchParams.get("override_double_count_days") ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .sort();
+      if (acknowledged.join(",") !== [...flaggedDays].sort().join(",")) {
+        return NextResponse.json(
+          {
+            error: `write mode with flagged days requires override_double_count_days naming every flagged day: expected "${[...flaggedDays].sort().join(",")}"`,
+            days_with_double_count_risk: flaggedDays,
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Write path — the orders.ts upsert + recompute tail, verbatim, over

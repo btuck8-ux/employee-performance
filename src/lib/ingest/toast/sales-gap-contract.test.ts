@@ -75,3 +75,22 @@ test("the lever writes sales_records only — never time_entries, never actuals_
   assert.doesNotMatch(routeSrc, /from\("time_entries"\)/);
   assert.doesNotMatch(routeSrc, /"actuals_source"|actuals_source:/);
 });
+
+test("§4 override: flagged days block the write unless echoed exactly — never a loosened check", () => {
+  // The 04-30 → 05-04 overlap is complementary (legacy delivery + Toast
+  // in-store sum to Houston's real day), so the flag CAN be overridden —
+  // but only explicitly and in writing, naming every flagged day.
+  // Index from the GET body, not file start — the header's AUTH comment
+  // also names the param, which would make this ordering check vacuous
+  // (Codex 2026-08-25).
+  const body = routeSrc.indexOf("export async function GET");
+  const guard = routeSrc.indexOf(
+    'searchParams.get("override_double_count_days")',
+    body
+  );
+  const upsert = routeSrc.indexOf('from("sales_records").upsert', body);
+  assert.ok(guard > 0 && upsert > 0 && guard < upsert, "the override guard must precede the write");
+  // The dry-run report itself is untouched by the override — the check is
+  // never loosened, only consciously acknowledged.
+  assert.match(routeSrc, /double_count_risk:\s*\n?\s*toastRows\.length > 0 && existingRows\.length > 0 && overlap === 0/);
+});

@@ -104,6 +104,8 @@ export async function ingestReceipts(
         pos_employee_name: null as string | null,
         total_amount: total,
         tip_amount: tip,
+        // Provenance stamp (mig 059) — every writer stamps, never null.
+        source: "sevenshifts",
         raw_row: {
           external_user_id: r.external_user_id ?? null,
           gross_total_cents: r.gross_total ?? null,

@@ -128,6 +128,8 @@ export interface NormalizedSales {
     pos_employee_name: string | null;
     total_amount: number;
     tip_amount: number;
+    /** Provenance stamp (mig 059) — every writer stamps, never null. */
+    source: "toast";
     raw_row: Record<string, unknown>;
   }>;
   skipped_test_mode: number;
@@ -201,6 +203,7 @@ export function normalizeOrders(
         pos_employee_name: null,
         total_amount: total,
         tip_amount: tip,
+        source: "toast",
         raw_row: {
           order_guid: order.guid,
           check_display_number: check.displayNumber ?? null,
