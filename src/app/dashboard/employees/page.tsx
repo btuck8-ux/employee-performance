@@ -85,7 +85,7 @@ export default async function EmployeesPage({
   let q = supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, locations!inner(id, name, client_id)"
+      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, is_general_manager, locations!inner(id, name, client_id)"
     )
     .order("employee_name");
 
@@ -267,6 +267,14 @@ export default async function EmployeesPage({
                         >
                           {emp.employee_name}
                         </Link>
+                        {emp.is_general_manager === true && (
+                          <span
+                            className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600"
+                            title="General manager — punch patterns are expected to be irregular (offsite work, on-call time that never reaches a time clock)"
+                          >
+                            GM
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-4">
                         {loc ? (

@@ -31,7 +31,7 @@ export default async function EditEmployeePage({
     supabase
       .from("employees")
       .select(
-        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock, punches_time_clock_since"
+        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock, punches_time_clock_since, is_general_manager"
       )
       .eq("id", id)
       .single(),
@@ -225,6 +225,29 @@ export default async function EditEmployeePage({
                 checked.
               </p>
             </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              {/* Same sentinel pattern as punches_time_clock: absent ≠
+                  unchecked, so a partial POST never silently declassifies. */}
+              <input type="hidden" name="is_general_manager_present" value="1" />
+              <input
+                id="is_general_manager"
+                name="is_general_manager"
+                type="checkbox"
+                defaultChecked={emp.is_general_manager === true}
+                value="1"
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              <Label htmlFor="is_general_manager">General manager</Label>
+            </div>
+            <p className="text-xs text-slate-500 -mt-2">
+              Labels them as a GM across the app; store-wide reporting will
+              also show an &ldquo;excluding management&rdquo; figure alongside
+              once the actuals switch ships. Never changes any computed metric
+              — GMs stay in store-wide attendance and punctuality. Like the
+              punch setting, this is yours alone; no upload or ingest touches
+              it.
+            </p>
 
             <div className="flex gap-3 pt-2">
               <Button type="submit">Save changes</Button>

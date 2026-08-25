@@ -22,6 +22,10 @@ export interface CandidateOption {
   employee_code: string;
   employee_name: string;
   overlap_days: number;
+  /** Mig 057 label — GM punch patterns are expected to be irregular, so a
+   * loose-looking overlap on a GM candidate is not necessarily a weak match
+   * (the Jose Mena shape). Display only. */
+  is_general_manager: boolean;
 }
 
 export interface UnmatchedGuidView {
@@ -44,6 +48,7 @@ export interface RecentMatchView {
   match_method: string;
   employee_code: string;
   employee_name: string;
+  is_general_manager: boolean;
   location_code: string;
   created_at: string;
   evidence: Record<string, unknown> | null;
@@ -119,11 +124,16 @@ export async function buildCrosswalkPageData(
     // already-mapped employees so a wrong double-attribution takes deliberate
     // effort — matching the auto-matcher's pool. If a person legitimately
     // needs a second guid, undo the first row and re-confirm both manually.)
-    const pool: Array<{ id: string; employee_code: string; employee_name: string }> = [];
+    const pool: Array<{
+      id: string;
+      employee_code: string;
+      employee_name: string;
+      is_general_manager: boolean;
+    }> = [];
     for (let from = 0; ; from += BATCH) {
       const { data: emps, error: empError } = await supabase
         .from("employees")
-        .select("id, employee_code, employee_name")
+        .select("id, employee_code, employee_name, is_general_manager")
         .eq("location_id", loc.id)
         .eq("active", true)
         .order("employee_code", { ascending: true })
@@ -136,6 +146,7 @@ export async function buildCrosswalkPageData(
             id,
             employee_code: e.employee_code as string,
             employee_name: e.employee_name as string,
+            is_general_manager: e.is_general_manager === true,
           });
         }
       }
@@ -233,7 +244,7 @@ export async function buildCrosswalkPageData(
   const { data: recent, error: recentError } = await supabase
     .from("toast_employee_crosswalk")
     .select(
-      "toast_employee_guid, match_method, evidence, created_at, location_id, employees(employee_code, employee_name)"
+      "toast_employee_guid, match_method, evidence, created_at, location_id, employees(employee_code, employee_name, is_general_manager)"
     )
     .order("created_at", { ascending: false })
     .limit(25);
@@ -241,13 +252,14 @@ export async function buildCrosswalkPageData(
   const codeByLocId = new Map(locations.map((l) => [l.id, l.location_code]));
   const recentMatches: RecentMatchView[] = (recent ?? []).map((r) => {
     const emp = (Array.isArray(r.employees) ? r.employees[0] : r.employees) as
-      | { employee_code: string; employee_name: string }
+      | { employee_code: string; employee_name: string; is_general_manager: boolean }
       | null;
     return {
       toast_employee_guid: String(r.toast_employee_guid),
       match_method: String(r.match_method),
       employee_code: emp?.employee_code ?? "?",
       employee_name: emp?.employee_name ?? "?",
+      is_general_manager: emp?.is_general_manager === true,
       location_code: codeByLocId.get(String(r.location_id)) ?? "?",
       created_at: String(r.created_at),
       evidence: (r.evidence as Record<string, unknown> | null) ?? null,

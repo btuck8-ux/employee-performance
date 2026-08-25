@@ -29,6 +29,10 @@ export async function updateEmployeeAction(formData: FormData) {
   // while the employee punches; blank while a non-puncher means "always".
   const ptcSinceRaw = String(formData.get("punches_time_clock_since") ?? "").trim();
   const punches_time_clock_since = punches_time_clock ? null : ptcSinceRaw || null;
+  // Mig 057: GM classification — display/reporting dimension only, never a
+  // metric input. Same writer discipline and sentinel guard as mig 056.
+  const gmSubmitted = formData.get("is_general_manager_present") === "1";
+  const is_general_manager = formData.get("is_general_manager") === "1";
 
   if (!id || !employee_name || !new_location_id) {
     redirect(`/dashboard/employees/${id}/edit?error=${encodeURIComponent("Name and location are required.")}`);
@@ -59,6 +63,7 @@ export async function updateEmployeeAction(formData: FormData) {
       wage_pay_type,
       active,
       ...(ptcSubmitted ? { punches_time_clock, punches_time_clock_since } : {}),
+      ...(gmSubmitted ? { is_general_manager } : {}),
     })
     .eq("id", id);
 

@@ -1,0 +1,126 @@
+/**
+ * Contract pins for employees.is_general_manager (mig 057, flip spec
+ * 2026-08-24 §1) — TEXT-LEVEL pins per repo convention.
+ *
+ * Tucker's ruling: classify GMs; keep them in store-wide attendance and
+ * punctuality. The flag is a display/reporting dimension ONLY — measured
+ * excl-GM effects were either the Toast defect (COS/CPD GMs reading 0%) or
+ * backwards (DTD/HRANCH GMs are the best attenders), so exclusion is
+ * reported side-by-side, never applied. These pins hold the field to that
+ * charter: SA-set only, ingest-immune, never derived, and NEVER a metric
+ * input.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+
+const migSrc = read("supabase/migrations/057_gm_classification.sql");
+const editActionsSrc = read("src/app/dashboard/employees/[id]/edit/actions.ts");
+const editPageSrc = read("src/app/dashboard/employees/[id]/edit/page.tsx");
+
+const GM_IDS = [
+  "9303203e-88f2-423f-af56-b4056a6580cc", // Nick Goins, COS
+  "6bf6c651-d0bf-4c5b-8bbf-d2da73ade9e3", // Luke Cato, CPD
+  "f2127628-3636-407d-a0e2-dbe7c0d3e9f0", // Seth Rexroad, DTD
+  "61712c3d-b8bc-4bed-9f29-35f299bdd92c", // Savannah Mallory, FCOL
+  "42d4817c-77b3-4634-9715-ff591e158e78", // Taylor Garrison, FCOL (CSU)
+  "eb3ae1aa-568f-4f73-b212-43d69280c636", // Jose Mena, HOU
+  "0b27015d-b8c9-48da-9eaf-b7eca416177f", // Liv Sandifer, HRANCH
+  "684c613b-8b94-4994-a256-bfbe2ca6110e", // Jaime Hernandez, LONGM
+];
+
+test("mig 057: boolean not null default false, guarded seeds for exactly the eight GMs", () => {
+  assert.match(migSrc, /is_general_manager boolean not null default false/);
+  const seeds = migSrc.match(/set is_general_manager = true/g) ?? [];
+  assert.equal(seeds.length, 8, "exactly eight seed statements");
+  const guards = migSrc.match(/is_general_manager is distinct from true/g) ?? [];
+  assert.equal(guards.length, 8, "every seed carries the no-op/no-revert guard");
+  for (const id of GM_IDS) {
+    assert.match(migSrc, new RegExp(id), `missing seed for ${id}`);
+  }
+});
+
+test("the flag NEVER enters a metric path — display and reporting only", () => {
+  // The spec's hard pin: is_general_manager must not appear in
+  // performance-recompute.ts or any scoring/combining path. Store-wide
+  // side-by-side card — the ONE sanctioned metric-adjacent consumer —
+  // ships with the flip PR, reading the flip's own sources
+  // (seven_shifts_shifts + toast_time_entries), so the store card and the
+  // employees inside it can never disagree.
+  const METRIC_PATHS = [
+    "src/lib/performance-recompute.ts",
+    "src/lib/customer-service-score.ts",
+    "src/lib/total-impact-score.ts",
+    "src/lib/multi-location-metrics.ts",
+    "src/lib/multi-location-fetch.ts",
+  ];
+  for (const p of METRIC_PATHS) {
+    assert.doesNotMatch(
+      read(p),
+      /is_general_manager/,
+      `${p} must never read is_general_manager`
+    );
+  }
+});
+
+test("ingest-immune: no import/upload/ingest/matcher path touches it (the wage_pay_type lesson)", () => {
+  for (const p of [
+    "src/app/dashboard/locations/[id]/upload-actions.ts",
+    "src/lib/employee-import.ts",
+    "src/app/dashboard/admin/employee-triage/actions.ts",
+    "src/lib/ingest/toast/labor.ts",
+    "src/lib/ingest/toast/labor-core.ts",
+  ]) {
+    assert.doesNotMatch(
+      read(p),
+      /is_general_manager/,
+      `${p} must never read or write is_general_manager`
+    );
+  }
+});
+
+test("the ONLY writer besides the migration seed is the SA employee-edit surface", () => {
+  assert.match(editPageSrc, /name="is_general_manager"/);
+  // Same sentinel discipline as the mig 056 marker: absent ≠ unchecked.
+  assert.match(editPageSrc, /name="is_general_manager_present"/);
+  assert.match(
+    editActionsSrc,
+    /\.\.\.\(gmSubmitted \? \{ is_general_manager \} : \{\}\)/
+  );
+  // Never derived from title/pay type.
+  assert.doesNotMatch(
+    editActionsSrc,
+    /is_general_manager\s*[:=][^=][^;\n]*(wage_pay_type|title|role)/,
+    "must come from the form only"
+  );
+});
+
+test("structural sweep: every src file touching the flag is on the allowlist", () => {
+  const ALLOWLIST = new Set([
+    "src/lib/gm-classification-contract.test.ts",
+    "src/app/dashboard/employees/page.tsx",
+    "src/app/dashboard/employees/[id]/page.tsx",
+    "src/app/dashboard/employees/[id]/edit/actions.ts",
+    "src/app/dashboard/employees/[id]/edit/page.tsx",
+    "src/app/dashboard/admin/toast-crosswalk/data.ts",
+    "src/app/dashboard/admin/toast-crosswalk/page.tsx",
+  ]);
+  const root = process.cwd();
+  const offenders: string[] = [];
+  for (const entry of readdirSync(join(root, "src"), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile()) continue;
+    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    const full = join(entry.parentPath ?? (entry as unknown as { path: string }).path, entry.name);
+    const rel = relative(root, full);
+    if (!readFileSync(full, "utf8").includes("is_general_manager")) continue;
+    if (!ALLOWLIST.has(rel)) offenders.push(rel);
+  }
+  assert.deepEqual(offenders, [], "unexpected files touching is_general_manager");
+});
