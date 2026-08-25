@@ -95,6 +95,51 @@ export default async function ToastCrosswalkPage({
         ))}
       </div>
 
+      {data.unmapped_scheduled.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">
+            Unmapped scheduled employees ({data.unmapped_scheduled.length})
+          </h2>
+          <p className="text-sm text-slate-500">
+            The reverse check: scheduled post-go-live with no crosswalk row.
+            EPD cannot see their punches, so their attendance reads
+            not-computable (null) until a mapping lands — their account is
+            likely sitting in the queue below. This list should be empty.
+          </p>
+          <div className="overflow-x-auto rounded-lg border border-amber-200 bg-amber-50">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-amber-200 text-left text-xs text-amber-900">
+                  <th className="px-3 py-2">Employee</th>
+                  <th className="px-3 py-2">Store</th>
+                  <th className="px-3 py-2">Scheduled days</th>
+                  <th className="px-3 py-2">Last scheduled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.unmapped_scheduled.map((u) => (
+                  <tr key={u.employee_id} className="border-b border-amber-100 last:border-0">
+                    <td className="px-3 py-2">
+                      {u.employee_code} — {u.employee_name}
+                      {u.is_general_manager && (
+                        <span className="ml-2 rounded bg-white px-1.5 py-0.5 text-xs text-slate-600">
+                          GM
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">{u.location_code}</td>
+                    <td className="px-3 py-2">{u.scheduled_days}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600">
+                      {u.last_scheduled ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">
           Unmatched punch accounts ({data.queue.length})
@@ -123,6 +168,14 @@ export default async function ToastCrosswalkPage({
               {q.toast_deleted && (
                 <span className="text-xs rounded bg-slate-100 px-1.5 py-0.5">
                   deleted in Toast
+                </span>
+              )}
+              {q.stuck && (
+                <span
+                  className="text-xs rounded bg-red-100 px-1.5 py-0.5 text-red-800"
+                  title="Below the 6-day auto-commit floor and idle >14 days — it can never accumulate enough overlap for the nightly matcher. Needs a human decision."
+                >
+                  stuck — needs a human
                 </span>
               )}
               <span className="text-xs text-slate-400 font-mono">

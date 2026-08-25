@@ -181,3 +181,34 @@ test("the THQ range feed's membership probe covers the flip sources", () => {
   assert.match(src, /"toast_time_entries",/);
   assert.match(src, /"seven_shifts_shifts",/);
 });
+
+// ---- Build 2 (2026-08-25): the unmapped-employee null ----------------------
+
+test("BUILD 2: mapping presence rides the definer view — never the SA-only crosswalk table", () => {
+  // toast_employee_crosswalk is SA-only (mig 055, correctly); a session
+  // client reading it would see EVERYONE as unmapped and null the estate.
+  // v_mapped_employees (mig 062) exposes presence only — no GUIDs.
+  const flipSrc = read("src/lib/flip-entries.ts");
+  assert.match(flipSrc, /from\("v_mapped_employees"\)/);
+  assert.doesNotMatch(flipSrc, /from\("toast_employee_crosswalk"\)/);
+  const migSrc62 = read("supabase/migrations/062_mapped_employees_view.sql");
+  assert.match(migSrc62, /select distinct location_id, employee_id/);
+  assert.doesNotMatch(migSrc62, /toast_employee_guid/, "presence only — no GUIDs through the view");
+  assert.match(migSrc62, /grant select on public\.v_mapped_employees to authenticated/);
+});
+
+test("BUILD 2: the reverse check and the stuck state live on the crosswalk surface", () => {
+  // The matcher is GUID-first; nothing asked "which scheduled employee has
+  // no mapping?" — how five people read 0% with their punches queued. The
+  // loud channel for the Build 2 null is this surface, not a silent null.
+  const dataSrc = read("src/app/dashboard/admin/toast-crosswalk/data.ts");
+  assert.match(dataSrc, /UnmappedScheduledView/);
+  assert.match(dataSrc, /unmapped_scheduled/);
+  // Stuck = below the auto-commit floor AND idle past the window — it can
+  // never accumulate enough overlap; needs a human, not another night.
+  assert.match(dataSrc, /BEHAVIOURAL_MIN_OVERLAP_DAYS/);
+  assert.match(dataSrc, /STUCK_IDLE_DAYS/);
+  const pageSrc = read("src/app/dashboard/admin/toast-crosswalk/page.tsx");
+  assert.match(pageSrc, /Unmapped scheduled employees/);
+  assert.match(pageSrc, /stuck — needs a human/);
+});

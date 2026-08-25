@@ -4,6 +4,7 @@ import {
   loadToastLaborLocations,
   fetchToastEmployees,
 } from "@/lib/ingest/toast/labor";
+import { BEHAVIOURAL_MIN_OVERLAP_DAYS } from "@/lib/ingest/toast/labor-core";
 
 /**
  * Data builders for the SA Toast-crosswalk triage surface (ruling §3/§4).
@@ -39,8 +40,27 @@ export interface UnmatchedGuidView {
   punch_days: number;
   first_punch: string | null;
   last_punch: string | null;
+  /** PERMANENTLY STUCK (unmapped-null spec 2026-08-25): below the 6-day
+   * auto-commit floor AND idle past the stuck window — it can never
+   * accumulate enough overlap for the nightly matcher, so it needs a
+   * human, not another night. Distinct from accounts still accruing. */
+  stuck: boolean;
   /** All active employees at the store, overlap-sorted — the SA's select. */
   candidates: CandidateOption[];
+}
+
+/** The REVERSE check (unmapped-null spec 2026-08-25): the matcher is
+ * GUID-first and nothing asked "which scheduled employee has no mapping?"
+ * — which is how five people read 0% with their punches sitting in this
+ * very queue. An entry here is also the population Build 2 nulls. */
+export interface UnmappedScheduledView {
+  employee_id: string;
+  employee_code: string;
+  employee_name: string;
+  is_general_manager: boolean;
+  location_code: string;
+  scheduled_days: number;
+  last_scheduled: string | null;
 }
 
 export interface RecentMatchView {
@@ -62,8 +82,14 @@ export interface CrosswalkPageData {
     roster_error: string | null;
   }>;
   queue: UnmatchedGuidView[];
+  unmapped_scheduled: UnmappedScheduledView[];
   recent_matches: RecentMatchView[];
 }
+
+/** Idle window for the stuck state: a sub-floor GUID with no punch in this
+ * many days will never reach BEHAVIOURAL_MIN_OVERLAP_DAYS on its own.
+ * 14 days = two full schedule cycles, conservative against vacations. */
+const STUCK_IDLE_DAYS = 14;
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
@@ -74,6 +100,7 @@ export async function buildCrosswalkPageData(
 ): Promise<CrosswalkPageData> {
   const locations = await loadToastLaborLocations(supabase);
   const queue: UnmatchedGuidView[] = [];
+  const unmappedScheduled: UnmappedScheduledView[] = [];
   const stores: CrosswalkPageData["stores"] = [];
 
   for (const loc of locations) {
@@ -219,6 +246,12 @@ export async function buildCrosswalkPageData(
             b.overlap_days - a.overlap_days ||
             a.employee_code.localeCompare(b.employee_code)
         );
+      const lastPunch = sorted[sorted.length - 1] ?? null;
+      const idleDays = lastPunch
+        ? Math.floor(
+            (Date.now() - new Date(`${lastPunch}T00:00:00Z`).getTime()) / 86400_000
+          )
+        : null;
       queue.push({
         toast_employee_guid: guid,
         location_id: loc.id,
@@ -228,8 +261,32 @@ export async function buildCrosswalkPageData(
         toast_deleted: roster?.deleted ?? false,
         punch_days: dates.size,
         first_punch: sorted[0] ?? null,
-        last_punch: sorted[sorted.length - 1] ?? null,
+        last_punch: lastPunch,
+        stuck:
+          dates.size < BEHAVIOURAL_MIN_OVERLAP_DAYS &&
+          idleDays !== null &&
+          idleDays > STUCK_IDLE_DAYS,
         candidates,
+      });
+    }
+
+    // THE REVERSE CHECK: unmapped employees with post-go-live scheduled
+    // days (from the pruned feed already fetched above). The pool is
+    // active-and-unmapped by construction, so this is "pool members with
+    // any scheduled day". These are the people Build 2 nulls — they must
+    // be visible here, not just silently not-computable.
+    for (const e of pool) {
+      const days = schedByEmp.get(e.id);
+      if (!days || days.size === 0) continue;
+      const sortedDays = [...days].sort();
+      unmappedScheduled.push({
+        employee_id: e.id,
+        employee_code: e.employee_code,
+        employee_name: e.employee_name,
+        is_general_manager: e.is_general_manager,
+        location_code: loc.location_code,
+        scheduled_days: days.size,
+        last_scheduled: sortedDays[sortedDays.length - 1] ?? null,
       });
     }
 
@@ -272,5 +329,11 @@ export async function buildCrosswalkPageData(
     };
   });
 
-  return { stores, queue, recent_matches: recentMatches };
+  unmappedScheduled.sort((a, b) => b.scheduled_days - a.scheduled_days);
+  return {
+    stores,
+    queue,
+    unmapped_scheduled: unmappedScheduled,
+    recent_matches: recentMatches,
+  };
 }
