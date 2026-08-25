@@ -58,6 +58,7 @@ export const maxDuration = 300;
 const COMPUTE_CONCURRENCY = 6;
 
 interface EmployeeReport {
+  employee_id: string;
   employee_name: string;
   employee_code: string;
   before: {
@@ -74,6 +75,7 @@ interface EmployeeReport {
   };
   delta_attendance_pp: number | null;
   scheduled_days: number;
+  attended_days: number;
   worked_days: number;
   null_reason: string | null;
 }
@@ -157,19 +159,28 @@ export async function GET(request: Request) {
     // an existing performance_records row for this quarter here — covers
     // both stale rows of departed people and newly-scoring hires.
     type EmpRow = { id: string; employee_code: string; employee_name: string };
-    const { data: activeRows, error: activeErr } = await supabase
-      .from("employees")
-      .select("id, employee_code, employee_name")
-      .eq("location_id", locationId)
-      .eq("active", true);
-    if (activeErr) throw new Error(`employees read: ${activeErr.message}`);
+    const PAGE = 1000;
+    const activeRows: EmpRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("id, employee_code, employee_name")
+        .eq("location_id", locationId)
+        .eq("active", true)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(`employees read: ${error.message}`);
+      activeRows.push(...((data ?? []) as EmpRow[]));
+      if (!data || data.length < PAGE) break;
+    }
 
-    const { data: period } = await supabase
+    const { data: period, error: periodErr } = await supabase
       .from("report_periods")
       .select("id")
       .eq("year", year)
       .eq("quarter", quarter)
       .maybeSingle();
+    if (periodErr) throw new Error(`report_periods read: ${periodErr.message}`);
 
     type BeforeRow = {
       employee_id: string;
@@ -179,17 +190,22 @@ export async function GET(request: Request) {
       tip_rate_pct: unknown;
       employees: { employee_code: string; employee_name: string } | null;
     };
-    let beforeRows: BeforeRow[] = [];
+    const beforeRows: BeforeRow[] = [];
     if (period?.id) {
-      const { data, error } = await supabase
-        .from("performance_records")
-        .select(
-          "employee_id, attendance_pct, on_time_pct, hours_worked, tip_rate_pct, employees(employee_code, employee_name)"
-        )
-        .eq("location_id", locationId)
-        .eq("report_period_id", period.id);
-      if (error) throw new Error(`before rows read: ${error.message}`);
-      beforeRows = (data ?? []) as unknown as BeforeRow[];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from("performance_records")
+          .select(
+            "employee_id, attendance_pct, on_time_pct, hours_worked, tip_rate_pct, employees(employee_code, employee_name)"
+          )
+          .eq("location_id", locationId)
+          .eq("report_period_id", period.id)
+          .order("employee_id", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw new Error(`before rows read: ${error.message}`);
+        beforeRows.push(...((data ?? []) as unknown as BeforeRow[]));
+        if (!data || data.length < PAGE) break;
+      }
     }
     const beforeByEmployee = new Map(beforeRows.map((r) => [String(r.employee_id), r]));
 
@@ -210,11 +226,13 @@ export async function GET(request: Request) {
     {
       const ids = [...employees.keys()];
       for (let i = 0; i < ids.length; i += 100) {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("employees")
           .select("id, punches_time_clock")
           .in("id", ids.slice(i, i + 100))
           .eq("punches_time_clock", false);
+        // A dropped error here would silently mislabel null reasons.
+        if (error) throw new Error(`non-puncher read: ${error.message}`);
         for (const r of data ?? []) nonPunchers.add(String(r.id));
       }
     }
@@ -253,6 +271,7 @@ export async function GET(request: Request) {
           tip_rate_pct: round1(m.tip_rate_pct),
         };
         reports.push({
+          employee_id: emp.id,
           employee_name: emp.employee_name,
           employee_code: emp.employee_code,
           before,
@@ -262,6 +281,7 @@ export async function GET(request: Request) {
               ? round1(after.attendance_pct - before.attendance_pct)
               : null,
           scheduled_days: m.scheduled_count,
+          attended_days: m.attended_count,
           // worked_days = days with worked evidence: attended scheduled
           // days + covered (worked-without-schedule) days.
           worked_days: m.attended_count + m.covered_shifts,
@@ -287,7 +307,9 @@ export async function GET(request: Request) {
     let beforeWeight = 0;
     for (const r of reports) {
       schedSum += r.scheduled_days;
-      attendedSum += Math.round(((r.after.attendance_pct ?? 0) / 100) * r.scheduled_days);
+      // Exact summed counts from the compute — never reconstructed from a
+      // rounded percentage (Codex 2026-08-25; the combining rule).
+      attendedSum += r.attended_days;
       if (r.before.attendance_pct !== null && r.scheduled_days > 0) {
         beforeWeighted += r.before.attendance_pct * r.scheduled_days;
         beforeWeight += r.scheduled_days;
@@ -328,9 +350,22 @@ export async function GET(request: Request) {
     }
 
     // WRITE: runRecomputeJobs verbatim — the same idempotent path every
-    // importer uses. The report above is the record of what moved.
-    const jobs: RecomputeJob[] = [...employees.keys()].map((employee_id) => ({
-      employee_id,
+    // importer uses. The report above is the RECORD of what moves, so the
+    // job set is exactly the reported set — and a write with compute
+    // failures would touch employees the report cannot account for, so it
+    // is refused instead (Codex 2026-08-25).
+    if (failures.length > 0) {
+      return NextResponse.json(
+        {
+          ...summary,
+          employees: reports,
+          error: `refusing write: ${failures.length} employee(s) failed the report compute — a write must not touch what the report cannot account for`,
+        },
+        { status: 409 }
+      );
+    }
+    const jobs: RecomputeJob[] = reports.map((r) => ({
+      employee_id: r.employee_id,
       year,
       quarter,
     }));

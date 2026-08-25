@@ -126,6 +126,11 @@ export default async function ToastCrosswalkPage({
                           GM
                         </span>
                       )}
+                      {!u.active && (
+                        <span className="ml-2 rounded bg-white px-1.5 py-0.5 text-xs text-slate-500">
+                          inactive
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2">{u.location_code}</td>
                     <td className="px-3 py-2">{u.scheduled_days}</td>

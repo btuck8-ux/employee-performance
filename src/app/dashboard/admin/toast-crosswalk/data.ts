@@ -58,6 +58,9 @@ export interface UnmappedScheduledView {
   employee_code: string;
   employee_name: string;
   is_general_manager: boolean;
+  /** Inactive people stay on the reverse check (Codex 2026-08-25): their
+   * blind post-go-live days are still on their record. */
+  active: boolean;
   location_code: string;
   scheduled_days: number;
   last_scheduled: string | null;
@@ -151,34 +154,40 @@ export async function buildCrosswalkPageData(
     // already-mapped employees so a wrong double-attribution takes deliberate
     // effort — matching the auto-matcher's pool. If a person legitimately
     // needs a second guid, undo the first row and re-confirm both manually.)
-    const pool: Array<{
+    // Fetched WITHOUT the active filter (Codex 2026-08-25): the candidate
+    // pool stays active-only below, but the REVERSE check must also see
+    // inactive unmapped employees — a departed person's post-go-live
+    // scheduled days are still blind days on their record.
+    const unmappedEmployees: Array<{
       id: string;
       employee_code: string;
       employee_name: string;
       is_general_manager: boolean;
+      active: boolean;
     }> = [];
     for (let from = 0; ; from += BATCH) {
       const { data: emps, error: empError } = await supabase
         .from("employees")
-        .select("id, employee_code, employee_name, is_general_manager")
+        .select("id, employee_code, employee_name, is_general_manager, active")
         .eq("location_id", loc.id)
-        .eq("active", true)
         .order("employee_code", { ascending: true })
         .range(from, from + BATCH - 1);
       if (empError) throw new Error(`employees read: ${empError.message}`);
       for (const e of emps ?? []) {
         const id = String(e.id);
         if (!mappedEmployeeIds.has(id)) {
-          pool.push({
+          unmappedEmployees.push({
             id,
             employee_code: e.employee_code as string,
             employee_name: e.employee_name as string,
             is_general_manager: e.is_general_manager === true,
+            active: e.active === true,
           });
         }
       }
       if (!emps || emps.length < BATCH) break;
     }
+    const pool = unmappedEmployees.filter((e) => e.active);
 
     // Scheduled dates for the pool (display-hint overlap). THE FLIP
     // (2026-08-25): the pruned direct feed — the same source the matcher's
@@ -186,12 +195,12 @@ export async function buildCrosswalkPageData(
     // auto-matcher's evidence can't disagree (and unpruned time_entries
     // rows can't inflate an overlap hint).
     const schedByEmp = new Map<string, Set<string>>();
-    if (pool.length > 0) {
+    if (unmappedEmployees.length > 0) {
       for (let from = 0; ; from += BATCH) {
         const { data, error } = await supabase
           .from("seven_shifts_shifts")
           .select("employee_id, entry_date")
-          .in("employee_id", pool.map((e) => e.id))
+          .in("employee_id", unmappedEmployees.map((e) => e.id))
           .is("missing_upstream_since", null)
           .eq("deleted", false)
           .eq("draft", false)
@@ -275,7 +284,7 @@ export async function buildCrosswalkPageData(
     // active-and-unmapped by construction, so this is "pool members with
     // any scheduled day". These are the people Build 2 nulls — they must
     // be visible here, not just silently not-computable.
-    for (const e of pool) {
+    for (const e of unmappedEmployees) {
       const days = schedByEmp.get(e.id);
       if (!days || days.size === 0) continue;
       const sortedDays = [...days].sort();
@@ -284,6 +293,7 @@ export async function buildCrosswalkPageData(
         employee_code: e.employee_code,
         employee_name: e.employee_name,
         is_general_manager: e.is_general_manager,
+        active: e.active,
         location_code: loc.location_code,
         scheduled_days: days.size,
         last_scheduled: sortedDays[sortedDays.length - 1] ?? null,
