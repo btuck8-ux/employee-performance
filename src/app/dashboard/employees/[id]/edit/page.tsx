@@ -31,7 +31,7 @@ export default async function EditEmployeePage({
     supabase
       .from("employees")
       .select(
-        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id"
+        "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, location_id, punches_time_clock, punches_time_clock_since"
       )
       .eq("id", id)
       .single(),
@@ -183,6 +183,48 @@ export default async function EditEmployeePage({
               Uncheck to mark inactive. Inactive employees are kept in the database but hidden
               from the main Employees list.
             </p>
+
+            <div className="flex items-center gap-2 pt-2">
+              {/* Sentinel: an unchecked checkbox and an absent field are
+                  indistinguishable in a POST — without this, a stale or
+                  partial form would silently flip someone to non-puncher
+                  (Codex 2026-08-24). The action only writes the field when
+                  the sentinel arrived with it. */}
+              <input type="hidden" name="punches_time_clock_present" value="1" />
+              <input
+                id="punches_time_clock"
+                name="punches_time_clock"
+                type="checkbox"
+                defaultChecked={emp.punches_time_clock !== false}
+                value="1"
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              <Label htmlFor="punches_time_clock">Punches the time clock</Label>
+            </div>
+            <p className="text-xs text-slate-500 -mt-2">
+              Uncheck only for an evidenced non-puncher (salaried, zero clock-ins
+              against a real schedule). Excludes them from punch-based attendance
+              (reads as not-computable, never 0%). This setting is yours alone —
+              no CSV upload or ingest ever changes it, and it is deliberately not
+              tied to pay type: most salaried GMs punch normally.
+            </p>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="punches_time_clock_since">Non-puncher since</Label>
+              <Input
+                id="punches_time_clock_since"
+                name="punches_time_clock_since"
+                type="date"
+                defaultValue={emp.punches_time_clock_since ?? ""}
+              />
+              <p className="text-xs text-slate-500">
+                When they stopped punching (e.g. their store&apos;s Toast go-live).
+                Periods ending before this date keep their real attendance history;
+                only periods overlapping it read as not-computable. Leave blank for
+                someone who has never punched. Ignored while the box above is
+                checked.
+              </p>
+            </div>
 
             <div className="flex gap-3 pt-2">
               <Button type="submit">Save changes</Button>

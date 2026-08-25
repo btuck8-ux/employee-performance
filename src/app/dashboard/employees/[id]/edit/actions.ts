@@ -16,6 +16,19 @@ export async function updateEmployeeAction(formData: FormData) {
   const wage = wageRaw ? Number(wageRaw) : null;
   const wage_pay_type = String(formData.get("wage_pay_type") ?? "").trim() || null;
   const active = formData.get("active") === "1";
+  // Mig 056: SA-set, ingest-immune non-puncher marker. This form and the
+  // migration seed are its ONLY writers (pinned by test) — never the CSV
+  // upload (which clobbers wage_pay_type, the reason this field exists) and
+  // never derived from pay type or title. The sentinel guard means a POST
+  // that never rendered the checkbox leaves the column untouched — absent
+  // ≠ unchecked (Codex 2026-08-24).
+  const ptcSubmitted = formData.get("punches_time_clock_present") === "1";
+  const punches_time_clock = formData.get("punches_time_clock") === "1";
+  // Effective date (§2a): the exclusion applies only to periods overlapping
+  // [since, ∞) — pre-since history keeps scoring. Meaningless (forced null)
+  // while the employee punches; blank while a non-puncher means "always".
+  const ptcSinceRaw = String(formData.get("punches_time_clock_since") ?? "").trim();
+  const punches_time_clock_since = punches_time_clock ? null : ptcSinceRaw || null;
 
   if (!id || !employee_name || !new_location_id) {
     redirect(`/dashboard/employees/${id}/edit?error=${encodeURIComponent("Name and location are required.")}`);
@@ -45,6 +58,7 @@ export async function updateEmployeeAction(formData: FormData) {
       wage: wage !== null && !Number.isNaN(wage) ? wage : null,
       wage_pay_type,
       active,
+      ...(ptcSubmitted ? { punches_time_clock, punches_time_clock_since } : {}),
     })
     .eq("id", id);
 

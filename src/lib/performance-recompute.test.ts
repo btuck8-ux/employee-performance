@@ -59,9 +59,11 @@ registerHooks({
   },
 });
 
-const { computeMetricsFromEntries, ON_TIME_GRACE_MINUTES } = await import(
-  "./performance-recompute.ts"
-);
+const {
+  computeMetricsFromEntries,
+  punchesTimeClockForPeriod,
+  ON_TIME_GRACE_MINUTES,
+} = await import("./performance-recompute.ts");
 
 type EntryType = "scheduled" | "worked";
 interface Entry {
@@ -238,4 +240,93 @@ test("scheduled but never worked: attendance 0%, punctuality null", () => {
   // No attended shifts → punctuality rates are null, not 0.
   assert.equal(m.on_time_pct, null);
   assert.equal(m.on_time_grace_pct, null);
+});
+
+test("punches_time_clock=false EXCLUDES from the attendance denominator — null, never 0 (mig 056)", () => {
+  // The Nick Goins shape: a salaried non-puncher with a real schedule and
+  // zero worked entries. Scored normally he reads 0% forever; excluded he
+  // reads not-computable. Title/pay-type must never drive this — six of
+  // seven GMs punch normally — only the SA-set marker does.
+  const entries = [
+    entry("2026-07-01", "scheduled", "09:00:00"),
+    entry("2026-07-02", "scheduled", "09:00:00"),
+    entry("2026-07-03", "scheduled", "09:00:00"),
+  ];
+  const scored = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+  });
+  assert.equal(scored.attendance_pct, 0);
+
+  const excluded = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: false,
+  });
+  assert.equal(excluded.attendance_pct, null);
+  assert.equal(excluded.on_time_pct, null);
+  assert.equal(excluded.on_time_grace_pct, null);
+  assert.equal(excluded.scheduled_count, 0);
+  assert.equal(excluded.missed_count, 0);
+});
+
+test("punches_time_clock undefined/true scores normally — exclusion is opt-in only", () => {
+  const entries = [
+    entry("2026-07-01", "scheduled", "09:00:00"),
+    entry("2026-07-01", "worked", "09:01:00"),
+  ];
+  const t = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: true,
+  });
+  assert.equal(t.attendance_pct, 100);
+});
+
+test("effective date (§2a): a non-puncher's pre-effective-date periods are untouched", () => {
+  // The measured Nick Goins shape: ~80% attendance for three quarters, then
+  // a collapse at COS's Toast go-live (2026-07-07). The marker must null
+  // Q3 2026 onward while Q4 2025 / Q1 2026 / Q2 2026 — one a THQ frozen
+  // quarter — keep their real values.
+  const SINCE = "2026-07-07";
+  // Q2 2026 ends before the effective date → treated as a puncher.
+  assert.equal(punchesTimeClockForPeriod(false, SINCE, "2026-06-30"), true);
+  // Q3 2026 overlaps it → excluded.
+  assert.equal(punchesTimeClockForPeriod(false, SINCE, "2026-09-30"), false);
+  // Q4 2025 (frozen) is far before it → untouched.
+  assert.equal(punchesTimeClockForPeriod(false, SINCE, "2025-12-31"), true);
+  // A period ending the day before the effective date is still pre-era…
+  assert.equal(punchesTimeClockForPeriod(false, SINCE, "2026-07-06"), true);
+  // …and one ending ON it overlaps.
+  assert.equal(punchesTimeClockForPeriod(false, SINCE, "2026-07-07"), false);
+});
+
+test("effective date (§2a): null since = always excluded; marker true ignores since", () => {
+  // A historic non-puncher (no punching era on record) stays excluded for
+  // every period — the pre-effective-date behaviour of the bare boolean.
+  assert.equal(punchesTimeClockForPeriod(false, null, "2025-12-31"), false);
+  assert.equal(punchesTimeClockForPeriod(false, null, "2026-09-30"), false);
+  // A puncher is never excluded, whatever a stale since says.
+  assert.equal(punchesTimeClockForPeriod(true, "2026-07-07", "2026-09-30"), true);
+});
+
+test("effective date (§2a): end-to-end — pre-since quarter scores real attendance, post-since quarter reads null", () => {
+  const q2Entries = [
+    entry("2026-06-01", "scheduled", "09:00:00"),
+    entry("2026-06-01", "worked", "08:58:00"),
+    entry("2026-06-02", "scheduled", "09:00:00"),
+  ];
+  const q2 = computeMetricsFromEntries(q2Entries, {
+    scheduledScoredThrough: "2026-06-30",
+    punchesTimeClock: punchesTimeClockForPeriod(false, "2026-07-07", "2026-06-30"),
+  });
+  assertClose(q2.attendance_pct, 50, "pre-since attendance");
+
+  const q3Entries = [
+    entry("2026-07-10", "scheduled", "09:00:00"),
+    entry("2026-07-11", "scheduled", "09:00:00"),
+  ];
+  const q3 = computeMetricsFromEntries(q3Entries, {
+    scheduledScoredThrough: "2026-09-30",
+    punchesTimeClock: punchesTimeClockForPeriod(false, "2026-07-07", "2026-09-30"),
+  });
+  assert.equal(q3.attendance_pct, null);
+  assert.equal(q3.scheduled_count, 0);
 });

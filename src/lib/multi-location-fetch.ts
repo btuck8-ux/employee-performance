@@ -26,6 +26,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   computeMetricsFromEntries,
+  punchesTimeClockForPeriod,
   type TimeEntryRow,
 } from "./performance-recompute";
 import {
@@ -38,6 +39,12 @@ export interface SiblingLocation {
   employeeCode: string;
   locationId: string;
   locationName: string;
+  /** Mig 056 non-puncher marker — each site's recompute honours its own
+   * row's flag so an excluded sibling contributes no denominators. */
+  punchesTimeClock: boolean;
+  /** Effective date of the exclusion (§2a) — gated per quarter against the
+   * quarter's period_end so pre-since history keeps its real values. */
+  punchesTimeClockSince: string | null;
 }
 
 export interface MultiLocationQuarter {
@@ -99,7 +106,7 @@ export async function fetchMultiLocationProfile(
 
   const { data: siblingRows, error: siblingError } = await supabase
     .from("employees")
-    .select("id, employee_code, location_id, locations(id, name)")
+    .select("id, employee_code, location_id, punches_time_clock, punches_time_clock_since, locations(id, name)")
     .eq("seven_shifts_user_id", sevenShiftsUserId);
   if (siblingError)
     throw new Error(`multi-location siblings: ${siblingError.message}`);
@@ -110,6 +117,8 @@ export async function fetchMultiLocationProfile(
       locationId: String(r.location_id),
       locationName:
         ((r.locations as { name?: string } | null)?.name as string) ?? "—",
+      punchesTimeClock: r.punches_time_clock !== false,
+      punchesTimeClockSince: (r.punches_time_clock_since as string | null) ?? null,
     })
   );
   if (siblings.length < 2) return null;
@@ -254,6 +263,11 @@ export async function fetchMultiLocationProfile(
       const qEntries = entries.filter((e) => inQuarter(e.entry_date));
       const shift = computeMetricsFromEntries(qEntries, {
         scheduledScoredThrough: capByLocation.get(s.locationId),
+        punchesTimeClock: punchesTimeClockForPeriod(
+          s.punchesTimeClock,
+          s.punchesTimeClockSince,
+          q.period_end
+        ),
       });
       const qTattles = tattles.filter(
         (t) =>
