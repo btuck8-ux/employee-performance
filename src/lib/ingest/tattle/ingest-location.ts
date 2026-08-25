@@ -158,14 +158,20 @@ export async function ingestTattlesForLocation(
   );
   const ctx: AttributionContext = { workedByDate: new Map() };
   if (surveyDates.length > 0) {
+    // THE FLIP (2026-08-25): worked intervals ride v_worked_intervals (mig
+    // 058) — Toast punches at Toast stores post-go-live, time_entries at
+    // NOLA and in history. Without this, attribution freezes at the seven
+    // Toast stores on flip day (no new time_entries worked rows) and
+    // tattle metrics — 0.40 of CS Score — silently decay to null. The
+    // sliced local times keep the 016 overnight convention (out < in =
+    // next day), so the on-shift math downstream is unchanged.
     const PAGE = 1000;
     let from = 0;
     while (true) {
       const { data: pageRows, error: pageErr } = await supabase
-        .from("time_entries")
-        .select("employee_id, entry_date, in_time, out_time")
+        .from("v_worked_intervals")
+        .select("employee_id, entry_date, shift_start, shift_end")
         .eq("location_id", location.id)
-        .eq("entry_type", "worked")
         .in("entry_date", surveyDates)
         .range(from, from + PAGE - 1);
       if (pageErr) {
@@ -174,14 +180,14 @@ export async function ingestTattlesForLocation(
       }
       if (!pageRows || pageRows.length === 0) break;
       for (const e of pageRows) {
-        const list = ctx.workedByDate.get(e.entry_date as string);
+        const list = ctx.workedByDate.get(String(e.entry_date));
         const item = {
           employee_id: e.employee_id as string,
-          in_time: e.in_time as string | null,
-          out_time: e.out_time as string | null,
+          in_time: (e.shift_start as string | null)?.slice(11, 19) ?? null,
+          out_time: (e.shift_end as string | null)?.slice(11, 19) ?? null,
         };
         if (list) list.push(item);
-        else ctx.workedByDate.set(e.entry_date as string, [item]);
+        else ctx.workedByDate.set(String(e.entry_date), [item]);
       }
       if (pageRows.length < PAGE) break;
       from += PAGE;

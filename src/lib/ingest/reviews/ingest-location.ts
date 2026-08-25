@@ -131,13 +131,15 @@ export async function ingestReviewsForLocation(
   );
   const ctx: AttributionContext = { workedByDate: new Map() };
   if (reviewDates.length > 0) {
+    // THE FLIP (2026-08-25): v_worked_intervals — see tattle
+    // ingest-location for the rationale (attribution must not freeze at
+    // Toast stores). Sliced local times keep the 016 overnight convention.
     let from = 0;
     while (true) {
       const { data: page, error: pageErr } = await supabase
-        .from("time_entries")
-        .select("employee_id, entry_date, in_time, out_time")
+        .from("v_worked_intervals")
+        .select("employee_id, entry_date, shift_start, shift_end")
         .eq("location_id", location.id)
-        .eq("entry_type", "worked")
         .in("entry_date", reviewDates)
         .range(from, from + FETCH_PAGE - 1);
       if (pageErr) {
@@ -146,14 +148,14 @@ export async function ingestReviewsForLocation(
       }
       if (!page || page.length === 0) break;
       for (const e of page) {
-        const list = ctx.workedByDate.get(e.entry_date as string);
+        const list = ctx.workedByDate.get(String(e.entry_date));
         const item = {
           employee_id: e.employee_id as string,
-          in_time: e.in_time as string | null,
-          out_time: e.out_time as string | null,
+          in_time: (e.shift_start as string | null)?.slice(11, 19) ?? null,
+          out_time: (e.shift_end as string | null)?.slice(11, 19) ?? null,
         };
         if (list) list.push(item);
-        else ctx.workedByDate.set(e.entry_date as string, [item]);
+        else ctx.workedByDate.set(String(e.entry_date), [item]);
       }
       if (page.length < FETCH_PAGE) break;
       from += FETCH_PAGE;

@@ -31,7 +31,7 @@ async function maxDate(
   dateColumn: string,
   locationId: string,
   maxInclusive: string,
-  extraFilter?: { column: string; value: string }
+  extraFilter?: { column: string; value: string | boolean }
 ): Promise<string | null> {
   let q = supabase
     .from(table)
@@ -59,10 +59,18 @@ export async function getCategoryCurrency(
   locationId: string,
   periodEnd: string // YYYY-MM-DD
 ): Promise<CategoryCurrencyEntry[]> {
-  const [labor, sales, tattle, reviews, tasks, survey, kitchen] = await Promise.all([
+  const [laborTe, laborPunch, sales, tattle, reviews, tasks, survey, kitchen] = await Promise.all([
     maxDate(supabase, "time_entries", "entry_date", locationId, periodEnd, {
       column: "entry_type",
       value: "worked",
+    }),
+    // THE FLIP (2026-08-25): Toast stores' worked evidence lands in
+    // toast_time_entries — without this the PDF's labor data-through date
+    // freezes at flip day (Codex). Labor currency = the LATEST of the two
+    // sources; at non-Toast stores the punch side is simply empty.
+    maxDate(supabase, "toast_time_entries", "entry_date", locationId, periodEnd, {
+      column: "deleted",
+      value: false,
     }),
     // transaction_at is a TZ-free local wall-clock string; the lexical lte
     // against an end-of-day timestamp bounds it to the period.
@@ -81,6 +89,13 @@ export async function getCategoryCurrency(
     // and renders the by-design "—", exactly like NOLA's sales.
     maxDate(supabase, "toast_item_fulfillments", "fired_local_date", locationId, periodEnd),
   ]);
+
+  const labor =
+    laborTe && laborPunch
+      ? laborTe > laborPunch
+        ? laborTe
+        : laborPunch
+      : (laborTe ?? laborPunch);
 
   return [
     { key: "labor", label: "Labor", data_through: labor },

@@ -66,6 +66,12 @@ export const TOAST_LABOR_SOURCE = "toast_labor" as const;
 // and the max() in the window resolution silently discarded it in favour of
 // the constant. The store's own toast_sales_start_date is the ONLY floor; a
 // null go-live on a GUID-bearing store is a data error that fails loudly.
+//
+// ⚠️ LOAD-BEARING PAIR with mig 058's v_worked_intervals (addendum 2 §3):
+// its null-go-live branch keeps such a store's time_entries history
+// precisely BECAUSE this loud failure guarantees no Toast rows can be
+// ingested for it. Neither behaviour is safe to remove without the other —
+// the cross-reference lives in both headers on purpose.
 
 const REQUEST_DELAY_MS = 150;
 
