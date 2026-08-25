@@ -114,6 +114,15 @@ function setEarliest(
 export interface FlipSourceRows {
   isToast: boolean;
   goLive: string | null;
+  /** Whether a toast_employee_crosswalk row exists for this employee at
+   * this location (Build 2, 2026-08-25). "Absence of a punch IS absence"
+   * holds ONLY for a mapped employee — for an unmapped one, absence of a
+   * punch means the system has no way to look, and their post-go-live
+   * scheduled days must be not-computable (null), never scored 0%. A
+   * mapping WITH zero punches is the opposite case: EPD can see, seeing
+   * nothing is real absence, and it keeps scoring (the Sierra Estrada
+   * rule — she goes to the anomaly list, not to this branch). */
+  isMapped: boolean;
   /** Dates where the pruned direct feed has ANY row for the STORE. */
   directFeedDays: Set<string>;
   /** This employee's pruned direct-feed starts, store-local (earliest per date). */
@@ -147,8 +156,20 @@ export function mergeEffectiveEntries(src: FlipSourceRows): TimeEntryRow[] {
   ]);
 
   for (const date of [...dates].sort()) {
+    // UNMAPPED BLINDNESS (Build 2, 2026-08-25): on a post-go-live day the
+    // punch side is unobservable for an unmapped employee, so their
+    // scheduled days there are NOT COMPUTABLE — dropped from the
+    // denominator entirely (null, never 0, exactly like the evidenced
+    // non-puncher; different reason). Pre-go-live days score normally from
+    // time_entries, which needs no crosswalk. The loud channel is the
+    // crosswalk queue's reverse check, not a silent null here.
+    const blind =
+      !src.isMapped && src.goLive !== null && date >= src.goLive;
+
     // SCHEDULED — day-conditional on the STORE's direct-feed coverage.
-    if (src.directFeedDays.has(date)) {
+    if (blind) {
+      // no scheduled emission: cannot see the punch side for this day
+    } else if (src.directFeedDays.has(date)) {
       const start = src.directStartByDate.get(date);
       if (start !== undefined) {
         out.push({ entry_date: date, entry_type: "scheduled", in_time: start });
@@ -305,12 +326,32 @@ export async function fetchEffectiveEntries(
     );
   }
 
+  // Mapping PRESENCE per employee (Build 2) — via the definer view (mig
+  // 062): toast_employee_crosswalk itself is SA-only, and a session-client
+  // read of it would see every employee as unmapped and null the estate.
+  const mapped = new Set<string>();
+  for (const ids of chunk(employeeIds, IN_CHUNK)) {
+    const rows = await pagedRows<{ employee_id: string }>(
+      (from, to) =>
+        supabase
+          .from("v_mapped_employees")
+          .select("employee_id")
+          .eq("location_id", locationId)
+          .in("employee_id", ids)
+          .order("employee_id", { ascending: true })
+          .range(from, to),
+      "flip mapped set"
+    );
+    for (const r of rows) mapped.add(String(r.employee_id));
+  }
+
   for (const id of employeeIds) {
     out.set(
       id,
       mergeEffectiveEntries({
         isToast: true,
         goLive: meta.goLive,
+        isMapped: mapped.has(id),
         directFeedDays,
         directStartByDate: directStarts.get(id) ?? new Map(),
         toastInByDate: toastIns.get(id) ?? new Map(),

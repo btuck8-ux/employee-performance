@@ -94,6 +94,10 @@ test("structural sweep: every src file touching the column is on the allowlist",
     "src/app/dashboard/employees/[id]/page.tsx",
     "src/app/dashboard/employees/[id]/edit/actions.ts",
     "src/app/dashboard/employees/[id]/edit/page.tsx",
+    // The recompute lever reads the marker only to LABEL null reasons in
+    // its report ("non-puncher exclusion" vs "no scheduled shifts") — it
+    // never writes it and never derives it.
+    "src/app/api/admin/recompute-quarter/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

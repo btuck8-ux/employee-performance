@@ -66,6 +66,7 @@ test("non-Toast stores pass time_entries through untouched — NOLA by construct
   const rows = [te("2026-07-01", "scheduled", "09:00:00"), te("2026-07-01", "worked", "09:02:00")];
   const out = mergeEffectiveEntries({
     isToast: false,
+    isMapped: true,
     goLive: null,
     directFeedDays: new Set(["2026-07-01"]),
     directStartByDate: new Map([["2026-07-01", "08:00:00"]]),
@@ -80,6 +81,7 @@ test("scheduled: the direct feed is authoritative on days it covers — the arti
   // direct-feed counterpart on a covered day is a deleted-upstream shift.
   const out = mergeEffectiveEntries({
     isToast: true,
+    isMapped: true,
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10", "2026-07-11"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -97,6 +99,7 @@ test("scheduled: a day the direct feed does NOT cover falls back to time_entries
   // schedule evidence is time_entries. The day-conditional method rule.
   const out = mergeEffectiveEntries({
     isToast: true,
+    isMapped: true,
     goLive: "2026-04-30",
     directFeedDays: new Set(["2026-06-02"]),
     directStartByDate: new Map([["2026-06-02", "08:30:00"]]),
@@ -112,6 +115,7 @@ test("scheduled: a day the direct feed does NOT cover falls back to time_entries
 test("worked: the go-live split — Toast owns on/after, time_entries owns before, no resurrection", () => {
   const out = mergeEffectiveEntries({
     isToast: true,
+    isMapped: true,
     goLive: "2026-07-01",
     directFeedDays: new Set(),
     directStartByDate: new Map(),
@@ -133,6 +137,7 @@ test("null go-live at a Toast store: worked keeps time_entries entirely (the §1
   // store, so keeping time_entries is lossless — mirrors v_worked_intervals.
   const out = mergeEffectiveEntries({
     isToast: true,
+    isMapped: true,
     goLive: null,
     directFeedDays: new Set(),
     directStartByDate: new Map(),
@@ -147,6 +152,7 @@ test("punctuality inputs: direct-feed start vs Toast punch-in land as scheduled/
   // now compares a Toast clock-in against the direct feed's start.
   const out = mergeEffectiveEntries({
     isToast: true,
+    isMapped: true,
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -157,4 +163,73 @@ test("punctuality inputs: direct-feed start vs Toast punch-in land as scheduled/
     te("2026-07-10", "scheduled", "09:00:00"),
     te("2026-07-10", "worked", "09:02:00"),
   ]);
+});
+
+// ---- Build 2 (2026-08-25): the unmapped-employee null ----------------------
+// The test that would have caught the sixth occurrence: five unmapped
+// employees scored 0% with their punches sitting in the unmatched queue.
+
+const { computeMetricsFromEntries } = await import("./performance-recompute.ts");
+
+test("BUILD 2 PIN: unmapped at a Toast store, scheduled post-go-live, no punches → attendance null, NEVER 0", () => {
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: false,
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-10", "2026-07-11"]),
+    directStartByDate: new Map([
+      ["2026-07-10", "09:00:00"],
+      ["2026-07-11", "09:00:00"],
+    ]),
+    toastInByDate: new Map(), // unmapped: punches unobservable by construction
+    timeEntries: [],
+  });
+  // Blind days emit nothing — not scheduled, not worked.
+  assert.deepEqual(merged, []);
+  const m = computeMetricsFromEntries(merged, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: true,
+  });
+  assert.equal(m.attendance_pct, null, "cannot-see must read null");
+  assert.equal(m.on_time_pct, null);
+  assert.equal(m.scheduled_count, 0);
+});
+
+test("Build 2: pre-go-live days still score for an unmapped employee — blindness is post-go-live only", () => {
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: false,
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-10"]),
+    directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
+    toastInByDate: new Map(),
+    timeEntries: [
+      te("2026-06-15", "scheduled", "09:00:00"),
+      te("2026-06-15", "worked", "08:59:00"),
+    ],
+  });
+  assert.deepEqual(merged, [
+    te("2026-06-15", "scheduled", "09:00:00"),
+    te("2026-06-15", "worked", "08:59:00"),
+  ]);
+});
+
+test("Build 2 scope: a MAPPED employee with zero punches keeps scoring absence — the Sierra Estrada rule", () => {
+  // A mapping that exists means EPD can see; seeing nothing is a finding
+  // for the anomaly list, not a null.
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: true,
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-10"]),
+    directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
+    toastInByDate: new Map(),
+    timeEntries: [],
+  });
+  assert.deepEqual(merged, [te("2026-07-10", "scheduled", "09:00:00")]);
+  const m = computeMetricsFromEntries(merged, {
+    scheduledScoredThrough: "2026-07-31",
+    punchesTimeClock: true,
+  });
+  assert.equal(m.attendance_pct, 0, "mapped + no punches = real absence, scored");
 });

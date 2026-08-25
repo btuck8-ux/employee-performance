@@ -4,6 +4,7 @@ import {
   loadToastLaborLocations,
   fetchToastEmployees,
 } from "@/lib/ingest/toast/labor";
+import { BEHAVIOURAL_MIN_OVERLAP_DAYS } from "@/lib/ingest/toast/labor-core";
 
 /**
  * Data builders for the SA Toast-crosswalk triage surface (ruling §3/§4).
@@ -39,8 +40,30 @@ export interface UnmatchedGuidView {
   punch_days: number;
   first_punch: string | null;
   last_punch: string | null;
+  /** PERMANENTLY STUCK (unmapped-null spec 2026-08-25): below the 6-day
+   * auto-commit floor AND idle past the stuck window — it can never
+   * accumulate enough overlap for the nightly matcher, so it needs a
+   * human, not another night. Distinct from accounts still accruing. */
+  stuck: boolean;
   /** All active employees at the store, overlap-sorted — the SA's select. */
   candidates: CandidateOption[];
+}
+
+/** The REVERSE check (unmapped-null spec 2026-08-25): the matcher is
+ * GUID-first and nothing asked "which scheduled employee has no mapping?"
+ * — which is how five people read 0% with their punches sitting in this
+ * very queue. An entry here is also the population Build 2 nulls. */
+export interface UnmappedScheduledView {
+  employee_id: string;
+  employee_code: string;
+  employee_name: string;
+  is_general_manager: boolean;
+  /** Inactive people stay on the reverse check (Codex 2026-08-25): their
+   * blind post-go-live days are still on their record. */
+  active: boolean;
+  location_code: string;
+  scheduled_days: number;
+  last_scheduled: string | null;
 }
 
 export interface RecentMatchView {
@@ -62,8 +85,14 @@ export interface CrosswalkPageData {
     roster_error: string | null;
   }>;
   queue: UnmatchedGuidView[];
+  unmapped_scheduled: UnmappedScheduledView[];
   recent_matches: RecentMatchView[];
 }
+
+/** Idle window for the stuck state: a sub-floor GUID with no punch in this
+ * many days will never reach BEHAVIOURAL_MIN_OVERLAP_DAYS on its own.
+ * 14 days = two full schedule cycles, conservative against vacations. */
+const STUCK_IDLE_DAYS = 14;
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
@@ -74,6 +103,7 @@ export async function buildCrosswalkPageData(
 ): Promise<CrosswalkPageData> {
   const locations = await loadToastLaborLocations(supabase);
   const queue: UnmatchedGuidView[] = [];
+  const unmappedScheduled: UnmappedScheduledView[] = [];
   const stores: CrosswalkPageData["stores"] = [];
 
   for (const loc of locations) {
@@ -124,34 +154,40 @@ export async function buildCrosswalkPageData(
     // already-mapped employees so a wrong double-attribution takes deliberate
     // effort — matching the auto-matcher's pool. If a person legitimately
     // needs a second guid, undo the first row and re-confirm both manually.)
-    const pool: Array<{
+    // Fetched WITHOUT the active filter (Codex 2026-08-25): the candidate
+    // pool stays active-only below, but the REVERSE check must also see
+    // inactive unmapped employees — a departed person's post-go-live
+    // scheduled days are still blind days on their record.
+    const unmappedEmployees: Array<{
       id: string;
       employee_code: string;
       employee_name: string;
       is_general_manager: boolean;
+      active: boolean;
     }> = [];
     for (let from = 0; ; from += BATCH) {
       const { data: emps, error: empError } = await supabase
         .from("employees")
-        .select("id, employee_code, employee_name, is_general_manager")
+        .select("id, employee_code, employee_name, is_general_manager, active")
         .eq("location_id", loc.id)
-        .eq("active", true)
         .order("employee_code", { ascending: true })
         .range(from, from + BATCH - 1);
       if (empError) throw new Error(`employees read: ${empError.message}`);
       for (const e of emps ?? []) {
         const id = String(e.id);
         if (!mappedEmployeeIds.has(id)) {
-          pool.push({
+          unmappedEmployees.push({
             id,
             employee_code: e.employee_code as string,
             employee_name: e.employee_name as string,
             is_general_manager: e.is_general_manager === true,
+            active: e.active === true,
           });
         }
       }
       if (!emps || emps.length < BATCH) break;
     }
+    const pool = unmappedEmployees.filter((e) => e.active);
 
     // Scheduled dates for the pool (display-hint overlap). THE FLIP
     // (2026-08-25): the pruned direct feed — the same source the matcher's
@@ -159,12 +195,12 @@ export async function buildCrosswalkPageData(
     // auto-matcher's evidence can't disagree (and unpruned time_entries
     // rows can't inflate an overlap hint).
     const schedByEmp = new Map<string, Set<string>>();
-    if (pool.length > 0) {
+    if (unmappedEmployees.length > 0) {
       for (let from = 0; ; from += BATCH) {
         const { data, error } = await supabase
           .from("seven_shifts_shifts")
           .select("employee_id, entry_date")
-          .in("employee_id", pool.map((e) => e.id))
+          .in("employee_id", unmappedEmployees.map((e) => e.id))
           .is("missing_upstream_since", null)
           .eq("deleted", false)
           .eq("draft", false)
@@ -219,6 +255,12 @@ export async function buildCrosswalkPageData(
             b.overlap_days - a.overlap_days ||
             a.employee_code.localeCompare(b.employee_code)
         );
+      const lastPunch = sorted[sorted.length - 1] ?? null;
+      const idleDays = lastPunch
+        ? Math.floor(
+            (Date.now() - new Date(`${lastPunch}T00:00:00Z`).getTime()) / 86400_000
+          )
+        : null;
       queue.push({
         toast_employee_guid: guid,
         location_id: loc.id,
@@ -228,8 +270,33 @@ export async function buildCrosswalkPageData(
         toast_deleted: roster?.deleted ?? false,
         punch_days: dates.size,
         first_punch: sorted[0] ?? null,
-        last_punch: sorted[sorted.length - 1] ?? null,
+        last_punch: lastPunch,
+        stuck:
+          dates.size < BEHAVIOURAL_MIN_OVERLAP_DAYS &&
+          idleDays !== null &&
+          idleDays > STUCK_IDLE_DAYS,
         candidates,
+      });
+    }
+
+    // THE REVERSE CHECK: unmapped employees with post-go-live scheduled
+    // days (from the pruned feed already fetched above). The pool is
+    // active-and-unmapped by construction, so this is "pool members with
+    // any scheduled day". These are the people Build 2 nulls — they must
+    // be visible here, not just silently not-computable.
+    for (const e of unmappedEmployees) {
+      const days = schedByEmp.get(e.id);
+      if (!days || days.size === 0) continue;
+      const sortedDays = [...days].sort();
+      unmappedScheduled.push({
+        employee_id: e.id,
+        employee_code: e.employee_code,
+        employee_name: e.employee_name,
+        is_general_manager: e.is_general_manager,
+        active: e.active,
+        location_code: loc.location_code,
+        scheduled_days: days.size,
+        last_scheduled: sortedDays[sortedDays.length - 1] ?? null,
       });
     }
 
@@ -272,5 +339,11 @@ export async function buildCrosswalkPageData(
     };
   });
 
-  return { stores, queue, recent_matches: recentMatches };
+  unmappedScheduled.sort((a, b) => b.scheduled_days - a.scheduled_days);
+  return {
+    stores,
+    queue,
+    unmapped_scheduled: unmappedScheduled,
+    recent_matches: recentMatches,
+  };
 }
