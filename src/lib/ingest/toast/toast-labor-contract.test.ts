@@ -228,3 +228,19 @@ test("§1: the resolved window is logged and returned on every run", () => {
   assert.match(laborSrc, /window_start: o\.window_start/);
   assert.match(laborSrc, /window_end: o\.window_end/);
 });
+
+test("a route named backfill BACKFILLS: floor intent by default; the cron stays incremental", () => {
+  // 2026-08-25, second window defect: once punches exist, the shared
+  // no-since path is always the 3-day high-water incremental — the estate
+  // re-backfill silently ran window_start 2026-08-22 at every store. The
+  // backfill route must declare floor intent; the cron must never.
+  assert.match(backfillSrc, /fromFloor: !since/);
+  assert.doesNotMatch(cronSrc, /fromFloor/);
+  // The intent branch precedes the high-water branch in the resolution.
+  const fromFloorBranch = laborSrc.indexOf("options.fromFloor");
+  const highWater = laborSrc.indexOf("lastSuccessfulWindowEnd(supabase, TOAST_LABOR_SOURCE");
+  assert.ok(
+    fromFloorBranch > 0 && highWater > 0 && fromFloorBranch < highWater,
+    "fromFloor must be resolved before the incremental high-water mark"
+  );
+});
