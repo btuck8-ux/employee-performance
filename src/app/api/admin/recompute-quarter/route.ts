@@ -221,19 +221,32 @@ export async function GET(request: Request) {
       }
     }
 
-    // Non-puncher markers, for null reasons in the report.
+    // Non-puncher markers + crosswalk mapping presence, for null reasons.
+    // A null that cannot say WHICH kind of null it is has only solved half
+    // the problem (spec 2026-08-25 §5a): "no crosswalk row", "cover-
+    // dominated schedule", "non-puncher" and "genuinely not scheduled" are
+    // four different facts that must not render as one string.
     const nonPunchers = new Set<string>();
+    const mapped = new Set<string>();
     {
       const ids = [...employees.keys()];
       for (let i = 0; i < ids.length; i += 100) {
+        const chunkIds = ids.slice(i, i + 100);
         const { data, error } = await supabase
           .from("employees")
           .select("id, punches_time_clock")
-          .in("id", ids.slice(i, i + 100))
+          .in("id", chunkIds)
           .eq("punches_time_clock", false);
         // A dropped error here would silently mislabel null reasons.
         if (error) throw new Error(`non-puncher read: ${error.message}`);
         for (const r of data ?? []) nonPunchers.add(String(r.id));
+        const { data: mapRows, error: mapErr } = await supabase
+          .from("v_mapped_employees")
+          .select("employee_id")
+          .eq("location_id", locationId)
+          .in("employee_id", chunkIds);
+        if (mapErr) throw new Error(`mapped-set read: ${mapErr.message}`);
+        for (const r of mapRows ?? []) mapped.add(String(r.employee_id));
       }
     }
 
@@ -290,7 +303,11 @@ export async function GET(request: Request) {
               ? null
               : nonPunchers.has(emp.id)
                 ? "non-puncher exclusion (mig 056)"
-                : "no scheduled shifts in window (none scheduled, or unmapped — see the crosswalk reverse check)",
+                : m.cover_dominated
+                  ? `cover-dominated schedule (${m.covered_shifts} covers vs ${m.scheduled_count} scheduled) — schedule record not trustworthy; anomaly, not absence`
+                  : !mapped.has(emp.id)
+                    ? "unmapped — EPD cannot see this employee's punches (Build 2 blindness; see the crosswalk reverse check)"
+                    : "no scheduled shifts in window (genuinely unscheduled)",
         });
       }
     }
@@ -334,6 +351,17 @@ export async function GET(request: Request) {
         .filter((r) => r.before.attendance_pct !== null && r.after.attendance_pct === null)
         .map((r) => ({
           employee: `${r.employee_code} ${r.employee_name}`,
+          reason: r.null_reason,
+        })),
+      // The cover-ratio anomaly surface (loud, never a silent null): every
+      // employee whose schedule record the guard refused to publish
+      // against, whether or not they were previously null.
+      cover_dominated_anomalies: reports
+        .filter((r) => r.null_reason?.startsWith("cover-dominated"))
+        .map((r) => ({
+          employee: `${r.employee_code} ${r.employee_name}`,
+          scheduled_days: r.scheduled_days,
+          worked_days: r.worked_days,
           reason: r.null_reason,
         })),
       store_attendance_day_weighted: {

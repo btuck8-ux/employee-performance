@@ -67,6 +67,7 @@ test("non-Toast stores pass time_entries through untouched — NOLA by construct
   const out = mergeEffectiveEntries({
     isToast: false,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: null,
     directFeedDays: new Set(["2026-07-01"]),
     directStartByDate: new Map([["2026-07-01", "08:00:00"]]),
@@ -82,6 +83,7 @@ test("scheduled: the direct feed is authoritative on days it covers — the arti
   const out = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10", "2026-07-11"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -100,6 +102,7 @@ test("scheduled: a day the direct feed does NOT cover falls back to time_entries
   const out = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-04-30",
     directFeedDays: new Set(["2026-06-02"]),
     directStartByDate: new Map([["2026-06-02", "08:30:00"]]),
@@ -116,6 +119,7 @@ test("worked: the go-live split — Toast owns on/after, time_entries owns befor
   const out = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(),
     directStartByDate: new Map(),
@@ -138,6 +142,7 @@ test("null go-live at a Toast store: worked keeps time_entries entirely (the §1
   const out = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: null,
     directFeedDays: new Set(),
     directStartByDate: new Map(),
@@ -153,6 +158,7 @@ test("punctuality inputs: direct-feed start vs Toast punch-in land as scheduled/
   const out = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -175,6 +181,7 @@ test("BUILD 2 PIN: unmapped at a Toast store, scheduled post-go-live, no punches
   const merged = mergeEffectiveEntries({
     isToast: true,
     isMapped: false,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10", "2026-07-11"]),
     directStartByDate: new Map([
@@ -199,6 +206,7 @@ test("Build 2: pre-go-live days still score for an unmapped employee — blindne
   const merged = mergeEffectiveEntries({
     isToast: true,
     isMapped: false,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -220,6 +228,7 @@ test("Build 2 scope: a MAPPED employee with zero punches keeps scoring absence �
   const merged = mergeEffectiveEntries({
     isToast: true,
     isMapped: true,
+    directFeedFirstDate: "2026-01-01",
     goLive: "2026-07-01",
     directFeedDays: new Set(["2026-07-10"]),
     directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
@@ -232,4 +241,77 @@ test("Build 2 scope: a MAPPED employee with zero punches keeps scoring absence �
     punchesTimeClock: true,
   });
   assert.equal(m.attendance_pct, 0, "mapped + no punches = real absence, scored");
+});
+
+// ---- Q2-blocker fix (2026-08-25): employee-level direct-feed presence ------
+
+test("KEVIN MONTIE PIN: scheduled days before the employee's first direct-feed row survive on store-covered days", () => {
+  // COS coverage begins 06-01; Kevin's feed record begins 07-07. His June
+  // time_entries scheduled rows are schedule-coverage blindness, not
+  // deletion artifacts — they must keep scoring (60%, not a confident 0%).
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: true,
+    directFeedFirstDate: "2026-07-07",
+    goLive: "2026-07-07",
+    directFeedDays: new Set(["2026-06-10", "2026-06-11", "2026-07-10"]),
+    directStartByDate: new Map([["2026-07-10", "09:00:00"]]),
+    toastInByDate: new Map(),
+    timeEntries: [
+      te("2026-06-10", "scheduled", "09:00:00"), // store-covered, pre-presence → KEPT
+      te("2026-06-10", "worked", "09:01:00"),    // pre-go-live worked → kept
+      te("2026-06-11", "scheduled", "10:00:00"), // store-covered, pre-presence → KEPT
+    ],
+  });
+  assert.deepEqual(merged, [
+    te("2026-06-10", "scheduled", "09:00:00"),
+    te("2026-06-10", "worked", "09:01:00"),
+    te("2026-06-11", "scheduled", "10:00:00"),
+    te("2026-07-10", "scheduled", "09:00:00"), // on/after presence: direct feed authoritative
+  ]);
+});
+
+test("the artifact-drop does NOT regress for an employee WITH presence — the 139 recovered days", () => {
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: true,
+    directFeedFirstDate: "2026-06-01",
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-11"]),
+    directStartByDate: new Map(), // covered day, no direct shift for them
+    toastInByDate: new Map(),
+    timeEntries: [te("2026-07-11", "scheduled", "11:00:00")], // the artifact
+  });
+  assert.deepEqual(merged, [], "a present employee's artifact row must still drop");
+});
+
+test("the boundary day itself — the employee's first direct-feed date — is authoritative", () => {
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: true,
+    directFeedFirstDate: "2026-07-07",
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-07"]),
+    directStartByDate: new Map([["2026-07-07", "08:30:00"]]),
+    toastInByDate: new Map(),
+    timeEntries: [te("2026-07-07", "scheduled", "10:00:00")], // superseded by the feed
+  });
+  assert.deepEqual(merged, [te("2026-07-07", "scheduled", "08:30:00")]);
+});
+
+test("an employee with NO direct-feed presence keeps time_entries scheduled on covered days", () => {
+  const merged = mergeEffectiveEntries({
+    isToast: true,
+    isMapped: true,
+    directFeedFirstDate: null,
+    goLive: "2026-07-01",
+    directFeedDays: new Set(["2026-07-11"]),
+    directStartByDate: new Map(),
+    toastInByDate: new Map([["2026-07-11", "09:00:00"]]),
+    timeEntries: [te("2026-07-11", "scheduled", "09:00:00")],
+  });
+  assert.deepEqual(merged, [
+    te("2026-07-11", "scheduled", "09:00:00"),
+    te("2026-07-11", "worked", "09:00:00"),
+  ]);
 });

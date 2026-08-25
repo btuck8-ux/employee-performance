@@ -24,7 +24,7 @@ export interface TimeEntryRow {
 export const ON_TIME_GRACE_MINUTES = 3;
 
 export interface PerformanceMetrics {
-  attendance_pct: number | null;     // 0-100; null if no scheduled shifts OR punches_time_clock=false (excluded, never 0)
+  attendance_pct: number | null;     // 0-100; null if no scheduled shifts OR punches_time_clock=false OR cover-dominated (excluded, never 0)
   on_time_pct: number | null;        // strict: actual_in <= scheduled_in
   on_time_grace_pct: number | null;  // with 3-minute grace period
   covered_shifts: number;
@@ -33,6 +33,14 @@ export interface PerformanceMetrics {
   missed_count: number;
   on_time_count: number;
   on_time_grace_count: number;
+  /** Cover-ratio guard (Q2-blocker spec 2026-08-25, second layer): true
+   * when shift covers dominate a near-empty denominator — the schedule
+   * record is not trustworthy enough to publish a percentage against, and
+   * attendance/punctuality read null. Fires on the SHAPE of the answer,
+   * not a known cause: it would have caught Kevin Montie (5 scheduled, 0
+   * matched, 16 covers) with no diagnosis at all. Loud via the lever's
+   * null reasons and anomaly listing, never a silent null. */
+  cover_dominated: boolean;
 }
 
 /**
@@ -122,6 +130,7 @@ export function computeMetricsFromEntries(
       missed_count: 0,
       on_time_count: 0,
       on_time_grace_count: 0,
+      cover_dominated: false,
     };
   }
 
@@ -148,14 +157,41 @@ export function computeMetricsFromEntries(
   }
 
   let covered = 0;
+  // The guard's cover count is CAP-BOUNDED (Codex blocker, 2026-08-25):
+  // covered_shifts itself deliberately counts beyond the cap (a confirmed
+  // worked shift is a covered shift whenever it happened), but the guard
+  // compares covers against the CAPPED scheduled denominator — post-cap
+  // covers in the ratio would null attendance for someone who simply
+  // worked extra shifts after the scored-through date.
+  let coveredThroughCap = 0;
   for (const date of workedByDate.keys()) {
-    if (!scheduledByDate.has(date)) covered += 1;
+    if (!scheduledByDate.has(date)) {
+      covered += 1;
+      if (date <= cap) coveredThroughCap += 1;
+    }
   }
 
   const scheduledCount = attended + missed;
-  const attendance_pct = scheduledCount > 0 ? (attended / scheduledCount) * 100 : null;
-  const on_time_pct = attended > 0 ? (onTime / attended) * 100 : null;
-  const on_time_grace_pct = attended > 0 ? (onTimeGrace / attended) * 100 : null;
+
+  // COVER-RATIO GUARD (Q2-blocker spec 2026-08-25, Tucker's second layer).
+  // Nobody works sixteen unscheduled shifts and zero scheduled ones: when
+  // covers OUTNUMBER the scheduled denominator AND the cover count is
+  // non-trivial, the schedule record is the untrustworthy side, and a
+  // confident percentage against it is a lie. Threshold from the data,
+  // not taste: the fixture is Kevin Montie (5 scheduled / 0 matched / 16
+  // covers) while normal profiles run 20-40 scheduled days against 0-3
+  // covers per quarter — `covered > scheduled` means the MAJORITY of the
+  // person's working days were unscheduled, and `covered >= 5` keeps a
+  // part-timer's 2-cover week from tripping it. Counts stay real; only
+  // the percentages go not-computable.
+  const coverDominated = coveredThroughCap > scheduledCount && coveredThroughCap >= 5;
+
+  const attendance_pct =
+    !coverDominated && scheduledCount > 0 ? (attended / scheduledCount) * 100 : null;
+  const on_time_pct =
+    !coverDominated && attended > 0 ? (onTime / attended) * 100 : null;
+  const on_time_grace_pct =
+    !coverDominated && attended > 0 ? (onTimeGrace / attended) * 100 : null;
 
   return {
     attendance_pct,
@@ -167,6 +203,7 @@ export function computeMetricsFromEntries(
     missed_count: missed,
     on_time_count: onTime,
     on_time_grace_count: onTimeGrace,
+    cover_dominated: coverDominated,
   };
 }
 
@@ -185,6 +222,8 @@ export interface RangeMetrics {
   missed_count: number;
   on_time_count: number;
   on_time_grace_count: number;
+  /** Cover-ratio guard flag — see PerformanceMetrics.cover_dominated. */
+  cover_dominated: boolean;
   // surveys
   surveys_assigned: number;
   surveys_completed: number;
@@ -729,6 +768,7 @@ export async function computeMetricsForRange(
       missed_count: shift.missed_count,
       on_time_count: shift.on_time_count,
       on_time_grace_count: shift.on_time_grace_count,
+      cover_dominated: shift.cover_dominated,
       surveys_assigned,
       surveys_completed,
       survey_engagement_pct,

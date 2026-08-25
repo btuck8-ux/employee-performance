@@ -150,9 +150,11 @@ function metricsFixture(overrides: Partial<RangeMetricsT>): RangeMetricsT {
     tattle_quantity: 0,
     tasks_accountable: 0,
     tasks_completed: 0,
-    // Composite fields present on the engine result but NEVER emitted:
+    // Present on the engine result but NEVER emitted on the wire (the
+    // cover-ratio guard flag included — Codex nit 2026-08-25):
     customer_service_score: 87.5,
     total_impact_score: 91.2,
+    cover_dominated: false,
     ...overrides,
   } as RangeMetricsT;
 }
