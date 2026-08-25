@@ -33,19 +33,37 @@ test("locations.timezone mirrors tz.ts exactly — TS↔SQL parity", () => {
   assert.match(migSrc, /set timezone = 'America\/Chicago'/);
 });
 
-test("the split is GO-LIVE-DATED, not all-or-nothing per store", () => {
+test("the split is GO-LIVE-DATED, not all-or-nothing per store — and a null go-live loses nothing", () => {
   // Pre-go-live history at Toast stores exists only in time_entries;
-  // Houston's Q2 2026 straddles its 2026-04-30 go-live.
+  // Houston's Q2 2026 straddles its 2026-04-30 go-live. A GUID store with
+  // no go-live yet keeps its time_entries history (Codex blocker: the
+  // two-sided date test would otherwise drop the store entirely).
   assert.match(
     migSrc,
-    /or te\.entry_date < l\.toast_sales_start_date/,
+    /or te\.entry_date < cfg\.go_live/,
     "time_entries side must admit Toast stores' pre-go-live rows"
   );
+  assert.match(migSrc, /or cfg\.go_live is null/, "null go-live keeps the time_entries path");
   assert.match(
     migSrc,
-    /tte\.entry_date >= l\.toast_sales_start_date/,
+    /tte\.entry_date >= cfg\.go_live/,
     "Toast side must start at the store's own go-live"
   );
+});
+
+test("store config rides a definer-rights config view — a locations join would drop user-tier self reads", () => {
+  // locations_read grants only epd_authorized_location_ids(), empty for the
+  // user tier; a security_invoker join to locations would silently drop a
+  // self-only viewer's OWN intervals. The config view exposes exactly three
+  // config columns; row protection stays on the source tables.
+  assert.match(migSrc, /create or replace view public\.v_location_flip_config/);
+  assert.match(migSrc, /join public\.v_location_flip_config cfg/);
+  // Neither union side may join locations directly.
+  const between = migSrc.slice(
+    migSrc.indexOf("create or replace view public.v_worked_intervals"),
+    migSrc.indexOf("comment on view public.v_worked_intervals")
+  );
+  assert.doesNotMatch(between, /join public\.locations/);
 });
 
 test("hours keep pay-bucket semantics on both sides — never bare spans for eligibility/weights", () => {
