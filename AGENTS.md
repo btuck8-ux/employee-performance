@@ -113,7 +113,15 @@ derivable from the code alone.
   class).
 - NOLA: `actuals_source='cake'` — excluded from the 7shifts time fan-out;
   its labor rides the cake-nightly Playwright Action. `pos_via_7shifts` =
-  Houston only.
+  Houston only — **superseded for SALES by Tucker's 2026-08-25 ruling**:
+  HOU's ongoing sales source is Toast (mig 060 flips
+  `toast_sales_enabled` + ships the `v_sales_effective` read preference;
+  the 7shifts mirror dropped every HOU tip after 2026-05-31). The
+  pos_receipts nightly still runs (rows land superseded-at-read); retiring
+  it is a pending explicit Tucker step. `sales_records.source` (mig 059)
+  is the provenance column — every writer stamps it, and a claim about
+  which system wrote a row cites `raw_row`'s payload, never the key's
+  format.
 - `employees.hire_date`: CSV/manual values are NEVER overwritten. NULLs
   fill from the earliest **worked** `time_entries` row (Tucker §6-B ruling
   2026-08-17 — scheduled rows deliberately don't count). The fill rides

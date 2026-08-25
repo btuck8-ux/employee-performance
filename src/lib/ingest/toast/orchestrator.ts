@@ -3,15 +3,20 @@
  * the stores wired for it (handoff-co-sales-toast-plus-cake-2026-07-26.md §2).
  *
  * The crosswalk is the explicit `locations.toast_sales_enabled` flag
- * (migration 041) — the 6 CO stores and ONLY them. The provisioned credential
- * can see 9 restaurants (CO + Houston + Chico + a stray second Fort Collins),
- * but Houston's sales already arrive via the 7shifts pos_receipts nightly (a
- * Toast pull would double-source them) and the others are not EPD stores.
- * Before 041 the guard was implicitly "toast_restaurant_guid IS NOT NULL";
- * the kitchen feed needs HOU's GUID populated, so the flag now carries the
- * enforcement and the GUID column is pure identity. Never iterate "all
- * locations the credential can see", and never set toast_sales_enabled for
- * HOU.
+ * (migration 041). The provisioned credential can see 9 restaurants (CO +
+ * Houston + Chico + a stray second Fort Collins); only flagged stores are
+ * ever pulled. Never iterate "all locations the credential can see".
+ *
+ * ⚠️ HOU RULE REVISED (Tucker 2026-08-25; was "never set
+ * toast_sales_enabled for HOU"). Houston's ongoing sales source is now
+ * Toast: its 7shifts pos_receipts mirror dropped every tip after
+ * 2026-05-31 and a whole month of days before that. Mig 060 flips the flag
+ * for HOU AND ships the read-time source preference (v_sales_effective —
+ * sevenshifts rows at Toast stores post-go-live are superseded at read,
+ * never deleted), which is what retires 041's double-source hazard: the
+ * flag flip and the preference land together, never separately. The
+ * pos_receipts nightly keeps running for now (its rows land superseded);
+ * retiring that writer is a later, explicit Tucker step.
  *
  * Each store gets its own incremental window: lastSuccessfulWindowEnd ->
  * now, with the very first run (or an operator `since` override) floored at
