@@ -188,10 +188,16 @@ test("§1 (addendum 2026-08-25): NO hardcoded window floor — the store's own g
   // Houston's 2026-04-30 go-live and hid 501 punches for two months. The
   // window floor is locations.toast_sales_start_date, nothing else.
   const kitchenSrc = read("src/lib/ingest/toast/kitchen-ingest.ts");
+  const orchestratorSrc = read("src/lib/ingest/toast/orchestrator.ts");
+  const probeSrc = read("src/app/api/admin/probe-toast-labor/route.ts");
   for (const [name, src] of [
     ["labor.ts", laborSrc],
     ["backfill route", backfillSrc],
     ["kitchen-ingest.ts", kitchenSrc],
+    // Codex 2026-08-25: the sales orchestrator carried the same fallback,
+    // and the probe's default window preserved the Houston blind spot.
+    ["orchestrator.ts", orchestratorSrc],
+    ["probe route", probeSrc],
   ] as const) {
     assert.doesNotMatch(
       src,
@@ -202,12 +208,16 @@ test("§1 (addendum 2026-08-25): NO hardcoded window floor — the store's own g
   // The route passes since through unchanged; absent means each store's
   // own floor, never a constant.
   assert.match(backfillSrc, /searchParams\.get\("since"\) \?\? undefined/);
+  // The probe states its window explicitly — no default at all (§7).
+  assert.match(probeSrc, /start and end \(YYYY-MM-DD\) are required/);
 });
 
 test("§1: a null go-live FAILS LOUDLY — a missing store fact is a data error, not a default", () => {
   const kitchenSrc = read("src/lib/ingest/toast/kitchen-ingest.ts");
+  const orchestratorSrc = read("src/lib/ingest/toast/orchestrator.ts");
   assert.match(laborSrc, /no toast_sales_start_date/);
   assert.match(kitchenSrc, /no toast_sales_start_date/);
+  assert.match(orchestratorSrc, /no toast_sales_start_date/);
 });
 
 test("§1: the resolved window is logged and returned on every run", () => {
