@@ -42,7 +42,10 @@ export default async function ToastCrosswalkPage({
           Map Toast punch accounts to EPD employees. Email matches commit
           automatically; unambiguous schedule-overlap matches auto-commit with
           evidence; everything else waits here for your call. Names are hints —
-          matches are committed by id, never by name.
+          matches are committed by id, never by name. GM-tagged candidates
+          punch irregularly by nature (offsite work, on-call time that never
+          reaches a time clock), so a loose-looking overlap on a GM is not
+          necessarily a weak match.
         </p>
       </div>
 
@@ -163,6 +166,7 @@ export default async function ToastCrosswalkPage({
                 {q.candidates.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.employee_code} — {c.employee_name}
+                    {c.is_general_manager ? " [GM]" : ""}
                     {c.overlap_days > 0 ? ` (${c.overlap_days}d overlap)` : ""}
                   </option>
                 ))}
@@ -204,6 +208,14 @@ export default async function ToastCrosswalkPage({
                   >
                     <td className="px-3 py-2">
                       {m.employee_code} — {m.employee_name}
+                      {m.is_general_manager && (
+                        <span
+                          className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600"
+                          title="General manager — irregular punch patterns are expected"
+                        >
+                          GM
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2">{m.location_code}</td>
                     <td className="px-3 py-2">{m.match_method}</td>
