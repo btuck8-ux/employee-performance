@@ -28,13 +28,21 @@
 -- first. Apply order: 058 → 059 → 060, ALL with the flip PR — this
 -- migration moves published Houston numbers the moment it applies.
 --
--- ⚠️ OPERATOR WINDOW (documented, accepted): applying 058/059/060 BEFORE
--- the HOU Toast backfill lands means Houston's segment C (05-31 → present)
--- reads EMPTY — the sevenshifts rows are preferred away and no toast rows
--- exist yet to replace them. The sequence is: apply 058/059/060, then run
--- the HOU Toast backfill (the enablement in section 4 arms it — the
--- nightly orchestrator's first HOU run backfills from go-live), whose
--- recompute tail then lands the correct numbers. Do not stop midway.
+-- ⚠️ NO EMPTY WINDOW — THE PREFERENCE IS DAY-CONDITIONAL (blocker fix,
+-- 2026-08-25; the earlier "documented operator window" here was the
+-- defect, not a mitigation). A sevenshifts row is superseded only where a
+-- Toast row exists for that store+day, so applying this migration before,
+-- during, or after the HOU backfill can never blank a day: days flip over
+-- one at a time as Toast data lands, and a failed ingest falls BACK to the
+-- sevenshifts rows instead of reading zero. The recommended sequence still
+-- backfills FIRST — write Houston's full Toast history via the deployed
+-- lever (the approved gap 05-05→05-30; the approved complementary overlap
+-- 04-30→05-04 with override_double_count_days; then 05-31 → today, NEW
+-- SCOPE needing its own dry-run and ruling: there sevenshifts and toast
+-- rows coexist BY DESIGN, double_count_risk fires on every day, and it is
+-- correct-and-overridden because the preference is what de-duplicates them
+-- at read time) — then apply 058 → 059 (no-op) → 060 for an instantaneous
+-- swap. Every write dry-runs first.
 --
 -- ⚠️ FILE-ONLY until Cowork/Tucker applies via MCP (repo↔prod parity
 -- pattern). NOT safe ahead of the flip PR's code — see apply order above.
@@ -63,6 +71,19 @@
 -- sales_records' own RLS; v_location_flip_config is the 058 definer-rights
 -- config view (three config columns, nothing row-sensitive).
 -- ----------------------------------------------------------------------------
+-- ⚠️ THE PREFERENCE IS DAY-CONDITIONAL (blocker fix, 2026-08-25): a
+-- sevenshifts row is superseded ONLY where a Toast row actually exists for
+-- that store and day. The date-only predicate would have blanked Houston
+-- the moment this applied — 7,814 rows / $232,097 across ~85 days
+-- superseded with ZERO Toast rows yet ingested to replace them: Houston's
+-- entire Q3 plus a month of Q2 reading zero sales. A fix must not pass
+-- through a state worse than the defect it repairs. METHOD RULE, PINNED:
+-- a cutover predicate must depend on the replacement being PRESENT, not
+-- merely on the cutover date having passed — a date says what should be
+-- true; an existence check says what is. This also makes the view robust
+-- to a failed/interrupted Toast ingest (days fall back to the sevenshifts
+-- rows instead of reading zero — the failure mode this sprint exists to
+-- eliminate) and cutover-safe for the next store with no choreography.
 create or replace view public.v_sales_effective
 with (security_invoker = true) as
 select s.*
@@ -74,10 +95,27 @@ where not (
   and cfg.is_toast = true
   and cfg.go_live is not null
   and s.transaction_at >= cfg.go_live::timestamp
+  and exists (
+    select 1 from public.sales_records t
+    where t.location_id = s.location_id
+      and t.source = 'toast'
+      and t.transaction_at::date = s.transaction_at::date
+  )
 );
 
+-- The EXISTS probes (location_id, source, transaction_at::date); the cast
+-- means a plain btree on transaction_at cannot serve the date equality, so
+-- this is an EXPRESSION index on the cast — the probe is then an equality
+-- on all three index columns. Plan note: verified by reasoning here; local
+-- EXPLAIN is not possible (file-only migration). Cowork runs EXPLAIN on
+-- the tip-metrics RPC at apply time and records the plan in the apply
+-- notes — a nested-loop over the base table there is an apply-time
+-- finding.
+create index if not exists idx_sales_source_day
+  on public.sales_records (location_id, source, (transaction_at::date));
+
 comment on view public.v_sales_effective is
-  'THE single sales-preference point (mig 060, Houston-to-Toast spec 2026-08-25 §3): excludes only superseded 7shifts mirror rows at Toast stores on/after each store''s own go-live. toast/legacy_pos/csv always pass (legacy_pos MUST count — complementary 04-30→05-04 ruling); null-source rows pass (unclassified = a finding, never a silent drop). Superseded rows are preferred away, never deleted — retire only on Tucker''s word. Do not re-point sales readers at sales_records.';
+  'THE single sales-preference point (mig 060, Houston-to-Toast spec 2026-08-25 §3 + day-conditional blocker fix): a 7shifts mirror row at a Toast store on/after go-live is superseded ONLY where a Toast row exists for that store+day — the cutover depends on the replacement being present, never on the date alone. toast/legacy_pos/csv always pass (legacy_pos MUST count — complementary 04-30→05-04 ruling); null-source rows pass (unclassified = a finding, never a silent drop). Superseded rows are preferred away, never deleted — retire only on Tucker''s word. Do not re-point sales readers at sales_records.';
 
 -- ----------------------------------------------------------------------------
 -- 2) v_sales_presence — re-emitted from 058 §3 with the sales source flipped

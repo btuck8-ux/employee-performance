@@ -27,19 +27,46 @@ test("v_sales_effective filters ONLY superseded sevenshifts rows at Toast stores
   assert.match(migSrc, /s\.source = 'sevenshifts'/);
   assert.match(migSrc, /cfg\.is_toast = true/);
   assert.match(migSrc, /s\.transaction_at >= cfg\.go_live::timestamp/);
-  // The exclusion names exactly ONE source. legacy_pos always counts (the
-  // complementary overlap ruling); toast/csv/null pass untouched.
+  // The superseded side names exactly ONE source. legacy_pos always counts
+  // (the complementary overlap ruling); toast/csv/null pass untouched.
+  // (The EXISTS probe's t.source = 'toast' is the replacement check, not a
+  // second superseded source — pinned separately below.)
   const exclusion = migSrc.slice(
     migSrc.indexOf("where not ("),
     migSrc.indexOf(");", migSrc.indexOf("where not ("))
   );
-  const sourceLiterals = exclusion.match(/source = '\w+'/g) ?? [];
-  assert.deepEqual(sourceLiterals, ["source = 'sevenshifts'"], "only sevenshifts is ever superseded");
+  const supersededLiterals = exclusion.match(/s\.source = '\w+'/g) ?? [];
+  assert.deepEqual(supersededLiterals, ["s.source = 'sevenshifts'"], "only sevenshifts is ever superseded");
+});
+
+test("THE BLOCKER PIN: a sevenshifts row with no Toast counterpart for its day SURVIVES the view", () => {
+  // 2026-08-25: the date-only predicate would have blanked Houston's Q3 +
+  // a month of Q2 the moment mig 060 applied — 7,814 rows superseded with
+  // zero Toast rows yet ingested. Method rule: a cutover predicate must
+  // depend on the replacement being PRESENT, not merely on the cutover
+  // date having passed. The EXISTS is that presence check and it must
+  // live INSIDE the exclusion — superseding is conditional on it.
+  const exclusion = migSrc.slice(
+    migSrc.indexOf("where not ("),
+    migSrc.indexOf(");", migSrc.indexOf("where not ("))
+  );
+  assert.match(exclusion, /and exists \(/);
+  assert.match(exclusion, /t\.source = 'toast'/);
+  assert.match(
+    exclusion,
+    /t\.transaction_at::date = s\.transaction_at::date/,
+    "the replacement check is per store AND per day"
+  );
+  assert.match(exclusion, /t\.location_id = s\.location_id/);
+  // The cast needs an expression index; the plain-column form can't serve it.
+  assert.match(migSrc, /on public\.sales_records \(location_id, source, \(transaction_at::date\)\)/);
 });
 
 test("every sales reader goes through the preference — sales_records is read directly ONLY by the view", () => {
   const directReads = migSrc.match(/(?:from|join) public\.sales_records/g) ?? [];
-  assert.equal(directReads.length, 1, "exactly one direct read — v_sales_effective itself");
+  // Two reads, both inside v_sales_effective: the base scan and the
+  // day-conditional EXISTS probe. No re-emitted function reads it.
+  assert.equal(directReads.length, 2, "both direct reads live in v_sales_effective itself");
   for (const fn of [
     "v_sales_presence",
     "compute_employee_tip_metrics",
