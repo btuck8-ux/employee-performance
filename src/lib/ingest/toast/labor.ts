@@ -498,9 +498,22 @@ export async function ingestToastLaborForLocation(
     loc.labor_start_date,
     untilDate
   );
+  // Mutual-exclusion evidence (spec 2026-08-25 §5b): days each candidate
+  // already punched via their OWN mapped GUID(s). Built from the punch
+  // index the matcher already holds — no extra reads.
+  const ownPunchDaysByEmployee = new Map<string, Set<string>>();
+  for (const r of xwalkRows) {
+    const dates = punchIndex.inByGuid.get(r.toast_employee_guid);
+    if (!dates) continue;
+    const set = ownPunchDaysByEmployee.get(r.employee_id) ?? new Set<string>();
+    for (const d of dates.keys()) set.add(d);
+    ownPunchDaysByEmployee.set(r.employee_id, set);
+  }
+
   const candidates: TimeAwareCandidate[] = candidatesRaw.map((c) => ({
     employee_id: c.id,
     scheduleStartByDate: schedules.get(c.id) ?? new Map<string, string>(),
+    ownPunchDays: ownPunchDaysByEmployee.get(c.id),
   }));
 
   const unmatchedEntries = [...punchIndex.inByGuid.entries()].filter(

@@ -1,7 +1,12 @@
 import { redirect } from "next/navigation";
 import { getSessionRole } from "@/lib/authz";
 import { buildCrosswalkPageData } from "./data";
-import { confirmToastMatchAction, undoToastMatchAction } from "./actions";
+import {
+  confirmToastMatchAction,
+  undoToastMatchAction,
+  archiveEmployeeAction,
+  unarchiveEmployeeAction,
+} from "./actions";
 
 /**
  * SA-only Toast employee crosswalk triage (ruling §3/§4, 2026-08-23).
@@ -31,6 +36,9 @@ export default async function ToastCrosswalkPage({
   const confirmed = search.confirmed === "1";
   const already = search.already === "1";
   const undone = search.undone === "1";
+  const archived = search.archived === "1";
+  const unarchived = search.unarchived === "1";
+  const archivedEmpId = str(search.emp);
   const bannerCode = str(search.code);
   const error = str(search.error);
 
@@ -63,6 +71,29 @@ export default async function ToastCrosswalkPage({
       {undone && (
         <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
           Mapping removed — its punches are unattributed again.
+        </div>
+      )}
+      {archived && (
+        <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>
+            {bannerCode ? `${bannerCode} archived` : "Employee archived"} —
+            their rows leave the CP and THQ score feeds. Nothing was deleted;
+            their schedule rows remain the vendor&apos;s record.
+          </span>
+          {archivedEmpId && (
+            <form action={unarchiveEmployeeAction}>
+              <input type="hidden" name="employee_id" value={archivedEmpId} />
+              <button type="submit" className="text-xs text-amber-900 underline">
+                Undo
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+      {unarchived && (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {bannerCode ? `${bannerCode} restored` : "Employee restored"} — back
+          on the roster and the feeds.
         </div>
       )}
       {error && (
@@ -114,6 +145,7 @@ export default async function ToastCrosswalkPage({
                   <th className="px-3 py-2">Store</th>
                   <th className="px-3 py-2">Scheduled days</th>
                   <th className="px-3 py-2">Last scheduled</th>
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
@@ -136,6 +168,34 @@ export default async function ToastCrosswalkPage({
                     <td className="px-3 py-2">{u.scheduled_days}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">
                       {u.last_scheduled ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {/* Archive (spec 2026-08-25 §2): the consequence is
+                          named and confirmed, never silent — this removes
+                          them from the CP/THQ feeds. Nothing is deleted;
+                          schedule rows stay the vendor's record. */}
+                      <form
+                        action={archiveEmployeeAction}
+                        className="flex items-center gap-2"
+                      >
+                        <input type="hidden" name="employee_id" value={u.employee_id} />
+                        <label className="flex items-center gap-1 text-xs text-amber-900">
+                          <input
+                            type="checkbox"
+                            name="confirm_feed_consequence"
+                            value="1"
+                            required
+                            className="h-3 w-3"
+                          />
+                          departed — remove from CP/THQ feeds
+                        </label>
+                        <button
+                          type="submit"
+                          className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                        >
+                          Archive
+                        </button>
+                      </form>
                     </td>
                   </tr>
                 ))}
@@ -234,6 +294,46 @@ export default async function ToastCrosswalkPage({
                 className="rounded-md bg-ikes-green px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
               >
                 Confirm mapping
+              </button>
+            </form>
+            {/* Archive (spec 2026-08-25 §2): for a stuck entry whose owner
+                has genuinely left, the SA archives the EMPLOYEE (the GUID
+                stays queued as the vendor's record). Same candidate select;
+                the feed consequence is confirmed, never silent. */}
+            <form
+              action={archiveEmployeeAction}
+              className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2"
+            >
+              <select
+                name="employee_id"
+                required
+                defaultValue=""
+                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+              >
+                <option value="" disabled>
+                  Archive a departed employee…
+                </option>
+                {q.candidates.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.employee_code} — {c.employee_name}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1 text-xs text-amber-900">
+                <input
+                  type="checkbox"
+                  name="confirm_feed_consequence"
+                  value="1"
+                  required
+                  className="h-3 w-3"
+                />
+                departed — remove from CP/THQ feeds
+              </label>
+              <button
+                type="submit"
+                className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+              >
+                Archive
               </button>
             </form>
           </div>

@@ -23,6 +23,14 @@
 
 /** Minimum distinct punch-days overlapping the candidate's scheduled days
  * before an auto-commit is even considered (ruling §4 guard 1). */
+// ⚠️ A discriminator is only as strong as the VARIANCE in the thing it
+// discriminates on (6c62e9c8, 2026-08-25): every HRANCH employee is
+// scheduled at 15:00, so clock-in proximity — the signal that settled every
+// earlier case — collapsed to three candidates inside five minutes. That is
+// the Houston day-overlap failure one level up. Where scheduled starts do
+// not vary, mutual exclusion (below) is the discriminator that still works:
+// a candidate already punched in on their OWN account cannot be the
+// disputed one.
 export const BEHAVIOURAL_MIN_OVERLAP_DAYS = 6;
 /**
  * §5b (defect 2026-08-24): clock-in proximity is REQUIRED, not advisory. No
@@ -269,6 +277,13 @@ export interface TimeAwareCandidate {
   employee_id: string;
   /** Store-local date -> earliest scheduled start (timestamptz ISO). */
   scheduleStartByDate: Map<string, string>;
+  /** Dates this candidate already punched via their OWN mapped GUID(s) —
+   * the mutual-exclusion evidence (spec 2026-08-25 §5b). A person clocked
+   * in on their own account cannot simultaneously be the disputed account
+   * that day. (A genuine dual-account punching BOTH the same day would be
+   * wrongly excluded from AUTO-candidacy — physically near-impossible, and
+   * the SA manual path remains for exactly that shape.) */
+  ownPunchDays?: Set<string>;
 }
 
 export interface TimeAwareScore {
@@ -286,6 +301,10 @@ export interface TimeAwareVerdict {
    * size and eligible count travel with every verdict. */
   candidate_pool_size: number;
   eligible_count: number;
+  /** §5b mutual exclusion (2026-08-25): candidates eliminated because they
+   * were already punched in on their own account on one of the disputed
+   * GUID's punch days. Travels as evidence — an exclusion is a claim. */
+  mutually_excluded_count: number;
 }
 
 /**
@@ -312,7 +331,19 @@ export function scoreTimeAwareMatch(
   punchInByDate: Map<string, string>,
   candidates: TimeAwareCandidate[]
 ): TimeAwareVerdict {
-  const scores: TimeAwareScore[] = candidates
+  // MUTUAL EXCLUSION (spec 2026-08-25 §5b) — applied before any scoring:
+  // a candidate with a punch on one of the disputed GUID's punch days from
+  // a DIFFERENT (their own) GUID cannot be this GUID. This is the
+  // discriminator that still works where scheduled-start variance
+  // collapses (every HRANCH start is 15:00): it resolved 6c62e9c8 — both
+  // rivals were punched in on their own accounts, one 26 seconds apart.
+  const disputedDays = [...punchInByDate.keys()];
+  const contenders = candidates.filter(
+    (c) => !c.ownPunchDays || !disputedDays.some((d) => c.ownPunchDays!.has(d))
+  );
+  const mutuallyExcluded = candidates.length - contenders.length;
+
+  const scores: TimeAwareScore[] = contenders
     .map((c) => {
       const { paired_days, median_min } = medianAbsDeltaMinutes(
         punchInByDate,
@@ -348,6 +379,7 @@ export function scoreTimeAwareMatch(
     punch_days: punchInByDate.size,
     candidate_pool_size: candidates.length,
     eligible_count: eligible.length,
+    mutually_excluded_count: mutuallyExcluded,
   };
   if (!best) return { decision: "insufficient", ...base };
   // "Within the margin" is inclusive (Codex 2026-08-24): an exact 15.0-min
