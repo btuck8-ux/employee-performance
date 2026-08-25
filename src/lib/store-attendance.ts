@@ -35,12 +35,12 @@ import {
   computeMetricsFromEntries,
   punchesTimeClockForPeriod,
   type PerformanceMetrics,
-  type TimeEntryRow,
 } from "./performance-recompute";
 import {
-  timezoneForLocationCode,
-  utcToLocalWallClock,
-} from "./ingest/sevenshifts/tz";
+  fetchLocationFlipMeta,
+  fetchEffectiveEntries,
+  latestEffectiveWorkedDate,
+} from "./flip-entries";
 
 export interface StoreAttendanceParts {
   scheduled: number;
@@ -115,146 +115,6 @@ export function combineStoreMetrics(
   };
 }
 
-const BATCH = 1000;
-
-/** employee id -> business date -> "HH:MM:SS" local (or null), earliest wins. */
-type TimesByEmployee = Map<string, Map<string, string | null>>;
-
-function setEarliest(
-  map: TimesByEmployee,
-  employeeId: string,
-  date: string,
-  localTime: string | null
-): void {
-  const byDate = map.get(employeeId) ?? new Map<string, string | null>();
-  const prev = byDate.get(date);
-  if (
-    prev === undefined ||
-    (localTime !== null && (prev === null || localTime < prev))
-  ) {
-    byDate.set(date, localTime);
-  }
-  map.set(employeeId, byDate);
-}
-
-/**
- * Toast-store inputs: scheduled from the pruned direct 7shifts feed
- * (earliest shift wins a multi-shift day — the matcher's
- * scheduledStartsByEmployee shape), punches from the Toast mirror
- * (earliest clock-in wins), both projected to store-local wall clock so
- * punctuality compares like with like. Unattributed rows (null
- * employee_id) are the crosswalk queue, not evidence — skipped.
- */
-async function toastEntriesByEmployee(
-  supabase: SupabaseClient,
-  locationId: string,
-  timeZone: string,
-  periodStart: string,
-  periodEnd: string
-): Promise<Map<string, TimeEntryRow[]>> {
-  const scheduled: TimesByEmployee = new Map();
-  for (let from = 0; ; from += BATCH) {
-    const { data, error } = await supabase
-      .from("seven_shifts_shifts")
-      .select("employee_id, entry_date, start_at")
-      .eq("location_id", locationId)
-      .not("employee_id", "is", null)
-      .is("missing_upstream_since", null)
-      .eq("deleted", false)
-      .eq("draft", false)
-      .gte("entry_date", periodStart)
-      .lte("entry_date", periodEnd)
-      .order("seven_shifts_shift_id", { ascending: true })
-      .range(from, from + BATCH - 1);
-    if (error) throw new Error(`store attendance shifts: ${error.message}`);
-    for (const r of data ?? []) {
-      setEarliest(
-        scheduled,
-        String(r.employee_id),
-        String(r.entry_date).slice(0, 10),
-        utcToLocalWallClock(r.start_at as string, timeZone)?.time ?? null
-      );
-    }
-    if (!data || data.length < BATCH) break;
-  }
-
-  const worked: TimesByEmployee = new Map();
-  for (let from = 0; ; from += BATCH) {
-    const { data, error } = await supabase
-      .from("toast_time_entries")
-      .select("employee_id, entry_date, in_at")
-      .eq("location_id", locationId)
-      .not("employee_id", "is", null)
-      .eq("deleted", false)
-      .gte("entry_date", periodStart)
-      .lte("entry_date", periodEnd)
-      .order("toast_time_entry_guid", { ascending: true })
-      .range(from, from + BATCH - 1);
-    if (error) throw new Error(`store attendance punches: ${error.message}`);
-    for (const r of data ?? []) {
-      setEarliest(
-        worked,
-        String(r.employee_id),
-        String(r.entry_date).slice(0, 10),
-        utcToLocalWallClock(r.in_at as string, timeZone)?.time ?? null
-      );
-    }
-    if (!data || data.length < BATCH) break;
-  }
-
-  const out = new Map<string, TimeEntryRow[]>();
-  const push = (
-    source: TimesByEmployee,
-    entry_type: "scheduled" | "worked"
-  ): void => {
-    for (const [empId, byDate] of source) {
-      const list = out.get(empId) ?? [];
-      for (const [entry_date, in_time] of byDate) {
-        list.push({ entry_date, entry_type, in_time });
-      }
-      out.set(empId, list);
-    }
-  };
-  push(scheduled, "scheduled");
-  push(worked, "worked");
-  return out;
-}
-
-/** Legacy path for non-Toast stores (NOLA): actuals genuinely live in
- * time_entries via the CAKE harvester. A store quarter is well past the
- * PostgREST row cap, so page (the multi-location-fetch precedent). */
-async function timeEntriesByEmployee(
-  supabase: SupabaseClient,
-  locationId: string,
-  periodStart: string,
-  periodEnd: string
-): Promise<Map<string, TimeEntryRow[]>> {
-  const out = new Map<string, TimeEntryRow[]>();
-  for (let from = 0; ; from += BATCH) {
-    const { data, error } = await supabase
-      .from("time_entries")
-      .select("employee_id, entry_date, entry_type, in_time")
-      .eq("location_id", locationId)
-      .gte("entry_date", periodStart)
-      .lte("entry_date", periodEnd)
-      .order("id", { ascending: true })
-      .range(from, from + BATCH - 1);
-    if (error) throw new Error(`store attendance entries: ${error.message}`);
-    for (const r of data ?? []) {
-      const empId = String(r.employee_id);
-      const list = out.get(empId) ?? [];
-      list.push({
-        entry_date: String(r.entry_date),
-        entry_type: r.entry_type as "scheduled" | "worked",
-        in_time: (r.in_time as string | null) ?? null,
-      });
-      out.set(empId, list);
-    }
-    if (!data || data.length < BATCH) break;
-  }
-  return out;
-}
-
 /**
  * Fetch + compute for one location over an inclusive YYYY-MM-DD range.
  * Per-employee metrics via computeMetricsFromEntries with the same
@@ -267,13 +127,11 @@ export async function computeStoreAttendance(
   periodStart: string,
   periodEnd: string
 ): Promise<StoreAttendanceBothWays> {
-  const { data: loc, error: locError } = await supabase
-    .from("locations")
-    .select("location_code, toast_restaurant_guid")
-    .eq("id", locationId)
-    .maybeSingle();
-  if (locError) throw new Error(`store attendance location: ${locError.message}`);
-  const isToastStore = Boolean(loc?.toast_restaurant_guid);
+  // THE FLIP (2026-08-25): sources ride flip-entries.ts — the SAME layer
+  // the recompute entry points use, so the store card and the employees
+  // inside it can never disagree. (The card's local source builders moved
+  // there and gained the day-conditional scheduled fallback.)
+  const meta = await fetchLocationFlipMeta(supabase, locationId);
 
   type EmpRow = {
     id: string;
@@ -281,6 +139,7 @@ export async function computeStoreAttendance(
     punches_time_clock: boolean | null;
     punches_time_clock_since: string | null;
   };
+  const BATCH = 1000;
   const employees: EmpRow[] = [];
   for (let from = 0; ; from += BATCH) {
     const { data, error } = await supabase
@@ -295,38 +154,23 @@ export async function computeStoreAttendance(
   }
   if (employees.length === 0) return combineStoreMetrics([]);
 
-  const entriesByEmployee = isToastStore
-    ? await toastEntriesByEmployee(
-        supabase,
-        locationId,
-        timezoneForLocationCode(String(loc?.location_code ?? "")),
-        periodStart,
-        periodEnd
-      )
-    : await timeEntriesByEmployee(supabase, locationId, periodStart, periodEnd);
+  const entriesByEmployee = await fetchEffectiveEntries(
+    supabase,
+    locationId,
+    employees.map((e) => e.id),
+    { start: periodStart, end: periodEnd },
+    meta
+  );
 
   // Same cap as the recompute entry points: don't score scheduled days the
-  // worked side hasn't reached yet — measured against the SAME worked
-  // source the metrics use (Toast punches for Toast stores).
+  // worked side hasn't reached yet — measured against the SAME effective
+  // worked source the metrics use.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const workedQuery = isToastStore
-    ? supabase
-        .from("toast_time_entries")
-        .select("entry_date")
-        .eq("location_id", locationId)
-        .eq("deleted", false)
-    : supabase
-        .from("time_entries")
-        .select("entry_date")
-        .eq("location_id", locationId)
-        .eq("entry_type", "worked");
-  const { data: latestWorked } = await workedQuery
-    .order("entry_date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const latestWorkedDate = (latestWorked?.entry_date as string | undefined) ?? todayIso;
+  const latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
   const scheduledScoredThrough =
-    latestWorkedDate < todayIso ? latestWorkedDate : todayIso;
+    latestWorkedDate !== null && latestWorkedDate < todayIso
+      ? latestWorkedDate
+      : todayIso;
 
   const rows = employees.map((e) => ({
     isGeneralManager: e.is_general_manager === true,

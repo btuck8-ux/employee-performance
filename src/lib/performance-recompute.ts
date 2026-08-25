@@ -449,14 +449,27 @@ export async function computeMetricsForRange(
     tisWeights?: TotalImpactWeights;
   }
 ): Promise<{ ok: true; metrics: RangeMetrics } | { ok: false; error: string }> {
-  const { data: entries, error } = await supabase
-    .from("time_entries")
-    .select("entry_date, entry_type, in_time")
-    .eq("employee_id", employeeId)
-    .gte("entry_date", periodStart)
-    .lte("entry_date", periodEnd);
-
-  if (error) return { ok: false, error: error.message };
+  // THE FLIP (2026-08-25): entries come from flip-entries.ts — Toast
+  // punches + the pruned direct-feed schedule at Toast stores (go-live
+  // split / day-conditional fallback live there), time_entries at NOLA.
+  let entries: TimeEntryRow[];
+  let latestWorkedDate: string | null;
+  try {
+    const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
+      await import("./flip-entries");
+    const meta = await fetchLocationFlipMeta(supabase, locationId);
+    const byEmployee = await fetchEffectiveEntries(
+      supabase,
+      locationId,
+      [employeeId],
+      { start: periodStart, end: periodEnd },
+      meta
+    );
+    entries = byEmployee.get(employeeId) ?? [];
+    latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 
   // Non-puncher marker (mig 056): excluded from the attendance denominator —
   // but only for periods overlapping the effective date (§2a).
@@ -471,25 +484,18 @@ export async function computeMetricsForRange(
     periodEnd
   );
 
-  // Cap attendance scoring at min(today, latest worked at this location).
-  // This stops future-scheduled shifts from being counted as "missed" when
-  // the schedule is uploaded ahead of time, and also handles the case where
-  // worked CSVs lag behind scheduled CSVs.
+  // Cap attendance scoring at min(today, latest EFFECTIVE worked date at
+  // this location — Toast punches at Toast stores). This stops
+  // future-scheduled shifts from being counted as "missed" when the
+  // schedule lands ahead of the worked side.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const { data: latestWorked } = await supabase
-    .from("time_entries")
-    .select("entry_date")
-    .eq("location_id", locationId)
-    .eq("entry_type", "worked")
-    .order("entry_date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const latestWorkedDate = (latestWorked?.entry_date as string | undefined) ?? todayIso;
   const scheduledScoredThrough =
-    latestWorkedDate < todayIso ? latestWorkedDate : todayIso;
+    latestWorkedDate !== null && latestWorkedDate < todayIso
+      ? latestWorkedDate
+      : todayIso;
 
   const shift = computeMetricsFromEntries(
-    (entries ?? []) as TimeEntryRow[],
+    entries,
     { scheduledScoredThrough, punchesTimeClock }
   );
 
@@ -791,14 +797,26 @@ export async function recomputePerformanceForQuarter(
     }
   }
 
-  const { data: entries, error } = await supabase
-    .from("time_entries")
-    .select("entry_date, entry_type, in_time")
-    .eq("employee_id", employeeId)
-    .gte("entry_date", periodStart)
-    .lte("entry_date", periodEnd);
-
-  if (error) return { ok: false, error: error.message };
+  // THE FLIP (2026-08-25): flip-entries.ts sources — see
+  // computeMetricsForRange for the rules.
+  let entries: TimeEntryRow[];
+  let latestWorkedDate: string | null;
+  try {
+    const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
+      await import("./flip-entries");
+    const meta = await fetchLocationFlipMeta(supabase, locationId);
+    const byEmployee = await fetchEffectiveEntries(
+      supabase,
+      locationId,
+      [employeeId],
+      { start: periodStart, end: periodEnd },
+      meta
+    );
+    entries = byEmployee.get(employeeId) ?? [];
+    latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 
   // Non-puncher marker (mig 056): excluded from the attendance denominator —
   // but only for periods overlapping the effective date (§2a).
@@ -813,23 +831,16 @@ export async function recomputePerformanceForQuarter(
     periodEnd
   );
 
-  // Cap attendance scoring at min(today, latest worked at this location) — see
+  // Cap attendance scoring at min(today, latest EFFECTIVE worked date) — see
   // computeMetricsForRange for the rationale.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const { data: latestWorked } = await supabase
-    .from("time_entries")
-    .select("entry_date")
-    .eq("location_id", locationId)
-    .eq("entry_type", "worked")
-    .order("entry_date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const latestWorkedDate = (latestWorked?.entry_date as string | undefined) ?? todayIso;
   const scheduledScoredThrough =
-    latestWorkedDate < todayIso ? latestWorkedDate : todayIso;
+    latestWorkedDate !== null && latestWorkedDate < todayIso
+      ? latestWorkedDate
+      : todayIso;
 
   const metrics = computeMetricsFromEntries(
-    (entries ?? []) as TimeEntryRow[],
+    entries,
     { scheduledScoredThrough, punchesTimeClock }
   );
 

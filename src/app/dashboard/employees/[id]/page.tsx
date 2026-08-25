@@ -11,7 +11,13 @@ import { formatHireDate, formatTenure, numOrNull, toNum } from "@/lib/format";
 import {
   computeMetricsFromEntries,
   punchesTimeClockForPeriod,
+  type TimeEntryRow,
 } from "@/lib/performance-recompute";
+import {
+  fetchLocationFlipMeta,
+  fetchEffectiveEntries,
+} from "@/lib/flip-entries";
+import { utcToLocalWallClock } from "@/lib/ingest/sevenshifts/tz";
 import {
   PerformanceHistoryTabs,
   type QuarterRow,
@@ -258,39 +264,100 @@ export default async function EmployeeDetailPage({
   const fourteenDaysAgoIso = fourteenDaysAgo.toISOString().slice(0, 10);
 
   const showAllReports = search.all_reports === "1";
-  const [
-    { data: allEntries },
-    { data: recentEntries },
-    { data: upcomingShiftRows },
-    { data: workedShiftRows },
-    { data: archiveRows },
-  ] = await Promise.all([
-    supabase
-      .from("time_entries")
-      .select("entry_date, entry_type, in_time")
-      .eq("employee_id", id),
-    supabase
-      .from("time_entries")
-      .select("entry_date, entry_type, in_time")
-      .eq("employee_id", id)
-      .gte("entry_date", fourteenDaysAgoIso)
-      .lte("entry_date", todayIso),
-    supabase
-      .from("time_entries")
-      .select("id, entry_date, in_time, out_time, role, regular_hours")
-      .eq("employee_id", id)
-      .eq("entry_type", "scheduled")
-      .gte("entry_date", todayIso)
-      .order("entry_date", { ascending: true })
-      .limit(21),
-    supabase
-      .from("time_entries")
-      .select("id, entry_date, in_time, out_time, role, regular_hours")
-      .eq("employee_id", id)
-      .eq("entry_type", "worked")
-      .lte("entry_date", todayIso)
-      .order("entry_date", { ascending: false })
-      .limit(30),
+
+  // THE FLIP (2026-08-25): the metric summaries AND the two shift display
+  // lists read the flip sources — the pruned direct-feed schedule and Toast
+  // punches at Toast stores (a cancelled shift must not show as upcoming;
+  // recent shifts must not freeze at flip day), time_entries at NOLA.
+  const flipMeta = loc ? await fetchLocationFlipMeta(supabase, loc.id) : null;
+  let allEntriesEff: TimeEntryRow[] = [];
+  if (loc && flipMeta) {
+    const byEmployee = await fetchEffectiveEntries(
+      supabase,
+      loc.id,
+      [id],
+      { start: null, end: todayIso },
+      flipMeta
+    );
+    allEntriesEff = byEmployee.get(id) ?? [];
+  }
+  const recentEntriesEff = allEntriesEff.filter(
+    (e) => e.entry_date >= fourteenDaysAgoIso && e.entry_date <= todayIso
+  );
+
+  type ShiftRowRaw = {
+    id: string;
+    entry_date: string;
+    in_time: string | null;
+    out_time: string | null;
+    role: string | null;
+    regular_hours: number | string | null;
+  };
+  let upcomingShiftRows: ShiftRowRaw[];
+  let workedShiftRows: ShiftRowRaw[];
+  if (flipMeta?.isToast) {
+    const [{ data: up }, { data: wk }] = await Promise.all([
+      supabase
+        .from("seven_shifts_shifts")
+        .select("seven_shifts_shift_id, entry_date, start_at, end_at, role")
+        .eq("employee_id", id)
+        .is("missing_upstream_since", null)
+        .eq("deleted", false)
+        .eq("draft", false)
+        .gte("entry_date", todayIso)
+        .order("entry_date", { ascending: true })
+        .limit(21),
+      supabase
+        .from("toast_time_entries")
+        .select("toast_time_entry_guid, entry_date, in_at, out_at, regular_hours")
+        .eq("employee_id", id)
+        .eq("deleted", false)
+        .lte("entry_date", todayIso)
+        .order("entry_date", { ascending: false })
+        .limit(30),
+    ]);
+    upcomingShiftRows = (up ?? []).map((r) => ({
+      id: String(r.seven_shifts_shift_id),
+      entry_date: String(r.entry_date).slice(0, 10),
+      in_time: utcToLocalWallClock(r.start_at as string, flipMeta.tz)?.time ?? null,
+      out_time: utcToLocalWallClock(r.end_at as string | null, flipMeta.tz)?.time ?? null,
+      role: (r.role as string | null) ?? null,
+      regular_hours: null,
+    }));
+    workedShiftRows = (wk ?? []).map((r) => ({
+      id: String(r.toast_time_entry_guid),
+      entry_date: String(r.entry_date).slice(0, 10),
+      in_time: utcToLocalWallClock(r.in_at as string, flipMeta.tz)?.time ?? null,
+      out_time: utcToLocalWallClock(r.out_at as string | null, flipMeta.tz)?.time ?? null,
+      // Toast punches carry no role name (job_reference_guid only — the
+      // kitchen limitation's sibling); display degrades to "—".
+      role: null,
+      regular_hours: (r.regular_hours as number | string | null) ?? null,
+    }));
+  } else {
+    const [{ data: up }, { data: wk }] = await Promise.all([
+      supabase
+        .from("time_entries")
+        .select("id, entry_date, in_time, out_time, role, regular_hours")
+        .eq("employee_id", id)
+        .eq("entry_type", "scheduled")
+        .gte("entry_date", todayIso)
+        .order("entry_date", { ascending: true })
+        .limit(21),
+      supabase
+        .from("time_entries")
+        .select("id, entry_date, in_time, out_time, role, regular_hours")
+        .eq("employee_id", id)
+        .eq("entry_type", "worked")
+        .lte("entry_date", todayIso)
+        .order("entry_date", { ascending: false })
+        .limit(30),
+    ]);
+    upcomingShiftRows = (up ?? []) as ShiftRowRaw[];
+    workedShiftRows = (wk ?? []) as ShiftRowRaw[];
+  }
+
+  const [{ data: archiveRows }] = await Promise.all([
     supabase
       .from("generated_reports")
       .select(
@@ -300,16 +367,8 @@ export default async function EmployeeDetailPage({
       .order("generated_at", { ascending: false })
       .limit(200),
   ]);
-  type ShiftRow = {
-    id: string;
-    entry_date: string;
-    in_time: string | null;
-    out_time: string | null;
-    role: string | null;
-    regular_hours: number | string | null;
-  };
-  const upcomingShifts = (upcomingShiftRows ?? []) as ShiftRow[];
-  const workedShifts = (workedShiftRows ?? []) as ShiftRow[];
+  const upcomingShifts = upcomingShiftRows;
+  const workedShifts = workedShiftRows;
   type ArchiveRow = {
     id: string;
     generation_mode: string;
@@ -324,20 +383,19 @@ export default async function EmployeeDetailPage({
     (r) => showAllReports || r.superseded_at === null
   );
 
-  type EntryRow = { entry_date: string; entry_type: "scheduled" | "worked"; in_time: string | null };
   // Mig 056: a non-puncher's profile summaries read not-computable, not 0%
   // (Codex 2026-08-24 — this surface bypassed the recompute entry points).
   // Both summary windows end today, so the effective-date gate (§2a) uses
-  // today as the period end.
+  // today as the period end. Entries come from flip-entries above.
   const punchesTimeClock = punchesTimeClockForPeriod(
     emp.punches_time_clock !== false,
     emp.punches_time_clock_since ?? null,
     new Date().toISOString().slice(0, 10)
   );
-  const allTime = computeMetricsFromEntries((allEntries ?? []) as EntryRow[], {
+  const allTime = computeMetricsFromEntries(allEntriesEff, {
     punchesTimeClock,
   });
-  const last14Days = computeMetricsFromEntries((recentEntries ?? []) as EntryRow[], {
+  const last14Days = computeMetricsFromEntries(recentEntriesEff, {
     punchesTimeClock,
   });
 

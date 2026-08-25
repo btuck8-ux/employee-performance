@@ -153,17 +153,23 @@ export async function buildCrosswalkPageData(
       if (!emps || emps.length < BATCH) break;
     }
 
-    // Scheduled dates for the pool (display-hint overlap).
+    // Scheduled dates for the pool (display-hint overlap). THE FLIP
+    // (2026-08-25): the pruned direct feed — the same source the matcher's
+    // scheduledStartsByEmployee scores with, so the SA's hint and the
+    // auto-matcher's evidence can't disagree (and unpruned time_entries
+    // rows can't inflate an overlap hint).
     const schedByEmp = new Map<string, Set<string>>();
     if (pool.length > 0) {
       for (let from = 0; ; from += BATCH) {
         const { data, error } = await supabase
-          .from("time_entries")
+          .from("seven_shifts_shifts")
           .select("employee_id, entry_date")
           .in("employee_id", pool.map((e) => e.id))
-          .eq("entry_type", "scheduled")
+          .is("missing_upstream_since", null)
+          .eq("deleted", false)
+          .eq("draft", false)
           .gte("entry_date", loc.labor_start_date)
-          .order("entry_date", { ascending: true })
+          .order("seven_shifts_shift_id", { ascending: true })
           .range(from, from + BATCH - 1);
         if (error) throw new Error(`scheduled read: ${error.message}`);
         for (const r of data ?? []) {

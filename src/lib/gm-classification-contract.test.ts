@@ -113,12 +113,16 @@ test("store-wide reporting shows BOTH ways from summed parts, on the flip's sour
   );
   // The split's reason (Tucker 2026-08-24): Toast stores read the flip's
   // sources — pruned direct-feed schedule + Toast punches — never
-  // time_entries (73.1% at CPD against an actual 97.3%). time_entries
-  // remains only as the non-Toast (NOLA/CAKE) fallback.
-  assert.match(storeAttendanceSrc, /from\("seven_shifts_shifts"\)/);
-  assert.match(storeAttendanceSrc, /\.is\("missing_upstream_since", null\)/);
-  assert.match(storeAttendanceSrc, /from\("toast_time_entries"\)/);
-  assert.match(storeAttendanceSrc, /toast_restaurant_guid/);
+  // time_entries (73.1% at CPD against an actual 97.3%). Since the flip
+  // core landed (2026-08-25) the sourcing lives in flip-entries.ts — the
+  // SAME layer the recompute entry points use, so the store card and the
+  // employees inside it cannot disagree — and the source pins live there.
+  assert.match(storeAttendanceSrc, /from "\.\/flip-entries"/);
+  assert.match(storeAttendanceSrc, /fetchEffectiveEntries\(/);
+  const flipSrc = read("src/lib/flip-entries.ts");
+  assert.match(flipSrc, /from\("seven_shifts_shifts"\)/);
+  assert.match(flipSrc, /\.is\("missing_upstream_since", null\)/);
+  assert.match(flipSrc, /from\("toast_time_entries"\)/);
   // Non-punchers ride the same mig 056 effective-date gate as the recompute.
   assert.match(storeAttendanceSrc, /punchesTimeClockForPeriod\(/);
 });

@@ -165,40 +165,31 @@ export async function fetchMultiLocationProfile(
     quarters[0].period_end
   );
 
-  // Per-location attendance cap, matching computeMetricsForRange exactly.
+  // THE FLIP (2026-08-25): each sibling's entries and cap ride
+  // flip-entries.ts — Toast punches + the pruned direct-feed schedule at
+  // Toast stores, time_entries at NOLA — matching computeMetricsForRange
+  // exactly. One flip-meta fetch per sibling location (they are different
+  // employee ids at different stores — the §4-B4 join detail).
+  const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
+    await import("./flip-entries");
   const todayIso = new Date().toISOString().slice(0, 10);
   const capByLocation = new Map<string, string>();
-  for (const s of siblings) {
-    const { data: latestWorked, error: capError } = await supabase
-      .from("time_entries")
-      .select("entry_date")
-      .eq("location_id", s.locationId)
-      .eq("entry_type", "worked")
-      .order("entry_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (capError) throw new Error(`multi-location cap: ${capError.message}`);
-    const latest = (latestWorked?.entry_date as string | undefined) ?? todayIso;
-    capByLocation.set(s.locationId, latest < todayIso ? latest : todayIso);
-  }
-
-  // One time_entries read per sibling row (they are different employee ids —
-  // the §4-B4 join detail), then bucket per quarter.
   const entriesBySibling = new Map<string, TimeEntryRow[]>();
   for (const s of siblings) {
-    const entries = await pagedRows<TimeEntryRow>(
-      (from, to) =>
-        supabase
-          .from("time_entries")
-          .select("entry_date, entry_type, in_time")
-          .eq("employee_id", s.employeeId)
-          .gte("entry_date", windowStart)
-          .lte("entry_date", windowEnd)
-          .order("entry_date", { ascending: true })
-          .range(from, to),
-      "multi-location entries"
+    const meta = await fetchLocationFlipMeta(supabase, s.locationId);
+    const latest = await latestEffectiveWorkedDate(supabase, s.locationId, meta);
+    capByLocation.set(
+      s.locationId,
+      latest !== null && latest < todayIso ? latest : todayIso
     );
-    entriesBySibling.set(s.employeeId, entries);
+    const byEmployee = await fetchEffectiveEntries(
+      supabase,
+      s.locationId,
+      [s.employeeId],
+      { start: windowStart, end: windowEnd },
+      meta
+    );
+    entriesBySibling.set(s.employeeId, byEmployee.get(s.employeeId) ?? []);
   }
 
   // Tattle + review attributions per sibling across the whole window,

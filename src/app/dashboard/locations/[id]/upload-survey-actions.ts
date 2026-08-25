@@ -287,16 +287,17 @@ async function ingestSurveysForLocation(
     end.setDate(end.getDate() + (SURVEY_WINDOW_DAYS - 1));
     const endIso = end.toISOString().slice(0, 10);
 
-    // Paginated worked-entry fetch for this 7-day window.
+    // Paginated worked-presence fetch for this 7-day window. THE FLIP
+    // (2026-08-25): v_worked_intervals — the survey-assignment pool must
+    // not freeze at Toast stores when time_entries worked rows stop.
     const workedEmps = new Set<string>();
     {
       let from = 0;
       while (true) {
         const { data: page } = await supabase
-          .from("time_entries")
+          .from("v_worked_intervals")
           .select("employee_id")
           .eq("location_id", location.id)
-          .eq("entry_type", "worked")
           .gte("entry_date", sentDate)
           .lte("entry_date", endIso)
           .range(from, from + FETCH_PAGE - 1);

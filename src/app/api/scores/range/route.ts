@@ -162,6 +162,41 @@ async function probeMembership(
     candidateIds,
     members
   );
+  // THE FLIP (2026-08-25): at Toast stores the attendance evidence lives in
+  // toast_time_entries + seven_shifts_shifts — an employee whose only
+  // window data is punches (hired post-flip) must not vanish from the
+  // feed's membership. Same has-data semantics, two more sources; the wire
+  // shape is untouched (range-feed-contract pins it).
+  await probeSource(
+    "toast_time_entries",
+    (ids) =>
+      supabase
+        .from("toast_time_entries")
+        .select("employee_id")
+        .in("employee_id", ids)
+        .eq("deleted", false)
+        .gte("entry_date", start)
+        .lte("entry_date", end)
+        .limit(PROBE_PAGE),
+    candidateIds,
+    members
+  );
+  await probeSource(
+    "seven_shifts_shifts",
+    (ids) =>
+      supabase
+        .from("seven_shifts_shifts")
+        .select("employee_id")
+        .in("employee_id", ids)
+        .is("missing_upstream_since", null)
+        .eq("deleted", false)
+        .eq("draft", false)
+        .gte("entry_date", start)
+        .lte("entry_date", end)
+        .limit(PROBE_PAGE),
+    candidateIds,
+    members
+  );
   await probeSource(
     "tattle_attributions",
     (ids) =>
