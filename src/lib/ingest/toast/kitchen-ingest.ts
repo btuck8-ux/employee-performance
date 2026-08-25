@@ -49,8 +49,10 @@ export interface KitchenLocation {
   location_code: string;
   /** Null until 042 lands HOU's GUID — such stores are reported, not fetched. */
   toast_restaurant_guid: string | null;
-  /** YYYY-MM-DD floor for backfills; kitchen history starts at Toast go-live
-   * (HOU has no sales start date — Q3's first day is its floor). */
+  /** YYYY-MM-DD floor for backfills; kitchen history starts at the store's
+   * OWN Toast go-live (toast_sales_start_date) — no constant fallback
+   * (§1, addendum 2026-08-25: HOU's real go-live is 2026-04-30, and the old
+   * "no sales start date → 2026-07-01" guess was this exact defect). */
   kitchen_start_date: string;
 }
 
@@ -65,13 +67,24 @@ export async function loadKitchenCrosswalk(
     .eq("toast_kitchen_enabled", true)
     .order("location_code");
   if (error) throw new Error(`Failed to load kitchen crosswalk: ${error.message}`);
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    name: r.name as string,
-    location_code: r.location_code as string,
-    toast_restaurant_guid: (r.toast_restaurant_guid as string | null) ?? null,
-    kitchen_start_date: (r.toast_sales_start_date as string | null) ?? "2026-07-01",
-  }));
+  return (data ?? []).map((r) => {
+    const goLive = (r.toast_sales_start_date as string | null) ?? null;
+    // Same rule as the labor feed (§1): the store's own go-live is the only
+    // floor — a null go-live on an enabled store is a data error to fix in
+    // locations, never a reason to guess a constant.
+    if (!goLive) {
+      throw new Error(
+        `Toast kitchen: ${String(r.location_code)} is kitchen-enabled but has no toast_sales_start_date — set the store's go-live before ingesting`
+      );
+    }
+    return {
+      id: r.id as string,
+      name: r.name as string,
+      location_code: r.location_code as string,
+      toast_restaurant_guid: (r.toast_restaurant_guid as string | null) ?? null,
+      kitchen_start_date: goLive,
+    };
+  });
 }
 
 /** YYYY-MM-DD -> YYYYMMDD (Toast's businessDate shape). */

@@ -60,9 +60,12 @@ import {
 
 export const TOAST_LABOR_SOURCE = "toast_labor" as const;
 
-/** Earliest Toast go-live across the estate (CPD/HOU 2026-07-01) — the
- * fallback floor when a store's toast_sales_start_date is null. */
-export const LABOR_BACKFILL_FLOOR = "2026-07-01";
+// ⚠️ There is deliberately NO fallback window floor here (§1, addendum
+// 2026-08-25). A hardcoded July-1st floor + the route's matching default
+// hid 501 Houston punches for two months: HOU's real go-live is 2026-04-30,
+// and the max() in the window resolution silently discarded it in favour of
+// the constant. The store's own toast_sales_start_date is the ONLY floor; a
+// null go-live on a GUID-bearing store is a data error that fails loudly.
 
 const REQUEST_DELAY_MS = 150;
 
@@ -90,13 +93,23 @@ export async function loadToastLaborLocations(
   if (error) throw new Error(`Toast labor locations: ${error.message}`);
   return (data ?? [])
     .filter((r) => r.toast_restaurant_guid)
-    .map((r) => ({
-      id: r.id as string,
-      location_code: r.location_code as string,
-      toast_restaurant_guid: r.toast_restaurant_guid as string,
-      labor_start_date:
-        (r.toast_sales_start_date as string | null) ?? LABOR_BACKFILL_FLOOR,
-    }));
+    .map((r) => {
+      const goLive = (r.toast_sales_start_date as string | null) ?? null;
+      if (!goLive) {
+        // Fail loudly, never guess (§1): a store with a Toast GUID but no
+        // go-live date can't be windowed correctly — set
+        // locations.toast_sales_start_date first.
+        throw new Error(
+          `Toast labor: ${String(r.location_code)} has a toast_restaurant_guid but no toast_sales_start_date — set the store's go-live before ingesting`
+        );
+      }
+      return {
+        id: r.id as string,
+        location_code: r.location_code as string,
+        toast_restaurant_guid: r.toast_restaurant_guid as string,
+        labor_start_date: goLive,
+      };
+    });
 }
 
 export async function fetchToastEmployees(
@@ -637,6 +650,10 @@ export interface ToastLaborSummary {
   outcomes: Array<{
     location_code: string;
     status: string;
+    /** §1: the resolved window rides every response — a wrong window must
+     * be visible in the output, not just deducible from a request count. */
+    window_start: string | null;
+    window_end: string | null;
     rows_in: number;
     rows_upserted: number;
     rows_skipped: number;
@@ -674,10 +691,17 @@ export async function runToastLaborIngest(
   const outcomes: RunOutcome[] = [];
   const extraReasons: string[] = [];
   for (const loc of locations) {
-    // Incremental window: high-water mark minus a 2-day re-read margin
-    // (late edits to recent punches), floored at go-live; first run (or an
-    // operator override) starts at the floor — the backfill IS the first run,
-    // the cp_schedule precedent.
+    // Window resolution (§1, addendum 2026-08-25). Two distinct facts:
+    // loc.labor_start_date — the store's OWN go-live — is how far back this
+    // store CAN go (the hard floor; an operator override never reaches back
+    // past it, the reconcile-worked-time precedent). options.since is how
+    // far back this run WANTS to go. The clamp below is only safe because
+    // no constant default reaches options.since any more: the route used to
+    // default it to July 1st, which out-maxed Houston's 2026-04-30
+    // go-live and hid 501 punches. Incremental runs use the high-water mark
+    // minus a 2-day re-read margin (late edits to recent punches); the
+    // first run starts at the floor — the backfill IS the first run, the
+    // cp_schedule precedent.
     let sinceDate: string;
     if (options.since) {
       sinceDate =
@@ -718,6 +742,17 @@ export async function runToastLaborIngest(
         sinceDate,
         untilDate,
         nowIso
+      );
+      // §1: log the resolved window with the request count on every run.
+      // Two requests where four were expected was the ONLY visible symptom
+      // of the two-month Houston blind spot — make it impossible to miss.
+      console.log(
+        `[toast-labor] ${loc.location_code} window`,
+        JSON.stringify({
+          since: sinceDate,
+          until: untilDate,
+          requests: detail.requests,
+        })
       );
       base.rows_in = detail.entries_pulled;
       base.rows_upserted = detail.punches_upserted;
@@ -762,6 +797,8 @@ export async function runToastLaborIngest(
     outcomes: outcomes.map((o) => ({
       location_code: o.location_code,
       status: o.status,
+      window_start: o.window_start,
+      window_end: o.window_end,
       rows_in: o.rows_in,
       rows_upserted: o.rows_upserted,
       rows_skipped: o.rows_skipped,
