@@ -43,6 +43,15 @@ import {
 } from "./ingest/sevenshifts/tz";
 
 const BATCH = 1000;
+/** PostgREST .in() lists ride the URL — chunk id lists well below limits
+ * (the store card passes every employee at a location; Codex 2026-08-25). */
+const IN_CHUNK = 100;
+
+function chunk<T>(xs: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
 
 export interface FlipLocationMeta {
   isToast: boolean;
@@ -185,18 +194,23 @@ export async function fetchEffectiveEntries(
   if (employeeIds.length === 0) return out;
 
   type TeRow = TimeEntryRow & { employee_id: string };
-  const teRows = await pagedRows<TeRow>((from, to) => {
-    let q = supabase
-      .from("time_entries")
-      .select("employee_id, entry_date, entry_type, in_time")
-      .eq("location_id", locationId)
-      .in("employee_id", employeeIds)
-      .lte("entry_date", window.end)
-      .order("id", { ascending: true })
-      .range(from, to);
-    if (window.start) q = q.gte("entry_date", window.start);
-    return q;
-  }, "flip time_entries");
+  const teRows: TeRow[] = [];
+  for (const ids of chunk(employeeIds, IN_CHUNK)) {
+    teRows.push(
+      ...(await pagedRows<TeRow>((from, to) => {
+        let q = supabase
+          .from("time_entries")
+          .select("employee_id, entry_date, entry_type, in_time")
+          .eq("location_id", locationId)
+          .in("employee_id", ids)
+          .lte("entry_date", window.end)
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (window.start) q = q.gte("entry_date", window.start);
+        return q;
+      }, "flip time_entries"))
+    );
+  }
   const teByEmployee = new Map<string, TimeEntryRow[]>();
   for (const r of teRows) {
     const list = teByEmployee.get(String(r.employee_id)) ?? [];
@@ -213,42 +227,45 @@ export async function fetchEffectiveEntries(
     return out;
   }
 
-  // Store-level direct-feed day coverage (pruned) — the day-conditional set.
+  // Store-level direct-feed day coverage — the day-conditional set, read
+  // through the DEFINER coverage view (mig 061): under the Class-1 policy a
+  // user-tier session sees only its own shift rows, and a self-collapsed
+  // day set would misroute their own scheduled fallback (Codex blocker,
+  // 2026-08-25).
   const dayRows = await pagedRows<{ entry_date: string }>((from, to) => {
     let q = supabase
-      .from("seven_shifts_shifts")
+      .from("v_direct_feed_days")
       .select("entry_date")
       .eq("location_id", locationId)
-      .is("missing_upstream_since", null)
-      .eq("deleted", false)
-      .eq("draft", false)
       .lte("entry_date", window.end)
-      .order("seven_shifts_shift_id", { ascending: true })
+      .order("entry_date", { ascending: true })
       .range(from, to);
     if (window.start) q = q.gte("entry_date", window.start);
     return q;
   }, "flip shift days");
   const directFeedDays = new Set(dayRows.map((r) => String(r.entry_date).slice(0, 10)));
 
-  const shiftRows = await pagedRows<{
-    employee_id: string;
-    entry_date: string;
-    start_at: string;
-  }>((from, to) => {
-    let q = supabase
-      .from("seven_shifts_shifts")
-      .select("employee_id, entry_date, start_at")
-      .eq("location_id", locationId)
-      .in("employee_id", employeeIds)
-      .is("missing_upstream_since", null)
-      .eq("deleted", false)
-      .eq("draft", false)
-      .lte("entry_date", window.end)
-      .order("seven_shifts_shift_id", { ascending: true })
-      .range(from, to);
-    if (window.start) q = q.gte("entry_date", window.start);
-    return q;
-  }, "flip shifts");
+  type ShiftRow = { employee_id: string; entry_date: string; start_at: string };
+  const shiftRows: ShiftRow[] = [];
+  for (const ids of chunk(employeeIds, IN_CHUNK)) {
+    shiftRows.push(
+      ...(await pagedRows<ShiftRow>((from, to) => {
+        let q = supabase
+          .from("seven_shifts_shifts")
+          .select("employee_id, entry_date, start_at")
+          .eq("location_id", locationId)
+          .in("employee_id", ids)
+          .is("missing_upstream_since", null)
+          .eq("deleted", false)
+          .eq("draft", false)
+          .lte("entry_date", window.end)
+          .order("seven_shifts_shift_id", { ascending: true })
+          .range(from, to);
+        if (window.start) q = q.gte("entry_date", window.start);
+        return q;
+      }, "flip shifts"))
+    );
+  }
   const directStarts = new Map<string, Map<string, string | null>>();
   for (const r of shiftRows) {
     setEarliest(
@@ -259,23 +276,25 @@ export async function fetchEffectiveEntries(
     );
   }
 
-  const punchRows = await pagedRows<{
-    employee_id: string;
-    entry_date: string;
-    in_at: string;
-  }>((from, to) => {
-    let q = supabase
-      .from("toast_time_entries")
-      .select("employee_id, entry_date, in_at")
-      .eq("location_id", locationId)
-      .in("employee_id", employeeIds)
-      .eq("deleted", false)
-      .lte("entry_date", window.end)
-      .order("toast_time_entry_guid", { ascending: true })
-      .range(from, to);
-    if (window.start) q = q.gte("entry_date", window.start);
-    return q;
-  }, "flip punches");
+  type PunchRow = { employee_id: string; entry_date: string; in_at: string };
+  const punchRows: PunchRow[] = [];
+  for (const ids of chunk(employeeIds, IN_CHUNK)) {
+    punchRows.push(
+      ...(await pagedRows<PunchRow>((from, to) => {
+        let q = supabase
+          .from("toast_time_entries")
+          .select("employee_id, entry_date, in_at")
+          .eq("location_id", locationId)
+          .in("employee_id", ids)
+          .eq("deleted", false)
+          .lte("entry_date", window.end)
+          .order("toast_time_entry_guid", { ascending: true })
+          .range(from, to);
+        if (window.start) q = q.gte("entry_date", window.start);
+        return q;
+      }, "flip punches"))
+    );
+  }
   const toastIns = new Map<string, Map<string, string | null>>();
   for (const r of punchRows) {
     setEarliest(

@@ -111,12 +111,25 @@ test("reader sweep: every remaining direct time_entries reader is consciously al
     // ALONGSIDE the new toast_time_entries + seven_shifts_shifts probes —
     // pinned below.
     "src/app/api/scores/range/route.ts",
-    // Profile page: the non-Toast (NOLA) branch of the shift display lists.
+    // Profile page: the non-Toast (NOLA) shift-list branch, and the TIS
+    // all-time anchor which takes the EARLIEST of time_entries + Toast
+    // punches (a post-flip hire's first evidence is a punch).
     "src/app/dashboard/employees/[id]/page.tsx",
     // Rankings page reads the location's EARLIEST entry_date as a
     // data-since marker — time_entries is the oldest evidence at every
     // store by construction.
     "src/app/dashboard/locations/[id]/rankings/page.tsx",
+    // Likely-departed report takes the LATEST of time_entries worked +
+    // Toast punches per employee — punch-only employees must not age into
+    // a false departed warning.
+    "src/app/dashboard/admin/users/page.tsx",
+    // PDF category currency: labor data-through = latest of both worked
+    // sources (dynamic maxDate table names, caught by the extended sweep).
+    "src/lib/category-currency.ts",
+    // CP schedule cron writes time_entries scheduled rows (the pre-June
+    // history fallback's source) — a writer, named in mig 061's accepted
+    // consequences.
+    "src/app/api/cron/sync-cp-schedules/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];
@@ -130,10 +143,13 @@ test("reader sweep: every remaining direct time_entries reader is consciously al
     const full = join(entry.parentPath ?? (entry as unknown as { path: string }).path, entry.name);
     const rel = relative(root, full);
     const src = readFileSync(full, "utf8");
-    if (!src.includes('from("time_entries")')) continue;
+    // Catch direct reads, nested relationship reads (`time_entries(…)` in
+    // a select string), and dynamic `.from(table)` consumers alike (Codex
+    // 2026-08-25: the literal-only sweep missed all three shapes).
+    if (!/"time_entries"|time_entries\(/.test(src)) continue;
     if (!ALLOWLIST.has(rel)) offenders.push(rel);
   }
-  assert.deepEqual(offenders, [], "unlisted direct time_entries reader — classify it consciously");
+  assert.deepEqual(offenders, [], "unlisted time_entries consumer — classify it consciously");
 });
 
 test("attribution rides the flip: tattle/review/task/survey pools read v_worked_intervals", () => {

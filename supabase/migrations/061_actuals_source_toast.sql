@@ -77,3 +77,30 @@ update public.locations set actuals_source = 'toast', updated_at = now()
 -- client, and a user-tier viewer must be able to resolve their own store's
 -- flip config or their profile summaries silently misroute.
 grant select on public.v_location_flip_config to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- v_direct_feed_days — store-day coverage of the pruned direct feed, as a
+-- DEFINER-rights view (the v_location_flip_config pattern; expect the
+-- advisor flag — deliberate).
+--
+-- ⚠️ WHY DEFINER: flip-entries' day-conditional scheduled fallback needs
+-- the STORE-level covered-day set. seven_shifts_shifts_read is Class-1
+-- (purview OR self), so a user-tier session sees only its OWN shift rows —
+-- the store's covered days would collapse to "days I am scheduled", and
+-- covered days without the viewer's shift would wrongly fall back to their
+-- unpruned time_entries artifact rows (a phantom missed day on their own
+-- profile). This view exposes exactly (location_id, entry_date) — no
+-- employee data, no times; row protection for actual shift rows stays on
+-- the base table (Codex blocker, 2026-08-25).
+-- ----------------------------------------------------------------------------
+create or replace view public.v_direct_feed_days as
+select distinct location_id, entry_date
+from public.seven_shifts_shifts
+where missing_upstream_since is null
+  and deleted = false
+  and draft = false;
+
+comment on view public.v_direct_feed_days is
+  'DELIBERATELY definer-rights: the pruned direct feed''s store-day coverage set for flip-entries'' day-conditional scheduled fallback. Two config-grade columns only (location_id, entry_date); a security_invoker version would collapse to self-days for the user tier and misroute their own scheduled fallback.';
+
+grant select on public.v_direct_feed_days to authenticated;

@@ -532,16 +532,35 @@ export default async function EmployeeDetailPage({
     : 0;
   const tisEligible = isEligibleForRanking(!!emp.active, allTimeHoursWorked);
 
-  // Earliest worked entry — anchors "All time" mode for this employee.
-  const { data: earliestEntryRow } = await supabase
-    .from("time_entries")
-    .select("entry_date")
-    .eq("employee_id", emp.id)
-    .order("entry_date", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  // Earliest evidence — anchors "All time" mode for this employee. THE FLIP
+  // (2026-08-25): a post-flip hire at a Toast store has NO time_entries
+  // rows — their earliest evidence is a Toast punch (Codex). Earliest of
+  // the two sources; time_entries stays the older one wherever it exists.
+  const [{ data: earliestEntryRow }, { data: earliestPunchRow }] = await Promise.all([
+    supabase
+      .from("time_entries")
+      .select("entry_date")
+      .eq("employee_id", emp.id)
+      .order("entry_date", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("toast_time_entries")
+      .select("entry_date")
+      .eq("employee_id", emp.id)
+      .eq("deleted", false)
+      .order("entry_date", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const earliestTe = (earliestEntryRow?.entry_date as string | undefined) ?? null;
+  const earliestPunch = (earliestPunchRow?.entry_date as string | undefined) ?? null;
   const tisEarliestDate =
-    (earliestEntryRow?.entry_date as string | undefined) ?? null;
+    earliestTe && earliestPunch
+      ? earliestTe < earliestPunch
+        ? earliestTe
+        : earliestPunch
+      : (earliestTe ?? earliestPunch);
 
   let tisInitialWindow: TimeWindow | null = null;
   if (tisQuarters.length > 0) {

@@ -294,13 +294,18 @@ async function ingestSurveysForLocation(
     {
       let from = 0;
       while (true) {
-        const { data: page } = await supabase
+        const { data: page, error: pageErr } = await supabase
           .from("v_worked_intervals")
           .select("employee_id")
           .eq("location_id", location.id)
           .gte("entry_date", sentDate)
           .lte("entry_date", endIso)
           .range(from, from + FETCH_PAGE - 1);
+        if (pageErr) {
+          // A missing mig 058 / denied view must be LOUD — a silently
+          // empty survey pool mis-scores engagement (Codex 2026-08-25).
+          throw new Error(`worked intervals read: ${pageErr.message}`);
+        }
         if (!page || page.length === 0) break;
         for (const e of page) workedEmps.add(e.employee_id as string);
         if (page.length < FETCH_PAGE) break;

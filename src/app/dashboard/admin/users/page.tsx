@@ -144,14 +144,21 @@ export default async function UsersPage({
   authUsers.sort((a, b) => a.email.localeCompare(b.email));
 
   // ---- §4-D9 likely-departed report (read-only) ----
+  // THE FLIP (2026-08-25): worked evidence at Toast stores lives in
+  // toast_time_entries — an employee whose punches only exist there must
+  // not age into a false 60-day departed warning (Codex). Take the LATEST
+  // of both sources per employee.
   const { data: departedRaw, error: departedError } = await supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, active, locations(name), time_entries(entry_date)"
+      "id, employee_code, employee_name, active, locations(name), time_entries(entry_date), toast_time_entries(entry_date)"
     )
     .eq("time_entries.entry_type", "worked")
     .order("entry_date", { referencedTable: "time_entries", ascending: false })
-    .limit(1, { referencedTable: "time_entries" });
+    .limit(1, { referencedTable: "time_entries" })
+    .eq("toast_time_entries.deleted", false)
+    .order("entry_date", { referencedTable: "toast_time_entries", ascending: false })
+    .limit(1, { referencedTable: "toast_time_entries" });
   if (departedError)
     throw new Error(`departed report: ${departedError.message}`);
   type DepartedRow = {
@@ -161,12 +168,16 @@ export default async function UsersPage({
     active: boolean;
     locations: { name: string } | null;
     time_entries: Array<{ entry_date: string }>;
+    toast_time_entries: Array<{ entry_date: string }>;
   };
   const todayMs = new Date().getTime();
   const departed = ((departedRaw ?? []) as unknown as DepartedRow[])
     .filter((e) => e.active)
     .map((e) => {
-      const last = e.time_entries[0]?.entry_date ?? null;
+      const lastTe = e.time_entries[0]?.entry_date ?? null;
+      const lastPunch = e.toast_time_entries[0]?.entry_date ?? null;
+      const last =
+        lastTe && lastPunch ? (lastTe > lastPunch ? lastTe : lastPunch) : (lastTe ?? lastPunch);
       const daysSince = last
         ? Math.floor(
             (todayMs - new Date(`${last}T00:00:00Z`).getTime()) / 86400_000

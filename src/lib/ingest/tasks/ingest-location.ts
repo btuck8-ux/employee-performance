@@ -204,12 +204,18 @@ export async function ingestTasksForLocation(
   if (touchedDates.length > 0) {
     let from = 0;
     while (true) {
-      const { data: page } = await supabase
+      const { data: page, error: pageErr } = await supabase
         .from("v_worked_intervals")
         .select("employee_id, entry_date, shift_start, shift_end")
         .eq("location_id", location.id)
         .in("entry_date", touchedDates)
         .range(from, from + FETCH_PAGE - 1);
+      if (pageErr) {
+        // A missing mig 058 / denied view must be LOUD — silently empty
+        // accountability is the failure mode this sprint exists to
+        // eliminate (Codex 2026-08-25).
+        throw new Error(`worked intervals read: ${pageErr.message}`);
+      }
       if (!page || page.length === 0) break;
       for (const e of page) {
         const list = workedByDate.get(String(e.entry_date));
