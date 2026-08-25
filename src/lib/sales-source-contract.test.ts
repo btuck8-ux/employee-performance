@@ -24,10 +24,21 @@ const uploadSrc = read("src/app/dashboard/locations/[id]/upload-pos-actions.ts")
 
 test("mig 059: the four-value check, and classification by PAYLOAD keys only", () => {
   assert.match(migSrc, /check \(source in \('sevenshifts', 'toast', 'legacy_pos', 'csv'\)\)/);
-  // Decisive raw_row keys, one per source — never receipt_number shape.
-  assert.match(migSrc, /raw_row \? 'order_guid'/);
-  assert.match(migSrc, /raw_row \? 'external_user_id' or raw_row \? 'gross_total_cents'/);
-  assert.match(migSrc, /raw_row \? 'payment_legs'/);
+  // Pin the UPDATE predicates themselves, not the header prose (Codex
+  // 2026-08-25: a comment-matching pin survives classifier drift). Each
+  // classifier is anchored: set-value + null guard + its decisive key.
+  assert.match(
+    migSrc,
+    /set source = 'toast'\s*\n\s*where source is null\s*\n\s*and raw_row is not null\s*\n\s*and raw_row \? 'order_guid'/
+  );
+  assert.match(
+    migSrc,
+    /set source = 'sevenshifts'\s*\n\s*where source is null\s*\n\s*and raw_row is not null\s*\n\s*and \(raw_row \? 'external_user_id' or raw_row \? 'gross_total_cents'\)/
+  );
+  assert.match(
+    migSrc,
+    /set source = 'legacy_pos'\s*\n\s*where source is null\s*\n\s*and raw_row is not null\s*\n\s*and raw_row \? 'payment_legs'/
+  );
   assert.doesNotMatch(migSrc, /receipt_number\s+(like|~|similar)/i, "shape is not identity");
 });
 
