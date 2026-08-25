@@ -3,13 +3,15 @@ import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchEffectiveEntries, fetchLocationFlipMeta } from "@/lib/flip-entries";
 import {
+  DISCARDED_PUNCH_SIGNAL,
   isConvictingStatus,
-  LATE_NONE_EVIDENCE_SUFFIX,
   LATE_NONE_SIGNAL,
   SEED_EVIDENCE,
   seedVerdictForGapDay,
+  SIGNAL_CONTRADICTION_SUFFIX,
   TAGGART_EVIDENCE,
   TAGGART_SEVEN_SHIFTS_USER_ID,
+  type AttendedSignal,
   type GapVerdict,
 } from "@/lib/gap-ledger";
 
@@ -38,14 +40,29 @@ import {
  * This also honors §0's trap: no raw time_entries counting — the punch side
  * is the era-correct union (§3b) inside the same layer.
  *
- * SEED RULES (gap-ledger.ts, precedence order): after-last-punch-ever →
- * scheduled_after_departure · blind → still_unknown · sighted →
- * confirmed_absent. Taggart Dickson (7shifts 9867936) carries his §7a
- * Tucker confirmation as evidence. §3e late/none convictions land as a
- * SIGNAL on still_unknown days (confirmed missing punch ≠ recovered).
+ * SEED RULES (gap-ledger.ts; §3e-i ORDER OF OPERATIONS — the attended
+ * signals run FIRST, on every gap day, before any shape rule):
+ *   0a. late/none conviction (§3e)  → still_unknown + signal
+ *   0b. discarded punch (§5b-i)     → still_unknown + signal
+ *   1.  after-last-punch-ever       → scheduled_after_departure
+ *   2.  blind                       → still_unknown
+ *   3.  sighted                     → confirmed_absent (weakest, last)
+ * Eleven of the twelve late/none days fall on SIGHTED days — shape-first
+ * seeding would have sealed them as absences while a flag in the same
+ * database says the person showed up. no_show contributes to NO verdict in
+ * either direction. Taggart Dickson (7shifts 9867936) carries his §7a
+ * Tucker confirmation, which outranks even the signals — a contradiction
+ * is recorded in his evidence, never silently resolved.
  *
- * AUTH: Bearer <CRON_SECRET>. Read-only against scoring surfaces — this
- * route never touches performance_records or time_entries.
+ * THE DELIBERATE time_entries READ (§5b-i): the route queries WORKED
+ * time_entries rows for gap employees to find punches the flip stopped
+ * reading (the HOU cutover class, 04-30→05-03: 7shifts punch exists, no
+ * Toast row, Toast store on/after go-live). Gap-day DERIVATION and punch
+ * BOUNDS still come only from flip-entries / v_worked_intervals — this
+ * extra read exists precisely to catch what those sources discard, and is
+ * consciously allowlisted in the flip reader sweep.
+ *
+ * AUTH: Bearer <CRON_SECRET>. This route never touches performance_records.
  */
 
 export const dynamic = "force-dynamic";
@@ -106,10 +123,10 @@ export async function GET(request: Request) {
 
       const byVerdict: Record<string, number> = {};
       const byStore = new Map<string, Record<string, number>>();
-      let convictions = 0;
+      const signalCounts: Record<string, number> = {};
       const unknownByEmployee = new Map<
         string,
-        { employee: string; store: string; days: number; convicted_days: number }
+        { employee: string; store: string; days: number; signal_days: number }
       >();
       for (const r of rows) {
         byVerdict[r.verdict] = (byVerdict[r.verdict] ?? 0) + 1;
@@ -117,17 +134,17 @@ export async function GET(request: Request) {
         const s = byStore.get(store) ?? {};
         s[r.verdict] = (s[r.verdict] ?? 0) + 1;
         byStore.set(store, s);
-        if (r.signal === LATE_NONE_SIGNAL) convictions += 1;
+        if (r.signal) signalCounts[r.signal] = (signalCounts[r.signal] ?? 0) + 1;
         if (r.verdict === "still_unknown") {
           const key = r.employee_id;
           const e = unknownByEmployee.get(key) ?? {
             employee: `${r.employees?.employee_code ?? "?"} ${r.employees?.employee_name ?? "?"}`,
             store,
             days: 0,
-            convicted_days: 0,
+            signal_days: 0,
           };
           e.days += 1;
-          if (r.signal === LATE_NONE_SIGNAL) e.convicted_days += 1;
+          if (r.signal) e.signal_days += 1;
           unknownByEmployee.set(key, e);
         }
       }
@@ -137,7 +154,7 @@ export async function GET(request: Request) {
         quarter: "Q2-2026",
         total_days: rows.length,
         by_verdict: byVerdict,
-        confirmed_missing_punch_signals: convictions,
+        attended_signals: signalCounts,
         by_store: Object.fromEntries(byStore),
         still_unknown_by_employee: [...unknownByEmployee.values()].sort(
           (a, b) => b.days - a.days || a.employee.localeCompare(b.employee)
@@ -279,36 +296,79 @@ export async function GET(request: Request) {
         }
       }
 
+      // §5b-i: worked time_entries rows for this store's gap employees —
+      // a punch on a gap day here is one the flip DISCARDED (had the
+      // effective view included it, the day would not be a gap). The read
+      // is deliberate and allowlisted; entry_type='worked' per §0's trap.
+      const discarded = new Set<string>(); // `${employee_id}|${date}`
+      {
+        const ids = [...gapsByEmployee.keys()];
+        for (let i = 0; i < ids.length; i += 100) {
+          for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase
+              .from("time_entries")
+              .select("employee_id, entry_date")
+              .in("employee_id", ids.slice(i, i + 100))
+              .eq("entry_type", "worked")
+              .gte("entry_date", Q2_START)
+              .lte("entry_date", Q2_END)
+              .order("employee_id", { ascending: true })
+              .order("entry_date", { ascending: true })
+              .range(from, from + PAGE - 1);
+            if (error) throw new Error(`discarded-punch read: ${error.message}`);
+            for (const r of data ?? []) {
+              discarded.add(`${r.employee_id}|${String(r.entry_date).slice(0, 10)}`);
+            }
+            if (!data || data.length < PAGE) break;
+          }
+        }
+      }
+
       const storeVerdicts: Record<string, number> = {};
       for (const emp of emps) {
         const gaps = gapsByEmployee.get(emp.id);
         if (!gaps) continue;
         const bounds = punchBounds.get(emp.id) ?? { first: null, last: null };
         for (const gapDate of gaps) {
+          const key = `${emp.id}|${gapDate}`;
+          // §3e-i: the attended signal is resolved BEFORE any rule runs —
+          // for every gap day, not only days some other rule left open.
+          const attendedSignal: AttendedSignal | null = convicted.has(key)
+            ? "late_none"
+            : discarded.has(key)
+              ? "discarded_punch"
+              : null;
           const ruled = seedVerdictForGapDay({
             gapDate,
             firstPunchEver: bounds.first,
             lastPunchEver: bounds.last,
+            attendedSignal,
           });
           const isTaggart =
             emp.seven_shifts_user_id === TAGGART_SEVEN_SHIFTS_USER_ID;
-          const convictedHere =
-            ruled.verdict === "still_unknown" &&
-            convicted.has(`${emp.id}|${gapDate}`);
+          // Human confirmation outranks even the signals — but a
+          // contradiction is RECORDED, never silently resolved.
+          const verdict: GapVerdict = isTaggart ? "confirmed_absent" : ruled.verdict;
+          const evidence = isTaggart
+            ? TAGGART_EVIDENCE +
+              (attendedSignal !== null ? SIGNAL_CONTRADICTION_SUFFIX : "")
+            : SEED_EVIDENCE[ruled.reason];
           seeds.push({
             employee_id: emp.id,
             employee_code: emp.employee_code,
             location_id: loc.id,
             location_code: loc.location_code,
             gap_date: gapDate,
-            verdict: ruled.verdict,
-            evidence: isTaggart
-              ? TAGGART_EVIDENCE
-              : SEED_EVIDENCE[ruled.reason] +
-                (convictedHere ? LATE_NONE_EVIDENCE_SUFFIX : ""),
-            signal: convictedHere ? LATE_NONE_SIGNAL : null,
+            verdict,
+            evidence,
+            signal:
+              attendedSignal === "late_none"
+                ? LATE_NONE_SIGNAL
+                : attendedSignal === "discarded_punch"
+                  ? DISCARDED_PUNCH_SIGNAL
+                  : null,
           });
-          storeVerdicts[ruled.verdict] = (storeVerdicts[ruled.verdict] ?? 0) + 1;
+          storeVerdicts[verdict] = (storeVerdicts[verdict] ?? 0) + 1;
         }
       }
       perStore[loc.location_code] = {
@@ -328,18 +388,26 @@ export async function GET(request: Request) {
       computed_gap_days: seeds.length,
       employees_with_gaps: new Set(seeds.map((s) => s.employee_id)).size,
       by_verdict: byVerdict,
-      confirmed_missing_punch_signals: seeds.filter(
-        (s) => s.signal === LATE_NONE_SIGNAL
-      ).length,
-      by_store: perStore,
-      // The spec's measured shape, for reconciliation at a glance — drift
-      // is expected once backfills land; a large drift BEFORE any backfill
-      // is a computation question.
+      attended_signals: {
+        late_none_conviction: seeds.filter((s) => s.signal === LATE_NONE_SIGNAL)
+          .length,
+        discarded_punch_at_cutover: seeds.filter(
+          (s) => s.signal === DISCARDED_PUNCH_SIGNAL
+        ).length,
+      },
+      // The spec's measured shape (§5b-i / §10 — 463, not the retracted
+      // 458), for reconciliation at a glance. The 12 late/none and 5
+      // cutover-discard days seed still_unknown with evidence attached, so
+      // computed still_unknown reads HIGHER and confirmed_absent LOWER
+      // than the pure shape-rule split — that drift is the §3e-i fix
+      // working. Drift is also expected once backfills land; a large
+      // unexplained drift BEFORE any backfill is a computation question.
       spec_expectation: {
-        total: 458,
+        total: 463,
         still_unknown: 230,
-        confirmed_absent: 205,
+        confirmed_absent: 210,
         scheduled_after_departure: 23,
+        note: "§10 shape-rule figures; the 12 + 5 signal days move from confirmed_absent into still_unknown per §3e-i / §5b-i",
       },
     };
 

@@ -135,6 +135,12 @@ test("reader sweep: every remaining direct time_entries reader is consciously al
     // one of the two schedule-history sources; its punch side rides
     // v_worked_intervals. Read-only diagnostic; states its window/source.
     "src/app/api/admin/departure-candidates/route.ts",
+    // Q2 gap ledger (§5b-i): reads WORKED time_entries rows deliberately —
+    // to find punches the flip DISCARDED at cutover (HOU 04-30→05-03
+    // class). Gap derivation + punch bounds still ride flip-entries /
+    // v_worked_intervals; this read exists precisely to catch what those
+    // sources drop, and its days seed still_unknown, never absent.
+    "src/app/api/admin/q2-gap-ledger/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

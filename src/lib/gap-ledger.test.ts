@@ -31,11 +31,14 @@ const {
 // §3d decision table — the spec's own subjects as fixtures.
 // ---------------------------------------------------------------------------
 
+const NO_SIGNAL = { attendedSignal: null } as const;
+
 test("after last punch ever → scheduled_after_departure (Leia Parker: gap 06-20, last punch 06-19)", () => {
   const v = seedVerdictForGapDay({
     gapDate: "2026-06-20",
     firstPunchEver: "2025-11-02",
     lastPunchEver: "2026-06-19",
+    ...NO_SIGNAL,
   });
   assert.equal(v.verdict, "scheduled_after_departure");
   assert.equal(v.reason, "after_last_punch");
@@ -46,6 +49,7 @@ test("blind, never punched → still_unknown (Chazz Limon: zero punches ever)", 
     gapDate: "2026-05-14",
     firstPunchEver: null,
     lastPunchEver: null,
+    ...NO_SIGNAL,
   });
   assert.equal(v.verdict, "still_unknown");
   assert.equal(v.reason, "blind");
@@ -56,6 +60,7 @@ test("blind, before first punch → still_unknown (Keara Beck: gaps end 05-10, f
     gapDate: "2026-05-10",
     firstPunchEver: "2026-05-13",
     lastPunchEver: "2026-08-20",
+    ...NO_SIGNAL,
   });
   assert.equal(v.verdict, "still_unknown");
   assert.equal(v.reason, "blind");
@@ -66,9 +71,49 @@ test("sighted → confirmed_absent (Taggart's shape: gap inside a live punch his
     gapDate: "2026-04-15",
     firstPunchEver: "2025-06-08",
     lastPunchEver: "2026-08-20",
+    ...NO_SIGNAL,
   });
   assert.equal(v.verdict, "confirmed_absent");
   assert.equal(v.reason, "sighted");
+});
+
+test("§3e-i BLOCKER PIN: the late/none conviction outranks EVERY shape rule — sighted AND departure", () => {
+  // Eleven of the twelve conviction days fall on SIGHTED days: shape-first
+  // seeding sealed them as absences while a flag in the same database said
+  // the person showed up. The signal must win on the exact input the
+  // sighted rule would otherwise claim…
+  const onSighted = seedVerdictForGapDay({
+    gapDate: "2026-06-10",
+    firstPunchEver: "2026-01-10",
+    lastPunchEver: "2026-08-20",
+    attendedSignal: "late_none",
+  });
+  assert.equal(onSighted.verdict, "still_unknown");
+  assert.equal(onSighted.reason, "late_none_conviction");
+  // …and on the departure shape too: 7shifts asserting attendance after
+  // the "last punch ever" is a contradiction to investigate, not a
+  // departure artifact to file away.
+  const onDeparted = seedVerdictForGapDay({
+    gapDate: "2026-06-25",
+    firstPunchEver: "2026-01-10",
+    lastPunchEver: "2026-06-19",
+    attendedSignal: "late_none",
+  });
+  assert.equal(onDeparted.verdict, "still_unknown");
+  assert.equal(onDeparted.reason, "late_none_conviction");
+});
+
+test("§5b-i: a discarded punch (HOU cutover class) seeds still_unknown, never confirmed_absent", () => {
+  // 04-30→05-03 at HOU: a 7shifts punch exists and the flip stopped
+  // reading it. Positive attendance evidence the scoring path cannot see.
+  const v = seedVerdictForGapDay({
+    gapDate: "2026-05-01",
+    firstPunchEver: "2026-01-15",
+    lastPunchEver: "2026-08-20",
+    attendedSignal: "discarded_punch",
+  });
+  assert.equal(v.verdict, "still_unknown");
+  assert.equal(v.reason, "discarded_punch");
 });
 
 test("precedence: after-departure beats sighted; blind test is strict (<) on the first punch", () => {
@@ -78,6 +123,7 @@ test("precedence: after-departure beats sighted; blind test is strict (<) on the
     gapDate: "2026-06-25",
     firstPunchEver: "2026-01-10",
     lastPunchEver: "2026-06-19",
+    ...NO_SIGNAL,
   });
   assert.equal(departed.verdict, "scheduled_after_departure");
   // gapDate strictly before firstPunch is blind; a gap ON the first-punch
@@ -86,6 +132,7 @@ test("precedence: after-departure beats sighted; blind test is strict (<) on the
     gapDate: "2026-05-13",
     firstPunchEver: "2026-05-13",
     lastPunchEver: "2026-08-20",
+    ...NO_SIGNAL,
   });
   assert.equal(onFirst.verdict, "confirmed_absent");
 });
@@ -102,6 +149,8 @@ test("§3e: late/none convicts; no_show does NOT acquit; null/junk is nothing", 
 });
 
 test("evidence strings: never bare rule names — each cites its section and its caveat", () => {
+  assert.match(SEED_EVIDENCE.late_none_conviction, /§3e-i/);
+  assert.match(SEED_EVIDENCE.discarded_punch, /§5b-i/);
   assert.match(SEED_EVIDENCE.after_last_punch, /candidates \(§7b\)/);
   assert.match(SEED_EVIDENCE.blind, /missing data/);
   assert.match(SEED_EVIDENCE.sighted, /§7a/);
@@ -144,9 +193,32 @@ test("ledger route: dry-run default, insert-only re-seed, and the §0 trap held 
   assert.match(ledgerRouteSrc, /searchParams\.get\("write"\) === "1"/);
   // Gap days via the scoring source layer — reconciles by construction.
   assert.match(ledgerRouteSrc, /fetchEffectiveEntries/);
-  // Punch history via the era-correct union, never raw time_entries.
+  // Punch BOUNDS via the era-correct union — first/last punch ever must
+  // never come from raw time_entries (§0's trap)…
   assert.match(ledgerRouteSrc, /v_worked_intervals/);
-  assert.doesNotMatch(ledgerRouteSrc, /from\("time_entries"\)/);
+  // …but the §5b-i discarded-punch check DOES read time_entries, worked
+  // rows only, deliberately — it exists to catch what the flip drops, and
+  // its days seed still_unknown, never absent.
+  const teRead = ledgerRouteSrc.indexOf('from("time_entries")');
+  const workedFilter = ledgerRouteSrc.indexOf('eq("entry_type", "worked")', teRead);
+  assert.ok(teRead > 0, "the discarded-punch check reads time_entries");
+  assert.ok(
+    workedFilter > teRead && workedFilter - teRead < 400,
+    "the time_entries read filters entry_type='worked' (§0's trap)"
+  );
+  assert.equal(
+    ledgerRouteSrc.split('from("time_entries")').length - 1,
+    1,
+    "exactly ONE deliberate time_entries read — the §5b-i check, nothing else"
+  );
+  // §3e-i: the attended signal is resolved BEFORE the rule runs.
+  assert.match(ledgerRouteSrc, /attendedSignal/);
+  const signalResolve = ledgerRouteSrc.indexOf("const attendedSignal");
+  const ruleCall = ledgerRouteSrc.indexOf("seedVerdictForGapDay({", signalResolve);
+  assert.ok(
+    signalResolve > 0 && ruleCall > signalResolve,
+    "signal resolution precedes the shape rules"
+  );
   // §7's ruling as a build fact: the ledger never touches scoring tables
   // (the header PROSE may name them; the queries must not).
   assert.doesNotMatch(ledgerRouteSrc, /from\("performance_records"\)/);
