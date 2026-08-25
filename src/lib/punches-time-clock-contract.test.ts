@@ -88,6 +88,9 @@ test("structural sweep: every src file touching the column is on the allowlist",
     "src/lib/performance-recompute.test.ts",
     "src/lib/punches-time-clock-contract.test.ts",
     "src/lib/multi-location-fetch.ts",
+    // Store-wide side-by-side reporting (mig 057) applies the same
+    // effective-date gate as the recompute entry points.
+    "src/lib/store-attendance.ts",
     "src/app/dashboard/employees/[id]/page.tsx",
     "src/app/dashboard/employees/[id]/edit/actions.ts",
     "src/app/dashboard/employees/[id]/edit/page.tsx",

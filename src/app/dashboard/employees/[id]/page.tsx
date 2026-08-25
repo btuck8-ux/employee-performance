@@ -76,7 +76,7 @@ export default async function EmployeeDetailPage({
   const { data: emp } = await supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, punches_time_clock, punches_time_clock_since, locations(id, name, clients(id, name))"
+      "id, employee_code, employee_name, email, phone, hire_date, wage, wage_pay_type, active, seven_shifts_user_id, punches_time_clock, punches_time_clock_since, is_general_manager, locations(id, name, clients(id, name))"
     )
     .eq("id", id)
     .single();
@@ -581,6 +581,9 @@ export default async function EmployeeDetailPage({
             ) : (
               <Badge tone="muted">Inactive</Badge>
             )}
+            {emp.is_general_manager === true && (
+              <Badge tone="muted">General manager</Badge>
+            )}
             {canToggleStatus && loc && (
               <EmployeeStatusButton
                 employeeId={emp.id}
@@ -595,6 +598,14 @@ export default async function EmployeeDetailPage({
             <Link href={`/dashboard/employees/${emp.id}/edit`}>Edit</Link>
           </Button>
         </div>
+        {emp.is_general_manager === true && (
+          <p className="text-xs text-slate-500 mt-1">
+            GM punch patterns are expected to be irregular — offsite work and
+            on-call time never reach a time clock. Their attendance still counts
+            in store-wide numbers; the store view also reports an
+            excluding-management figure alongside.
+          </p>
+        )}
       </div>
 
       {justSaved && (
