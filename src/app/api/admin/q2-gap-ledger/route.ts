@@ -300,6 +300,11 @@ export async function GET(request: Request) {
       // a punch on a gap day here is one the flip DISCARDED (had the
       // effective view included it, the day would not be a gap). The read
       // is deliberate and allowlisted; entry_type='worked' per §0's trap.
+      // in_time/out_time non-null mirrors v_worked_intervals' own punch
+      // definition (Codex 2026-08-25): a null-interval row is excluded
+      // from scoring EVERYWHERE — data quality, not the cutover — so it
+      // is not a punch "the flip stopped reading" and must not fire the
+      // signal.
       const discarded = new Set<string>(); // `${employee_id}|${date}`
       {
         const ids = [...gapsByEmployee.keys()];
@@ -310,6 +315,8 @@ export async function GET(request: Request) {
               .select("employee_id, entry_date")
               .in("employee_id", ids.slice(i, i + 100))
               .eq("entry_type", "worked")
+              .not("in_time", "is", null)
+              .not("out_time", "is", null)
               .gte("entry_date", Q2_START)
               .lte("entry_date", Q2_END)
               .order("employee_id", { ascending: true })
@@ -407,7 +414,7 @@ export async function GET(request: Request) {
         still_unknown: 230,
         confirmed_absent: 210,
         scheduled_after_departure: 23,
-        note: "§10 shape-rule figures; the 12 + 5 signal days move from confirmed_absent into still_unknown per §3e-i / §5b-i",
+        note: "§10 shape-rule figures; the signal days (11 sighted + 1 already-blind late/none, + 5 discarded-punch) shift the computed split toward still_unknown per §3e-i / §5b-i",
       },
     };
 
