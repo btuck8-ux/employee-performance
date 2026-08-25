@@ -123,6 +123,18 @@ export interface FlipSourceRows {
    * nothing is real absence, and it keeps scoring (the Sierra Estrada
    * rule — she goes to the anomaly list, not to this branch). */
   isMapped: boolean;
+  /** This employee's EARLIEST pruned direct-feed date at this location,
+   * all-time (null = never appeared in the feed). Q2-blocker fix,
+   * 2026-08-25: an authoritative day must be authoritative for THIS
+   * employee, not just for the store. Kevin Montie's direct-feed record
+   * begins 2026-07-07 while COS coverage begins 2026-06-01 — the
+   * store-only test read his 20 June scheduled rows as deletion artifacts
+   * and dropped them, while keeping his 16 June worked days as covers:
+   * attendance 60% → a confident, wrong 0%. Absence of a record is not
+   * evidence of absence when it is absence of COVERAGE — the sprint's
+   * defect class, the flip's second self-inflicted instance ("no crosswalk
+   * row" was the first; this is "no direct-feed history"). */
+  directFeedFirstDate: string | null;
   /** Dates where the pruned direct feed has ANY row for the STORE. */
   directFeedDays: Set<string>;
   /** This employee's pruned direct-feed starts, store-local (earliest per date). */
@@ -166,16 +178,24 @@ export function mergeEffectiveEntries(src: FlipSourceRows): TimeEntryRow[] {
     const blind =
       !src.isMapped && src.goLive !== null && date >= src.goLive;
 
-    // SCHEDULED — day-conditional on the STORE's direct-feed coverage.
+    // SCHEDULED — day-conditional on the STORE's coverage AND this
+    // EMPLOYEE's direct-feed presence: the employee's first direct-feed
+    // date is the boundary, and the boundary day itself is authoritative.
+    // A store-covered day BEFORE the employee ever appears in the feed is
+    // schedule-coverage blindness, not a deletion artifact — fall back to
+    // time_entries scheduled exactly as an uncovered day does.
+    const employeeCovered =
+      src.directFeedFirstDate !== null && date >= src.directFeedFirstDate;
     if (blind) {
       // no scheduled emission: cannot see the punch side for this day
-    } else if (src.directFeedDays.has(date)) {
+    } else if (src.directFeedDays.has(date) && employeeCovered) {
       const start = src.directStartByDate.get(date);
       if (start !== undefined) {
         out.push({ entry_date: date, entry_type: "scheduled", in_time: start });
       }
       // No direct shift on a covered day = not scheduled, even if an
-      // unpruned time_entries row says otherwise (the artifact).
+      // unpruned time_entries row says otherwise (the artifact — the 139
+      // recovered employee-days depend on this branch).
     } else {
       const te = teScheduled.get(date);
       if (te) out.push(te);
@@ -345,6 +365,38 @@ export async function fetchEffectiveEntries(
     for (const r of rows) mapped.add(String(r.employee_id));
   }
 
+  // Each employee's EARLIEST pruned direct-feed date — deliberately
+  // UNBOUNDED by the window (Q2-blocker fix, 2026-08-25): Kevin Montie's
+  // Q2 window contains zero direct-feed rows precisely BECAUSE his feed
+  // record starts 2026-07-07; a window-bounded min would read "never
+  // appeared" and misroute the whole quarter. RLS note: these are the
+  // employee's OWN rows, covered by the Class-1 self arm for a user-tier
+  // viewer — no definer view needed (unlike the STORE-level day set).
+  const firstDates = new Map<string, string>();
+  for (const ids of chunk(employeeIds, IN_CHUNK)) {
+    const rows = await pagedRows<{ employee_id: string; entry_date: string }>(
+      (from, to) =>
+        supabase
+          .from("seven_shifts_shifts")
+          .select("employee_id, entry_date")
+          .eq("location_id", locationId)
+          .in("employee_id", ids)
+          .is("missing_upstream_since", null)
+          .eq("deleted", false)
+          .eq("draft", false)
+          .order("entry_date", { ascending: true })
+          .order("seven_shifts_shift_id", { ascending: true })
+          .range(from, to),
+      "flip first dates"
+    );
+    for (const r of rows) {
+      const id = String(r.employee_id);
+      const d = String(r.entry_date).slice(0, 10);
+      const prev = firstDates.get(id);
+      if (prev === undefined || d < prev) firstDates.set(id, d);
+    }
+  }
+
   for (const id of employeeIds) {
     out.set(
       id,
@@ -352,6 +404,7 @@ export async function fetchEffectiveEntries(
         isToast: true,
         goLive: meta.goLive,
         isMapped: mapped.has(id),
+        directFeedFirstDate: firstDates.get(id) ?? null,
         directFeedDays,
         directStartByDate: directStarts.get(id) ?? new Map(),
         toastInByDate: toastIns.get(id) ?? new Map(),

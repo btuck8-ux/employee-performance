@@ -330,3 +330,70 @@ test("effective date (§2a): end-to-end — pre-since quarter scores real attend
   assert.equal(q3.attendance_pct, null);
   assert.equal(q3.scheduled_count, 0);
 });
+
+test("COVER-RATIO GUARD (Q2-blocker 2026-08-25): covers dominating a near-empty denominator → null, flagged, never 0", () => {
+  // The Kevin Montie shape: 5 scheduled (none worked), 16 covers. Nobody
+  // works sixteen unscheduled shifts and zero scheduled ones — the
+  // schedule record is the untrustworthy side.
+  const entries: ReturnType<typeof entry>[] = [];
+  for (let d = 1; d <= 5; d++) {
+    entries.push(entry(`2026-05-0${d}`, "scheduled", "09:00:00"));
+  }
+  for (let d = 10; d <= 25; d++) {
+    entries.push(entry(`2026-06-${d}`, "worked", "09:00:00"));
+  }
+  const m = computeMetricsFromEntries(entries, {
+    scheduledScoredThrough: "2026-06-30",
+    punchesTimeClock: true,
+  });
+  assert.equal(m.cover_dominated, true);
+  assert.equal(m.attendance_pct, null, "cover-dominated must be not-computable, never 0%");
+  assert.equal(m.on_time_pct, null);
+  assert.equal(m.covered_shifts, 16, "the counts stay real");
+  assert.equal(m.scheduled_count, 5);
+});
+
+test("cover-ratio guard does NOT fire on normal shapes — real absence still scores", () => {
+  // 5 scheduled, 0 worked, 0 covers = genuine absence: 0% stands.
+  const absent = computeMetricsFromEntries(
+    [1, 2, 3, 4, 5].map((d) => entry(`2026-06-0${d}`, "scheduled", "09:00:00")),
+    { scheduledScoredThrough: "2026-06-30", punchesTimeClock: true }
+  );
+  assert.equal(absent.cover_dominated, false);
+  assert.equal(absent.attendance_pct, 0);
+
+  // 20 scheduled+worked, 3 covers = normal profile: untouched.
+  const normal: ReturnType<typeof entry>[] = [];
+  for (let d = 1; d <= 20; d++) {
+    const dd = String(d).padStart(2, "0");
+    normal.push(entry(`2026-06-${dd}`, "scheduled", "09:00:00"));
+    normal.push(entry(`2026-06-${dd}`, "worked", "08:59:00"));
+  }
+  for (let d = 21; d <= 23; d++) {
+    normal.push(entry(`2026-06-${d}`, "worked", "09:00:00"));
+  }
+  const n = computeMetricsFromEntries(normal, {
+    scheduledScoredThrough: "2026-06-30",
+    punchesTimeClock: true,
+  });
+  assert.equal(n.cover_dominated, false);
+  assert.equal(n.attendance_pct, 100);
+
+  // A part-timer's small cover count (3 sched, 4 covers) stays under the
+  // ≥5 floor — no false trip.
+  const partTimer: ReturnType<typeof entry>[] = [
+    entry("2026-06-01", "scheduled", "09:00:00"),
+    entry("2026-06-01", "worked", "09:00:00"),
+    entry("2026-06-02", "scheduled", "09:00:00"),
+    entry("2026-06-03", "scheduled", "09:00:00"),
+    entry("2026-06-10", "worked", "09:00:00"),
+    entry("2026-06-11", "worked", "09:00:00"),
+    entry("2026-06-12", "worked", "09:00:00"),
+    entry("2026-06-13", "worked", "09:00:00"),
+  ];
+  const p = computeMetricsFromEntries(partTimer, {
+    scheduledScoredThrough: "2026-06-30",
+    punchesTimeClock: true,
+  });
+  assert.equal(p.cover_dominated, false);
+});

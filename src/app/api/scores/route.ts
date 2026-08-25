@@ -79,8 +79,18 @@ export async function GET(request: Request) {
     query = query.eq("period_label", period);
   }
   if (since) query = query.gte("computed_at", since);
+  // ⚠️ TOTAL ORDER REQUIRED (THQ paging fix, 2026-08-25 — pinned).
+  // employee_code alone is NOT unique here: the view returns one row per
+  // (employee × period) — 1,004 rows / 224 codes, largest tie group 9.
+  // Postgres guarantees nothing within ties across separate queries, so
+  // offset paging over a partial order silently skips and duplicates rows
+  // at page boundaries while reconciling to a plausible count — and at
+  // offset 1,000 the boundary lands inside a tie group with near
+  // certainty. (employee_code, period_label) is unique by construction —
+  // one row per employee per period — which makes the sort total.
   query = query
     .order("employee_code", { ascending: true })
+    .order("period_label", { ascending: true })
     .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;

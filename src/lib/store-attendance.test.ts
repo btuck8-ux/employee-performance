@@ -66,6 +66,7 @@ function metricsOf(c: Counts) {
     missed_count: c.scheduled - c.attended,
     on_time_count: c.onTime,
     on_time_grace_count: c.onTimeGrace,
+    cover_dominated: false,
   };
 }
 
