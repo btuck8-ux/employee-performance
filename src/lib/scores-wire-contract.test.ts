@@ -23,8 +23,12 @@ const rangeSrc = read("src/app/api/scores/range/route.ts");
 const agentsSrc = read("AGENTS.md");
 
 test("/api/scores is STORED: reads the views, never the live compute", () => {
-  assert.match(scoresSrc, /v_employee_scores/);
-  assert.match(scoresSrc, /v_employee_scores_latest/);
+  // Pin the CODE's table selection, exactly (Codex nit: a bare
+  // /v_employee_scores/ also matches the _latest variant and prose).
+  assert.match(
+    scoresSrc,
+    /period === "latest" \? "v_employee_scores_latest" : "v_employee_scores"/
+  );
   assert.doesNotMatch(
     scoresSrc,
     /computeMetricsForRange/,
@@ -49,5 +53,9 @@ test("the restatement rule is stated on the wire and in the trap-list", () => {
   assert.match(scoresSrc, /A restatement is not real on this\s*\n?\s*\* wire until performance_records is rewritten/);
   assert.match(agentsSrc, /`\/api\/scores` is STORED, `\/api\/scores\/range` is LIVE/);
   assert.match(agentsSrc, /A restatement is not real until\s*\n?\s*`performance_records` is rewritten/);
-  assert.match(agentsSrc, /computed_at/);
+  // Anchored to the trap paragraph, not any stray mention (Codex nit).
+  assert.match(
+    agentsSrc,
+    /announce it with the `computed_at`\s*\n?\s*watermark it will be visible above/
+  );
 });
