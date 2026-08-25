@@ -86,8 +86,10 @@ export type RangeFeedValidation =
   | { ok: true; params: RangeFeedParams }
   | { ok: false; reason: string };
 
-/** Calendar-valid ISO date (rejects pattern-passing junk like 2026-13-99). */
-function isValidIsoDate(s: string): boolean {
+/** Calendar-valid ISO date (rejects pattern-passing junk like 2026-13-99).
+ * Exported for the other date-taking feeds/levers (punch-days, worked-time
+ * backfill) — one validator, not three regexes. */
+export function isValidIsoDate(s: string): boolean {
   if (!DATE_RE.test(s)) return false;
   const d = new Date(`${s}T12:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;

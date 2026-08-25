@@ -233,7 +233,20 @@ export async function ingestTimePunches(
   supabase: AdminClient,
   loc: LocationCrosswalk,
   windowStart: string,
-  windowEnd: string
+  windowEnd: string,
+  opts?: {
+    /**
+     * Inclusive entry-DATE bound (YYYY-MM-DD), applied to the collapsed
+     * punches after fetch and before the recompute quarter set is derived.
+     * windowStart/windowEnd bound MODIFICATION time (the 7shifts fetch);
+     * this bounds WHEN THE WORK HAPPENED — the two are different axes, and
+     * conflating them is how one intended-for-Q2 backfill fanned across
+     * four quarters (frozen-quarter spec 2026-08-25 §2). A punch worked in
+     * October but edited in April comes back under a spring modified_since;
+     * only an entry-date bound can express "Q2 only".
+     */
+    entryWindow?: { from?: string; to?: string };
+  }
 ): Promise<RunOutcome> {
   const base: RunOutcome = {
     source: "7shifts_time",
@@ -278,9 +291,21 @@ export async function ingestTimePunches(
 
     const collapse = collapsePunches(punches, userToEmployee, tz);
 
+    // Entry-date bound (§2): the fetch is modification-time; the WRITE and
+    // the recompute quarter set are entry-date. Filter before either.
+    const entryWindow = opts?.entryWindow;
+    const boundedEntries = entryWindow
+      ? collapse.entries.filter(
+          (c) =>
+            (!entryWindow.from || c.entry_date >= entryWindow.from) &&
+            (!entryWindow.to || c.entry_date <= entryWindow.to)
+        )
+      : collapse.entries;
+    const entriesOutsideEntryWindow = collapse.entries.length - boundedEntries.length;
+
     // Build upsert payloads in the exact time_entries shape the CSV path uses.
     const unmappedRoleIds = new Set<number>();
-    const payloads = collapse.entries.map((c) => {
+    const payloads = boundedEntries.map((c) => {
       const payload: Record<string, unknown> = {
         employee_id: c.employee_id,
         location_id: loc.id,
@@ -320,8 +345,10 @@ export async function ingestTimePunches(
 
     // Recompute (employee × affected quarter) for the touched employees only —
     // mirrors the time CSV importer (no team-tip rebuild on the time path).
-    const quarters = distinctQuarters(collapse.entries.map((c) => c.entry_date));
-    const touchedEmployees = new Set(collapse.entries.map((c) => c.employee_id));
+    // Derived from the BOUNDED entries: the recompute set must never reach
+    // beyond the entry-date window that was written.
+    const quarters = distinctQuarters(boundedEntries.map((c) => c.entry_date));
+    const touchedEmployees = new Set(boundedEntries.map((c) => c.employee_id));
     const jobs: RecomputeJob[] = [];
     for (const employee_id of touchedEmployees) {
       for (const q of quarters) jobs.push({ employee_id, year: q.year, quarter: q.quarter });
@@ -337,13 +364,25 @@ export async function ingestTimePunches(
 
     base.rows_upserted = upserted;
     base.rows_skipped =
-      collapse.skippedOpen + collapse.skippedDeleted + collapse.unmatchedUserIds.length;
+      collapse.skippedOpen +
+      collapse.skippedDeleted +
+      collapse.unmatchedUserIds.length +
+      entriesOutsideEntryWindow;
     base.detail = {
       punches_fetched: punches.length,
       entries_upserted: upserted,
       employees_touched: touchedEmployees.size,
       quarters_recomputed: quarters.length,
       records_recomputed: rc.recomputed,
+      records_created: rc.created,
+      records_updated: rc.updated,
+      records_skipped_no_activity: rc.skipped_no_activity,
+      ...(entryWindow
+        ? {
+            entry_window: { from: entryWindow.from ?? null, to: entryWindow.to ?? null },
+            entries_outside_entry_window: entriesOutsideEntryWindow,
+          }
+        : {}),
       skipped_open_punches: collapse.skippedOpen,
       skipped_deleted: collapse.skippedDeleted,
       unmatched_seven_shifts_user_ids: collapse.unmatchedUserIds,

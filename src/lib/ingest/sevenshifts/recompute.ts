@@ -19,7 +19,12 @@ export function quarterForDate(isoDate: string): { year: number; quarter: Quarte
 }
 
 export interface RecomputeResult {
+  /** Rows actually written (created + updated) — NOT jobs run. */
   recomputed: number;
+  created: number;
+  updated: number;
+  /** No-conjuring skips (§3): no existing row + no activity = no write. */
+  skipped_no_activity: number;
   failures: string[];
 }
 
@@ -27,13 +32,24 @@ export interface RecomputeResult {
  * Run a worker pool over (employee × quarter) recompute jobs — the same
  * idempotent path the manual CSV importers use. Weights are fetched once and
  * threaded through so we don't re-read the singleton config per job.
+ *
+ * A job targeting a frozen period (report_periods.frozen, mig 063) fails
+ * into `failures` and the pool keeps going — pass opts.allowFrozenQuarter
+ * naming the exact quarter ("Q4-2025") to authorize a frozen-period write.
  */
 export async function runRecomputeJobs(
   supabase: AdminClient,
   locationId: string,
-  jobs: RecomputeJob[]
+  jobs: RecomputeJob[],
+  opts?: { allowFrozenQuarter?: string }
 ): Promise<RecomputeResult> {
-  const result: RecomputeResult = { recomputed: 0, failures: [] };
+  const result: RecomputeResult = {
+    recomputed: 0,
+    created: 0,
+    updated: 0,
+    skipped_no_activity: 0,
+    failures: [],
+  };
   if (jobs.length === 0) return result;
 
   const csWeights = await fetchCustomerServiceWeights(supabase);
@@ -50,10 +66,19 @@ export async function runRecomputeJobs(
         locationId,
         job.year,
         job.quarter,
-        { csWeights, tisWeights }
+        { csWeights, tisWeights, allowFrozenQuarter: opts?.allowFrozenQuarter }
       );
-      if (r.ok) result.recomputed += 1;
-      else result.failures.push(`recompute ${job.employee_id} ${job.year}-Q${job.quarter}: ${r.error}`);
+      if (!r.ok) {
+        // Label format Q{q}-{year} everywhere the frozen contract speaks
+        // (matches allowFrozenQuarter / the refusal message).
+        result.failures.push(`recompute ${job.employee_id} Q${job.quarter}-${job.year}: ${r.error}`);
+      } else if (r.action === "skipped_no_activity") {
+        result.skipped_no_activity += 1;
+      } else {
+        result.recomputed += 1;
+        if (r.action === "created") result.created += 1;
+        else result.updated += 1;
+      }
     }
   }
   await Promise.all(Array.from({ length: RECOMPUTE_CONCURRENCY }, worker));
@@ -106,6 +131,9 @@ export function distinctQuarters(
 export interface SalesRecomputeSummary {
   quarters: Array<{ year: number; quarter: Quarter }>;
   recomputed: number;
+  created: number;
+  updated: number;
+  skipped_no_activity: number;
   teams_recomputed: number;
   failures: string[];
 }
@@ -133,6 +161,9 @@ export async function recomputeAfterSalesUpsert(
   const summary: SalesRecomputeSummary = {
     quarters,
     recomputed: 0,
+    created: 0,
+    updated: 0,
+    skipped_no_activity: 0,
     teams_recomputed: 0,
     failures: [],
   };
@@ -154,6 +185,9 @@ export async function recomputeAfterSalesUpsert(
 
   const rc = await runRecomputeJobs(supabase, locationId, jobs);
   summary.recomputed = rc.recomputed;
+  summary.created = rc.created;
+  summary.updated = rc.updated;
+  summary.skipped_no_activity = rc.skipped_no_activity;
   summary.failures.push(...rc.failures);
   summary.teams_recomputed = await recomputeTeamTipImpact(
     supabase,

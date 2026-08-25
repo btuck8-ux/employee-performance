@@ -798,10 +798,81 @@ export async function computeMetricsForRange(
 }
 
 /**
+ * The frozen-quarter guard (frozen-quarter spec 2026-08-25 §1). Pure
+ * decision: returns null when the write may proceed, or the refusal message.
+ *
+ * A guard attached to a caller protects that caller; a guard attached to the
+ * asset protects the asset. recomputePerformanceForQuarter has ~20 write
+ * paths behind it — this is the ONE implementation of frozen-ness, reading
+ * report_periods.frozen (mig 063), and every caller goes through it.
+ *
+ * The override is an explicit option naming the exact quarter
+ * (allowFrozenQuarter: "Q4-2025"). A boolean is not acceptable — it can be
+ * passed by a caller that has no idea which quarter it is about to touch,
+ * which is precisely how the 2026-08-25 fan-out incident happened.
+ */
+export const FROZEN_REFUSAL_PREFIX = "refusing recompute of frozen";
+
+export function frozenQuarterRefusal(
+  frozen: boolean,
+  year: number,
+  quarter: Quarter,
+  allowFrozenQuarter: string | undefined
+): string | null {
+  if (!frozen) return null;
+  const label = `Q${quarter}-${year}`;
+  if (allowFrozenQuarter === label) return null;
+  if (allowFrozenQuarter !== undefined) {
+    return `${FROZEN_REFUSAL_PREFIX} ${label}: override names "${allowFrozenQuarter}", not this quarter`;
+  }
+  return `${FROZEN_REFUSAL_PREFIX} ${label}: this quarter is frozen (THQ arrangement) — recomputing it requires allowFrozenQuarter: "${label}", named exactly`;
+}
+
+/** What a recompute write actually did — "employees touched" concealed two
+ * row-conjuring incidents (frozen-quarter spec 2026-08-25 §3); created vs
+ * updated vs skipped must never collapse into one count again. */
+export type RecomputeWriteAction = "created" | "updated" | "skipped_no_activity";
+
+/**
+ * The no-conjuring rule (frozen-quarter spec 2026-08-25 §3): a recompute
+ * must not create a row for an (employee, period) with no scheduled, worked,
+ * or attributed activity. Pure decision over the activity signals the
+ * recompute already computed. An EXISTING row still updates — an employee
+ * who genuinely went quiet gets refreshed to null, not left stale.
+ */
+export function periodHasActivity(signals: {
+  entry_count: number;
+  tattle_quantity: number;
+  customer_review_quantity: number;
+  surveys_assigned: number;
+  tasks_accountable: number;
+  tasks_owned: number;
+  hours_worked: number | null;
+  kitchen_items: number | null;
+}): boolean {
+  return (
+    signals.entry_count > 0 ||
+    signals.tattle_quantity > 0 ||
+    signals.customer_review_quantity > 0 ||
+    signals.surveys_assigned > 0 ||
+    signals.tasks_accountable > 0 ||
+    signals.tasks_owned > 0 ||
+    (signals.hours_worked ?? 0) > 0 ||
+    (signals.kitchen_items ?? 0) > 0
+  );
+}
+
+/**
  * Recompute and upsert the performance_records row for one (employee, quarter).
  * Pulls all time_entries for the employee within the quarter window and writes
  * attendance_pct, on_time_pct, on_time_grace_pct, covered_shifts. Other metric
  * columns are left untouched if the row exists.
+ *
+ * Refuses (ok:false, no write) when the target period is frozen
+ * (report_periods.frozen) and opts.allowFrozenQuarter does not name it
+ * exactly — see frozenQuarterRefusal. Skips (ok:true,
+ * action:"skipped_no_activity", no write) when no row exists and the
+ * employee has no activity in the period — see periodHasActivity.
  */
 export async function recomputePerformanceForQuarter(
   supabase: SupabaseClient,
@@ -812,18 +883,36 @@ export async function recomputePerformanceForQuarter(
   opts?: {
     csWeights?: CustomerServiceWeights;
     tisWeights?: TotalImpactWeights;
+    /** Exact quarter label ("Q4-2025") authorizing a frozen-period write. */
+    allowFrozenQuarter?: string;
   }
-): Promise<{ ok: true; metrics: PerformanceMetrics } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; metrics: PerformanceMetrics; action: RecomputeWriteAction }
+  | { ok: false; error: string }
+> {
   const q = quarterInfo(year, quarter);
   const periodStart = q.periodStart.toISOString().slice(0, 10);
   const periodEnd = q.periodEnd.toISOString().slice(0, 10);
 
-  const { data: period } = await supabase
+  const { data: period, error: periodError } = await supabase
     .from("report_periods")
-    .select("id")
+    .select("id, frozen")
     .eq("year", year)
     .eq("quarter", quarter)
     .maybeSingle();
+  if (periodError) return { ok: false, error: `report_periods read: ${periodError.message}` };
+
+  // Frozen-quarter guard — BEFORE any write. Return ok:false, never throw:
+  // runRecomputeJobs collects failures into an array, so a nightly that
+  // inadvertently targets a frozen quarter logs a failure per job and keeps
+  // going instead of dying mid-run on a partial write.
+  const refusal = frozenQuarterRefusal(
+    period?.frozen === true,
+    year,
+    quarter,
+    opts?.allowFrozenQuarter
+  );
+  if (refusal) return { ok: false, error: refusal };
 
   let reportPeriodId = period?.id;
   if (!reportPeriodId) {
@@ -1102,6 +1191,35 @@ export async function recomputePerformanceForQuarter(
     tisWeights
   );
 
+  // No-conjuring rule (§3): "every active employee at the location" includes
+  // people with nothing in the period — two write paths have already minted
+  // all-null rows that surprised their operator (the lever at NOLA, the
+  // worked-time backfill at DTD). No existing row + no activity = no write.
+  const { data: existingRow, error: existingError } = await supabase
+    .from("performance_records")
+    .select("id")
+    .eq("employee_id", employeeId)
+    .eq("report_period_id", reportPeriodId)
+    .maybeSingle();
+  if (existingError) {
+    return { ok: false, error: `performance_records existence read: ${existingError.message}` };
+  }
+  if (
+    !existingRow &&
+    !periodHasActivity({
+      entry_count: entries.length,
+      tattle_quantity,
+      customer_review_quantity,
+      surveys_assigned,
+      tasks_accountable,
+      tasks_owned,
+      hours_worked: tip.hours_worked,
+      kitchen_items: kitchen.kitchen_items,
+    })
+  ) {
+    return { ok: true, metrics, action: "skipped_no_activity" };
+  }
+
   const { error: upsertError } = await supabase
     .from("performance_records")
     .upsert(
@@ -1156,5 +1274,5 @@ export async function recomputePerformanceForQuarter(
     );
 
   if (upsertError) return { ok: false, error: upsertError.message };
-  return { ok: true, metrics };
+  return { ok: true, metrics, action: existingRow ? "updated" : "created" };
 }

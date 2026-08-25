@@ -36,12 +36,18 @@ export default async function ScoringAdminPage({
   const recomputed =
     typeof search.recomputed === "string" ? search.recomputed : null;
   const failures = typeof search.failures === "string" ? search.failures : null;
+  const frozenSkipped =
+    typeof search.frozen_skipped === "string" ? search.frozen_skipped : null;
   const tisError = typeof search.tis_error === "string" ? search.tis_error : null;
   const tisSaved = search.tis_saved === "1";
   const tisRecomputed =
     typeof search.tis_recomputed === "string" ? search.tis_recomputed : null;
   const tisFailures =
     typeof search.tis_failures === "string" ? search.tis_failures : null;
+  const tisFrozenSkipped =
+    typeof search.tis_frozen_skipped === "string"
+      ? search.tis_frozen_skipped
+      : null;
   const mtError = typeof search.mt_error === "string" ? search.mt_error : null;
   const mtSaved = search.mt_saved === "1";
 
@@ -72,6 +78,9 @@ export default async function ScoringAdminPage({
                 ? ` (${failures} failed — check server logs)`
                 : ""}
               .
+              {frozenSkipped
+                ? ` Frozen quarters skipped (THQ arrangement): ${frozenSkipped} — writing them requires the recompute lever's override_frozen_quarter.`
+                : ""}
             </>
           )}
         </div>
@@ -186,6 +195,9 @@ export default async function ScoringAdminPage({
                 ? ` (${tisFailures} failed — check server logs)`
                 : ""}
               .
+              {tisFrozenSkipped
+                ? ` Frozen quarters skipped (THQ arrangement): ${tisFrozenSkipped} — writing them requires the recompute lever's override_frozen_quarter.`
+                : ""}
             </>
           )}
         </div>

@@ -28,19 +28,39 @@ test("dry-run is the default; the report returns BEFORE any write path", () => {
   );
 });
 
-test("write requires confirm_quarters; pre-2026 quarters require override_frozen_quarter — both named exactly", () => {
+test("write requires confirm_quarters, named exactly; frozen-ness is the ASSET's guard, not this caller's", () => {
   assert.match(routeSrc, /confirm_quarters/);
-  assert.match(routeSrc, /year < 2026/);
-  assert.match(routeSrc, /override_frozen_quarter/);
-  // Both guards precede the write in the GET body.
   const body = routeSrc.indexOf("export async function GET");
-  const frozen = routeSrc.indexOf("override_frozen_quarter", body);
   const confirm = routeSrc.indexOf('searchParams.get("confirm_quarters")', body);
   const writeCall = routeSrc.indexOf("runRecomputeJobs(", body);
-  assert.ok(frozen > 0 && frozen < writeCall, "frozen guard precedes the write");
   assert.ok(confirm > 0 && confirm < writeCall, "confirm guard precedes the write");
+  // The frozen-quarter check moved INTO recomputePerformanceForQuarter
+  // (frozen-quarter spec 2026-08-25 §1b): the lever's duplicate hardcoded
+  // year comparison is DELETED — exactly one implementation — and the
+  // override merely threads through as allowFrozenQuarter.
+  assert.doesNotMatch(routeSrc, /year < 2026/);
+  assert.match(routeSrc, /override_frozen_quarter/);
+  assert.match(routeSrc, /allowFrozenQuarter:\s*overrideFrozenQuarter/);
   // Explicit params, never defaulted to "current".
   assert.doesNotMatch(routeSrc, /currentQuarter\(/);
+});
+
+test("§3b door-stop: a frozen write refuses 400 BEFORE any work — never a 200 whose recompute_failures is the only tell", () => {
+  const body = routeSrc.indexOf("export async function GET");
+  // The pre-check reads the FLAG (report_periods.frozen) through the SAME
+  // shared decision the asset uses — one definition, surfaced at the layer
+  // where the operator stands.
+  const flagRead = routeSrc.indexOf('select("frozen")', body);
+  const decision = routeSrc.indexOf("frozenQuarterRefusal(", body);
+  const sweep = routeSrc.indexOf("activeRows", body);
+  const writeCall = routeSrc.indexOf("runRecomputeJobs(", body);
+  assert.ok(flagRead > 0, "door-stop reads report_periods.frozen");
+  assert.ok(decision > 0 && decision < sweep, "refusal decision precedes the employee sweep");
+  assert.ok(flagRead < writeCall, "door-stop precedes the write");
+  // Gated on write — dry-run on a frozen quarter stays allowed (it writes
+  // nothing; it is the byte-identical verification tool).
+  const gate = routeSrc.lastIndexOf("if (write) {", flagRead);
+  assert.ok(gate > 0 && gate < flagRead, "door-stop is write-gated; dry-run skips it");
 });
 
 test("the recompute path is runRecomputeJobs VERBATIM — scope plus a report, never a fork", () => {

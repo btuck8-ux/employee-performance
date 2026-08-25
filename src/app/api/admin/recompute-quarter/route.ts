@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { computeMetricsForRange } from "@/lib/performance-recompute";
+import {
+  computeMetricsForRange,
+  frozenQuarterRefusal,
+} from "@/lib/performance-recompute";
 import {
   runRecomputeJobs,
   type RecomputeJob,
@@ -37,10 +40,18 @@ import { quarterInfo, type Quarter } from "@/lib/quarter";
  * GUARDS (the gap-filler's discipline):
  *  - dry_run is the DEFAULT; a missing write param means report only.
  *  - write=1 requires confirm_quarters echoing the exact quarter (Q3-2026).
- *  - any quarter earlier than 2026 Q1 additionally requires
- *    override_frozen_quarter echoing it — Q3/Q4 2025 are frozen by
- *    agreement with Training HQ, and recomputing one must be a deliberate,
- *    named act, never a side effect of a wide parameter.
+ *  - FROZEN QUARTERS (report_periods.frozen, mig 063): the guard lives in
+ *    recomputePerformanceForQuarter — the asset, not this caller (frozen-
+ *    quarter spec 2026-08-25 §1; the lever's old hardcoded year check was
+ *    deleted — the FLAG is the one definition). §3b door-stop: write=1 on
+ *    a frozen quarter without override_frozen_quarter naming it exactly is
+ *    refused 400 BEFORE any work, via the same frozenQuarterRefusal
+ *    decision the asset uses — never a 200 whose recompute_failures is the
+ *    only tell. The override threads through as allowFrozenQuarter; the
+ *    asset guard remains the backstop for the other nineteen write paths.
+ *    Dry-run on a frozen quarter is allowed by design (writes nothing; the
+ *    byte-identical verification tool). Q3/Q4 2025 are frozen by agreement
+ *    with Training HQ, and recomputing one must be a deliberate, named act.
  *  - one location per invocation, like backfill-worked-time.
  *
  * AUTH: Bearer <CRON_SECRET>.
@@ -49,7 +60,7 @@ import { quarterInfo, type Quarter } from "@/lib/quarter";
  *     &year=2026&quarter=3     both explicit — never defaulted to "current"
  *     &write=1                 optional; default is the dry-run report
  *     &confirm_quarters=Q3-2026            required when write=1
- *     &override_frozen_quarter=Q4-2025     required for pre-2026 quarters
+ *     &override_frozen_quarter=Q4-2025     required to write a frozen quarter
  */
 
 export const dynamic = "force-dynamic";
@@ -111,18 +122,10 @@ export async function GET(request: Request) {
   const quarter = quarterNum as Quarter;
   const quarterLabel = `Q${quarter}-${year}`;
 
-  // Frozen-quarter guard: pre-2026 recomputes must be named acts.
-  if (year < 2026) {
-    const override = url.searchParams.get("override_frozen_quarter");
-    if (override !== quarterLabel) {
-      return NextResponse.json(
-        {
-          error: `quarters before 2026 Q1 are frozen by the THQ arrangement — recomputing one requires override_frozen_quarter="${quarterLabel}", named exactly`,
-        },
-        { status: 400 }
-      );
-    }
-  }
+  // Frozen-quarter handling moved INTO recomputePerformanceForQuarter (mig
+  // 063 + frozen-quarter spec §1b) — the override just threads through.
+  const overrideFrozenQuarter =
+    url.searchParams.get("override_frozen_quarter") ?? undefined;
   if (write) {
     const confirmed = url.searchParams.get("confirm_quarters");
     if (confirmed !== quarterLabel) {
@@ -136,6 +139,50 @@ export async function GET(request: Request) {
   }
 
   const supabase = createAdminClient();
+
+  // §3b DOOR-STOP (frozen-quarter spec addendum 2026-08-25): a write=1 aimed
+  // at a frozen quarter without the exact override refuses 400 HERE, before
+  // any work — otherwise the asset guard's per-job refusals come back as
+  // HTTP 200 with recompute_failures populated, and an operator checking
+  // status codes sees success on a write that wrote nothing (the
+  // silent-partial shape both projects ranked worse than an outage). This is
+  // NOT a second definition of frozen: it reads report_periods.frozen (mig
+  // 063) through the SAME frozenQuarterRefusal decision the asset uses; the
+  // asset guard stays the backstop for the other nineteen write paths.
+  // Dry-run deliberately skips this — it writes nothing, and dry-running a
+  // frozen quarter is exactly how the byte-identical recompute verification
+  // was done this morning.
+  if (write) {
+    const { data: periodRow, error: frozenErr } = await supabase
+      .from("report_periods")
+      .select("frozen")
+      .eq("year", year)
+      .eq("quarter", quarter)
+      .maybeSingle();
+    if (frozenErr) {
+      return NextResponse.json(
+        { error: `report_periods read: ${frozenErr.message}` },
+        { status: 500 }
+      );
+    }
+    const refusal = frozenQuarterRefusal(
+      periodRow?.frozen === true,
+      year,
+      quarter,
+      overrideFrozenQuarter
+    );
+    if (refusal) {
+      // Same decision, operator-layer wording: the curl caller passes the
+      // URL param, not the internal option name.
+      return NextResponse.json(
+        {
+          error: `${quarterLabel} is frozen (THQ arrangement) — a write requires override_frozen_quarter="${quarterLabel}", named exactly`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   const { data: loc, error: locError } = await supabase
     .from("locations")
     .select("id, location_code")
@@ -397,12 +444,19 @@ export async function GET(request: Request) {
       year,
       quarter,
     }));
-    const rc = await runRecomputeJobs(supabase, locationId, jobs);
+    const rc = await runRecomputeJobs(supabase, locationId, jobs, {
+      allowFrozenQuarter: overrideFrozenQuarter,
+    });
 
+    // created / updated / skipped reported SEPARATELY (§3) — "employees
+    // touched" concealed two row-conjuring incidents.
     return NextResponse.json({
       ...summary,
       employees: reports,
       recomputed: rc.recomputed,
+      records_created: rc.created,
+      records_updated: rc.updated,
+      records_skipped_no_activity: rc.skipped_no_activity,
       recompute_failures: rc.failures,
     });
   } catch (err) {
