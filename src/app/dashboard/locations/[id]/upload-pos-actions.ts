@@ -163,6 +163,11 @@ async function ingestPOSForLocation(
       pos_employee_name: r.pos_employee_name,
       total_amount: r.total_amount,
       tip_amount: r.tip_amount,
+      // Provenance stamp (mig 059): this importer parses exactly the
+      // payment_legs "Sales & Refunds" export — the legacy-POS/Cake shape —
+      // so it stamps legacy_pos; 'csv' stays reserved for a future generic
+      // importer (choice recorded in PR #32).
+      source: "legacy_pos",
       raw_row: r.raw_row,
     };
   });
