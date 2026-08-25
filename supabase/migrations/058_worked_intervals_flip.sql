@@ -118,10 +118,31 @@ update public.locations
 -- shift to its start-of-business day, so callers' entry_date window filters
 -- behave identically across sides.
 --
--- security_invoker=true (028/037 convention for new views): callers are the
--- security-definer epd_* surfaces or the service role; nothing here should
--- mint a new definer-rights bypass.
+-- security_invoker=true (028/037 convention for new views): row visibility
+-- comes from the SOURCE tables' RLS (time_entries / toast_time_entries both
+-- carry the 047 Class-1 read: location purview OR self), so every tier sees
+-- exactly the intervals it may see.
+--
+-- ⚠️ The store-config attributes (is-Toast / go-live / timezone) deliberately
+-- come from v_location_flip_config below, a DEFINER-rights view, NOT a
+-- direct locations join: locations_read grants only
+-- epd_authorized_location_ids(), which is empty for the user tier — a
+-- security_invoker join to locations would silently drop a user-tier
+-- viewer's OWN intervals (Codex blocker, 2026-08-25). The config view
+-- exposes three config columns and nothing else; row-level protection
+-- stays with the source tables.
 -- ----------------------------------------------------------------------------
+create or replace view public.v_location_flip_config as
+select
+  l.id as location_id,
+  (l.toast_restaurant_guid is not null) as is_toast,
+  l.toast_sales_start_date              as go_live,
+  l.timezone                            as tz
+from public.locations l;
+
+comment on view public.v_location_flip_config is
+  'DELIBERATELY definer-rights (no security_invoker; expect the Supabase advisor to flag it): exposes only the flip''s per-store config (is-Toast, go-live, tz) so v_worked_intervals'' split works for every tier — locations_read is location-purview-scoped and empty for the user tier, which would otherwise drop self-only viewers'' own rows. Row-level protection lives on time_entries/toast_time_entries.';
+
 create or replace view public.v_worked_intervals
 with (security_invoker = true) as
 select
@@ -139,10 +160,15 @@ select
    + coalesce(te.double_ot_hours, 0)
    + coalesce(te.holiday_hours,   0)) as hours
 from public.time_entries te
-join public.locations l
-  on l.id = te.location_id
- and (l.toast_restaurant_guid is null
-      or te.entry_date < l.toast_sales_start_date)
+join public.v_location_flip_config cfg
+  on cfg.location_id = te.location_id
+ and (cfg.is_toast = false
+      -- A GUID store with no go-live yet keeps its time_entries history —
+      -- the only source that can exist for it (§1's loud-failure stops the
+      -- Toast ingest until the go-live is set); dropping the store entirely
+      -- was the Codex blocker.
+      or cfg.go_live is null
+      or te.entry_date < cfg.go_live)
 where te.entry_type = 'worked'
   and te.in_time  is not null
   and te.out_time is not null
@@ -151,18 +177,19 @@ select
   tte.location_id,
   tte.employee_id,
   tte.entry_date,
-  (tte.in_at  at time zone l.timezone) as shift_start,
-  (tte.out_at at time zone l.timezone) as shift_end,
+  (tte.in_at  at time zone cfg.tz) as shift_start,
+  (tte.out_at at time zone cfg.tz) as shift_end,
   case
     when tte.regular_hours is not null or tte.overtime_hours is not null
       then coalesce(tte.regular_hours, 0) + coalesce(tte.overtime_hours, 0)
     else extract(epoch from (tte.out_at - tte.in_at)) / 3600.0
   end as hours
 from public.toast_time_entries tte
-join public.locations l
-  on l.id = tte.location_id
- and l.toast_restaurant_guid is not null
- and tte.entry_date >= l.toast_sales_start_date
+join public.v_location_flip_config cfg
+  on cfg.location_id = tte.location_id
+ and cfg.is_toast = true
+ and cfg.go_live is not null
+ and tte.entry_date >= cfg.go_live
 where tte.deleted = false
   and tte.employee_id is not null
   and tte.out_at is not null;

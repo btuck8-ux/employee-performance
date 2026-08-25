@@ -273,7 +273,15 @@ export async function fetchAllTimeWorkedHours(
       .eq("employee_id", employeeId)
       .eq("location_id", locationId)
       .range(from, from + PAGE - 1);
-    if (error) break;
+    if (error) {
+      // A permission/view failure must not read as a true 0-hours
+      // ineligibility in silence (Codex 2026-08-25).
+      console.warn("[tis] worked-hours read failed; eligibility may read 0", {
+        employeeId,
+        message: error.message,
+      });
+      break;
+    }
     const rows = (data ?? []) as Row[];
     for (const r of rows) {
       total +=
