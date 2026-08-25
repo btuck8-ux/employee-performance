@@ -267,6 +267,19 @@ test("the lever reports created vs updated vs skipped — 'employees touched' co
   }
 });
 
+test("time.ts detail and the sales recompute summary separate created/updated/skipped too", () => {
+  for (const field of ["records_created", "records_updated", "records_skipped_no_activity"]) {
+    assert.match(timeSrc, new RegExp(field), `time ingest detail carries ${field}`);
+  }
+  const summary = jobsSrc.indexOf("interface SalesRecomputeSummary");
+  // Column-0 close brace — the first "}" belongs to the quarters array type.
+  const summaryEnd = jobsSrc.indexOf("\n}", summary);
+  const block = jobsSrc.slice(summary, summaryEnd);
+  for (const field of ["created", "updated", "skipped_no_activity"]) {
+    assert.ok(block.includes(field), `SalesRecomputeSummary carries ${field}`);
+  }
+});
+
 test("backfill-worked-time (§2): entry-date bound is a distinct axis from the modification window", () => {
   assert.match(backfillSrc, /entry_from/);
   assert.match(backfillSrc, /entry_to/);

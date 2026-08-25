@@ -9,7 +9,7 @@ import {
   quarterWorkedCoverage,
   quarterCoverageWindow,
 } from "@/lib/ingest/sevenshifts/coverage";
-import { currentQuarter } from "@/lib/quarter";
+import { currentQuarter, quarterOfDate } from "@/lib/quarter";
 
 /**
  * Stage 2 — one-shot WORKED-TIME backfill for a single 7shifts location.
@@ -55,7 +55,10 @@ import { currentQuarter } from "@/lib/quarter";
  *   `entry_from` / `entry_to` (YYYY-MM-DD, inclusive) bound ENTRY DATE —
  *     when the work actually happened. Applied to the collapsed punches
  *     after fetch, before the write and before the recompute quarter set is
- *     derived. This is the parameter that means "Q2 only".
+ *     derived. This is the parameter that means "Q2 only". When entry_from
+ *     is given without since=, the fetch floor defaults to entry_from (a
+ *     punch's first modification is its clock-in, so that floor covers
+ *     every punch worked inside the window).
  *
  * The response reports BOTH windows — the modification window fetched and
  * the entry-date window written. The incident run reported only the former,
@@ -138,21 +141,33 @@ export async function GET(request: Request) {
       );
     }
 
-    // MODIFICATION window: default to the current quarter start; allow an
-    // explicit floor. This bounds which punches the fetch returns (edited
-    // since the floor) — NOT when the work happened. entryWindow above is
-    // the entry-date bound; see the header for why they must not be
-    // conflated.
+    // MODIFICATION window: this bounds which punches the fetch returns
+    // (edited since the floor) — NOT when the work happened. entryWindow
+    // above is the entry-date bound; see the header for why they must not
+    // be conflated. Default floor: entry_from when given (a punch's first
+    // modification is its clock-in, so a floor at the entry window's start
+    // covers every punch worked inside it), else the current quarter start.
+    // An explicit since= still overrides — e.g. widened to re-capture
+    // edits made before the entry window opened.
     const windowStart = sinceParam
       ? `${sinceParam}T00:00:00.000Z`
-      : currentQuarter().periodStart.toISOString();
+      : entryFromParam
+        ? `${entryFromParam}T00:00:00.000Z`
+        : currentQuarter().periodStart.toISOString();
     const windowEnd = new Date().toISOString();
 
     // Resolve this location's 7shifts identities first (idempotent email bridge)
     // so punches join to employees by seven_shifts_user_id, exactly as nightly.
     const identities = await resolveIdentities(supabase, [loc]);
 
-    const coverageWindow = quarterCoverageWindow(currentQuarter(), new Date());
+    // Coverage is measured against the quarter the backfill TARGETS: the
+    // entry window's quarter when bounded (a historical run must not report
+    // current-quarter coverage — Codex should-fix 2026-08-25), else the
+    // current quarter as before.
+    const coverageQuarter = entryFromParam
+      ? quarterOfDate(new Date(`${entryFromParam}T12:00:00`))
+      : currentQuarter();
+    const coverageWindow = quarterCoverageWindow(coverageQuarter, new Date());
     const coverageBefore = await quarterWorkedCoverage(supabase, [loc], coverageWindow);
 
     const runId = await startRun(supabase, "7shifts_time", loc.id, windowStart, windowEnd);

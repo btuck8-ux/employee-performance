@@ -69,7 +69,9 @@ export async function runRecomputeJobs(
         { csWeights, tisWeights, allowFrozenQuarter: opts?.allowFrozenQuarter }
       );
       if (!r.ok) {
-        result.failures.push(`recompute ${job.employee_id} ${job.year}-Q${job.quarter}: ${r.error}`);
+        // Label format Q{q}-{year} everywhere the frozen contract speaks
+        // (matches allowFrozenQuarter / the refusal message).
+        result.failures.push(`recompute ${job.employee_id} Q${job.quarter}-${job.year}: ${r.error}`);
       } else if (r.action === "skipped_no_activity") {
         result.skipped_no_activity += 1;
       } else {
