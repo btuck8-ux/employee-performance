@@ -305,7 +305,13 @@ export async function GET(request: Request) {
         t4[key] = {
           rows_fetched: data.length,
           rows_matching_subject: matching,
-          param_respected: data.length === 0 || matching === data.length,
+          // Tri-state: zero rows cannot distinguish "filter respected"
+          // from "filter ignored but nothing else matched" (Codex
+          // should-fix 2026-08-25) — never a confident true on no data.
+          param_respected:
+            data.length === 0
+              ? "indeterminate_zero_rows"
+              : matching === data.length,
           truncated_at_page_cap: truncated,
         };
       } catch (err) {

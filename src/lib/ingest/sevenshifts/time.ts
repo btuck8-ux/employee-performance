@@ -394,7 +394,7 @@ export async function ingestTimePunches(
       recompute_skipped_truncated_pull: truncated,
       entries_upserted: upserted,
       employees_touched: touchedEmployees.size,
-      quarters_recomputed: quarters.length,
+      quarters_recomputed: truncated ? 0 : quarters.length,
       records_recomputed: rc.recomputed,
       records_created: rc.created,
       records_updated: rc.updated,
@@ -413,11 +413,17 @@ export async function ingestTimePunches(
       ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
     };
-    base.status = upserted > 0 ? "success" : "empty";
+    // A truncated pull must land as ERROR, not success/empty: the
+    // incremental window math takes the max window_end over
+    // success/empty runs, so a "successful" truncated run would advance
+    // the high-water past punches it never fetched and the next nightly
+    // would not heal it (Codex blocker 2026-08-25). Error keeps the
+    // window where it was; the upserted punches are idempotent.
+    base.status = truncated ? "error" : upserted > 0 ? "success" : "empty";
     const problems: string[] = [];
     if (truncated) {
       problems.push(
-        "punch pull truncated at the page cap — punches written, recompute REFUSED (attendance from a partial fetch reads the missing tail as absences)"
+        "punch pull truncated at the page cap — punches written, recompute REFUSED, run marked error so the window does not advance (attendance from a partial fetch reads the missing tail as absences)"
       );
     }
     if (rolesLookupError) {

@@ -203,4 +203,20 @@ test("§6: the punch ingest keeps the truncation flag and refuses the recompute 
   const jobsPush = timeSrc.indexOf("jobs.push({ employee_id", gate);
   assert.ok(gate > 0 && jobsPush > gate, "recompute jobs are gated on a complete pull");
   assert.match(timeSrc, /recompute REFUSED/);
+  // Codex blocker: a truncated run must land as ERROR — success/empty
+  // would advance the incremental high-water past the unfetched tail and
+  // "the next run heals it" would be false.
+  assert.match(timeSrc, /truncated \? "error" : upserted > 0 \? "success" : "empty"/);
+  assert.match(timeSrc, /quarters_recomputed: truncated \? 0 : quarters\.length/);
+});
+
+test("§3f safety rails: historical windows never tombstone, and never masquerade as the feed's first run", () => {
+  // Absence from a deep-history payload may be 7shifts' retention
+  // boundary, not deletion — only the nightly's rolling window owns
+  // absence semantics.
+  assert.match(shiftsSrc, /if \(!truncated && !opts\?\.window\)/);
+  assert.match(shiftsSrc, /tombstone_skipped_historical_window/);
+  // First-run floor detection requires a prior success AT the floor or
+  // later — an April–May backfill's window_end predates it by construction.
+  assert.match(shiftsSrc, /windowEndAtLeast: SHIFTS_BACKFILL_FLOOR/);
 });

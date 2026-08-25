@@ -112,26 +112,39 @@ export async function GET(request: Request) {
         }
         const lastPunch = String(lastRow.entry_date).slice(0, 10);
 
-        // Scheduled dates AFTER the last punch, both schedule sources.
+        // Scheduled dates AFTER the last punch, both schedule sources —
+        // paged past the 1000-row cap with a stable order; a silent cap
+        // here would understate exactly the longest (worst) candidates
+        // (Codex should-fix 2026-08-25; the no-silent-caps rule).
         const after = new Set<string>();
-        const { data: teRows, error: teErr } = await supabase
-          .from("time_entries")
-          .select("entry_date")
-          .eq("employee_id", emp.id)
-          .eq("entry_type", "scheduled")
-          .gt("entry_date", lastPunch)
-          .range(0, 999);
-        if (teErr) throw new Error(`schedule read (${emp.employee_code}): ${teErr.message}`);
-        for (const r of teRows ?? []) after.add(String(r.entry_date).slice(0, 10));
-        const { data: shiftRows, error: shErr } = await supabase
-          .from("seven_shifts_shifts")
-          .select("entry_date")
-          .eq("employee_id", emp.id)
-          .is("missing_upstream_since", null)
-          .gt("entry_date", lastPunch)
-          .range(0, 999);
-        if (shErr) throw new Error(`shifts read (${emp.employee_code}): ${shErr.message}`);
-        for (const r of shiftRows ?? []) after.add(String(r.entry_date).slice(0, 10));
+        const SCHED_PAGE = 1000;
+        for (let from = 0; ; from += SCHED_PAGE) {
+          const { data, error } = await supabase
+            .from("time_entries")
+            .select("entry_date")
+            .eq("employee_id", emp.id)
+            .eq("entry_type", "scheduled")
+            .gt("entry_date", lastPunch)
+            .order("entry_date", { ascending: true })
+            .range(from, from + SCHED_PAGE - 1);
+          if (error) throw new Error(`schedule read (${emp.employee_code}): ${error.message}`);
+          for (const r of data ?? []) after.add(String(r.entry_date).slice(0, 10));
+          if (!data || data.length < SCHED_PAGE) break;
+        }
+        for (let from = 0; ; from += SCHED_PAGE) {
+          const { data, error } = await supabase
+            .from("seven_shifts_shifts")
+            .select("entry_date")
+            .eq("employee_id", emp.id)
+            .is("missing_upstream_since", null)
+            .gt("entry_date", lastPunch)
+            .order("entry_date", { ascending: true })
+            .order("seven_shifts_shift_id", { ascending: true })
+            .range(from, from + SCHED_PAGE - 1);
+          if (error) throw new Error(`shifts read (${emp.employee_code}): ${error.message}`);
+          for (const r of data ?? []) after.add(String(r.entry_date).slice(0, 10));
+          if (!data || data.length < SCHED_PAGE) break;
+        }
         if (after.size === 0) continue;
 
         const dates = [...after].sort();

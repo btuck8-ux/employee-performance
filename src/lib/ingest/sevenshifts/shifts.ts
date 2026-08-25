@@ -169,7 +169,15 @@ export async function ingestSevenShiftsShifts(
       untilDate = opts.window.until;
     } else {
       for (const loc of companyLocations) {
-        const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id);
+        // First-run detection ignores historical operator backfills: their
+        // window_end predates the floor by construction, so requiring a
+        // prior success AT the floor or later means only a real nightly /
+        // floor run counts (Codex 2026-08-25 — else a fresh environment
+        // whose only run is an April–May backfill would never widen to the
+        // floor).
+        const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id, {
+          windowEndAtLeast: SHIFTS_BACKFILL_FLOOR,
+        });
         if (!prior) {
           sinceDate = SHIFTS_BACKFILL_FLOOR;
           break;
@@ -266,8 +274,15 @@ export async function ingestSevenShiftsShifts(
             upserted += batch.length;
           }
 
+          // Tombstoning is DISABLED on an explicit historical window
+          // (Codex 2026-08-25): over deep history, absence from the
+          // payload may mean 7shifts' retention boundary, not deletion —
+          // stamping missing_upstream_since on a re-run would read
+          // retention as mass cancellation. The §3f backfill ingests
+          // evidence; the nightly's rolling window keeps sole custody of
+          // absence semantics.
           let tombstoned: number | null = null;
-          if (!truncated) {
+          if (!truncated && !opts?.window) {
             tombstoned = await tombstoneMissing(
               supabase,
               loc.id,
@@ -289,6 +304,7 @@ export async function ingestSevenShiftsShifts(
             unmatched_seven_shifts_user_ids: [...new Set(locUnmatched)].slice(0, 20),
             tombstoned_missing_upstream: tombstoned,
             tombstone_skipped_truncated_pull: truncated,
+            tombstone_skipped_historical_window: Boolean(opts?.window),
             ...companyDetail,
           };
           base.status = upserted > 0 ? "success" : "empty";
