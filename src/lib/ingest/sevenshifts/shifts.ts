@@ -133,10 +133,22 @@ function isoDateOffset(days: number): string {
  */
 export async function ingestSevenShiftsShifts(
   supabase: AdminClient,
-  crosswalk: LocationCrosswalk[]
+  crosswalk: LocationCrosswalk[],
+  opts?: {
+    /**
+     * Explicit entry-date window (YYYY-MM-DD, inclusive) — the §3f
+     * historical extension (Q2 punch-recovery spec 2026-08-25). Overrides
+     * BOTH the rolling window and the first-run floor. The floor
+     * (SHIFTS_BACKFILL_FLOOR, 2026-06-01) exists because pre-June history
+     * feeds the flip's day-conditional scheduled source — an explicit
+     * window is a deliberate, operator-driven act via
+     * /api/admin/backfill-shifts-window, never a nightly default.
+     */
+    window?: { since: string; until: string };
+  }
 ): Promise<RunOutcome[]> {
   const nowIso = new Date().toISOString();
-  const untilDate = isoDateOffset(LOOKAHEAD_DAYS);
+  const untilDateDefault = isoDateOffset(LOOKAHEAD_DAYS);
   const outcomes: RunOutcome[] = [];
 
   const byCompany = new Map<number, LocationCrosswalk[]>();
@@ -148,13 +160,28 @@ export async function ingestSevenShiftsShifts(
 
   for (const [companyId, companyLocations] of byCompany) {
     // First run for ANY of the company's stores widens to the backfill
-    // floor (the whole company rides one pull).
+    // floor (the whole company rides one pull). An explicit window wins
+    // over both.
     let sinceDate = isoDateOffset(-LOOKBACK_DAYS);
-    for (const loc of companyLocations) {
-      const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id);
-      if (!prior) {
-        sinceDate = SHIFTS_BACKFILL_FLOOR;
-        break;
+    let untilDate = untilDateDefault;
+    if (opts?.window) {
+      sinceDate = opts.window.since;
+      untilDate = opts.window.until;
+    } else {
+      for (const loc of companyLocations) {
+        // First-run detection ignores historical operator backfills: their
+        // window_end predates the floor by construction, so requiring a
+        // prior success AT the floor or later means only a real nightly /
+        // floor run counts (Codex 2026-08-25 — else a fresh environment
+        // whose only run is an April–May backfill would never widen to the
+        // floor).
+        const prior = await lastSuccessfulWindowEnd(supabase, SHIFTS_SOURCE, loc.id, {
+          windowEndAtLeast: SHIFTS_BACKFILL_FLOOR,
+        });
+        if (!prior) {
+          sinceDate = SHIFTS_BACKFILL_FLOOR;
+          break;
+        }
       }
     }
     const windowStart = `${sinceDate}T00:00:00.000Z`;
@@ -247,8 +274,15 @@ export async function ingestSevenShiftsShifts(
             upserted += batch.length;
           }
 
+          // Tombstoning is DISABLED on an explicit historical window
+          // (Codex 2026-08-25): over deep history, absence from the
+          // payload may mean 7shifts' retention boundary, not deletion —
+          // stamping missing_upstream_since on a re-run would read
+          // retention as mass cancellation. The §3f backfill ingests
+          // evidence; the nightly's rolling window keeps sole custody of
+          // absence semantics.
           let tombstoned: number | null = null;
-          if (!truncated) {
+          if (!truncated && !opts?.window) {
             tombstoned = await tombstoneMissing(
               supabase,
               loc.id,
@@ -270,6 +304,7 @@ export async function ingestSevenShiftsShifts(
             unmatched_seven_shifts_user_ids: [...new Set(locUnmatched)].slice(0, 20),
             tombstoned_missing_upstream: tombstoned,
             tombstone_skipped_truncated_pull: truncated,
+            tombstone_skipped_historical_window: Boolean(opts?.window),
             ...companyDetail,
           };
           base.status = upserted > 0 ? "success" : "empty";

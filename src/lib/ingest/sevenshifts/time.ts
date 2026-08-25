@@ -14,7 +14,7 @@
  * Unmatched 7shifts users are surfaced in the run detail, never dropped.
  */
 
-import { getAll } from "./client";
+import { getAllWithMeta } from "./client";
 import { rolesForCompany } from "./roles";
 import { utcToLocalWallClock, timezoneForLocationCode } from "./tz";
 import { distinctQuarters, runRecomputeJobs, type RecomputeJob } from "./recompute";
@@ -282,11 +282,24 @@ export async function ingestTimePunches(
 
     // Pull punches modified since the window start (captures both new punches
     // and edits to recent ones). modified_since is UTC ISO8601.
-    const punches = await getAll<TimePunch>(loc.company_id, "time_punches", {
-      location_id: loc.seven_shifts_location_id,
-      modified_since: windowStart,
-      limit: 100,
-    });
+    //
+    // truncated comes from the client's cursor state, never a row count — a
+    // page can return fewer than `limit` rows, so counting cannot detect an
+    // unconsumed cursor. This ingest derives a recompute quarter set from
+    // what it fetched, so a silently truncated pull produces exactly the
+    // shape the Q2 sprint keeps finding: missing rows reading as absent
+    // work (Q2 punch-recovery spec 2026-08-25 §6). Writing the punches is
+    // safe; recomputing attendance from a partial fetch is not — same
+    // reasoning shifts.ts applies to tombstoning.
+    const { data: punches, truncated } = await getAllWithMeta<TimePunch>(
+      loc.company_id,
+      "time_punches",
+      {
+        location_id: loc.seven_shifts_location_id,
+        modified_since: windowStart,
+        limit: 100,
+      }
+    );
     base.rows_in = punches.length;
 
     const collapse = collapsePunches(punches, userToEmployee, tz);
@@ -347,11 +360,18 @@ export async function ingestTimePunches(
     // mirrors the time CSV importer (no team-tip rebuild on the time path).
     // Derived from the BOUNDED entries: the recompute set must never reach
     // beyond the entry-date window that was written.
+    //
+    // REFUSED on a truncated pull (§6): attendance recomputed from a
+    // partial punch fetch reads the missing tail as absences. The punches
+    // above are already written (idempotent, safe); the recompute waits for
+    // a complete pull — the next non-truncated run heals it.
     const quarters = distinctQuarters(boundedEntries.map((c) => c.entry_date));
     const touchedEmployees = new Set(boundedEntries.map((c) => c.employee_id));
     const jobs: RecomputeJob[] = [];
-    for (const employee_id of touchedEmployees) {
-      for (const q of quarters) jobs.push({ employee_id, year: q.year, quarter: q.quarter });
+    if (!truncated) {
+      for (const employee_id of touchedEmployees) {
+        for (const q of quarters) jobs.push({ employee_id, year: q.year, quarter: q.quarter });
+      }
     }
     const rc = await runRecomputeJobs(supabase, loc.id, jobs);
 
@@ -370,9 +390,11 @@ export async function ingestTimePunches(
       entriesOutsideEntryWindow;
     base.detail = {
       punches_fetched: punches.length,
+      truncated_at_page_cap: truncated,
+      recompute_skipped_truncated_pull: truncated,
       entries_upserted: upserted,
       employees_touched: touchedEmployees.size,
-      quarters_recomputed: quarters.length,
+      quarters_recomputed: truncated ? 0 : quarters.length,
       records_recomputed: rc.recomputed,
       records_created: rc.created,
       records_updated: rc.updated,
@@ -391,8 +413,19 @@ export async function ingestTimePunches(
       ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
     };
-    base.status = upserted > 0 ? "success" : "empty";
+    // A truncated pull must land as ERROR, not success/empty: the
+    // incremental window math takes the max window_end over
+    // success/empty runs, so a "successful" truncated run would advance
+    // the high-water past punches it never fetched and the next nightly
+    // would not heal it (Codex blocker 2026-08-25). Error keeps the
+    // window where it was; the upserted punches are idempotent.
+    base.status = truncated ? "error" : upserted > 0 ? "success" : "empty";
     const problems: string[] = [];
+    if (truncated) {
+      problems.push(
+        "punch pull truncated at the page cap — punches written, recompute REFUSED, run marked error so the window does not advance (attendance from a partial fetch reads the missing tail as absences)"
+      );
+    }
     if (rolesLookupError) {
       problems.push("roles lookup failed — role column left untouched this run");
     }

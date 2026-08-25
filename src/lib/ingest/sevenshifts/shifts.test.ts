@@ -203,9 +203,12 @@ test("the client path is the shifts endpoint, riding the shared token routing", 
   assert.doesNotMatch(shiftsSrc, /IKES_/);
 });
 
-test("absence-tombstoning is gated on a complete pull", () => {
+test("absence-tombstoning is gated on a complete pull AND the nightly's own window", () => {
   assert.match(shiftsSrc, /truncated/);
-  assert.match(shiftsSrc, /if \(!truncated\) \{/);
+  // Strengthened 2026-08-25 (Q2 punch-recovery §3f): an explicit historical
+  // window never tombstones — deep-history absence may be 7shifts'
+  // retention boundary, not deletion.
+  assert.match(shiftsSrc, /if \(!truncated && !opts\?\.window\) \{/);
   // Tombstones stamp, never delete.
   assert.doesNotMatch(shiftsSrc, /\.delete\(\)/);
 });

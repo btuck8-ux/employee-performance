@@ -107,19 +107,29 @@ export async function finishRun(
  * The high-water mark for incremental pulls: the latest `window_end` of a prior
  * non-error run for this (source, location). Returns null on the first ever run
  * (caller falls back to the default lookback).
+ *
+ * `opts.windowEndAtLeast` filters to runs whose window_end reaches a floor —
+ * used by first-run detection so a HISTORICAL operator backfill (whose
+ * window_end predates the floor by construction) cannot masquerade as the
+ * feed's first real run and suppress the floor widening (Codex 2026-08-25).
  */
 export async function lastSuccessfulWindowEnd(
   supabase: AdminClient,
   source: IngestSource,
-  locationId: string
+  locationId: string,
+  opts?: { windowEndAtLeast?: string }
 ): Promise<string | null> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("ingest_runs")
     .select("window_end")
     .eq("source", source)
     .eq("location_id", locationId)
     .in("status", ["success", "empty"])
-    .not("window_end", "is", null)
+    .not("window_end", "is", null);
+  if (opts?.windowEndAtLeast) {
+    query = query.gte("window_end", opts.windowEndAtLeast);
+  }
+  const { data, error } = await query
     .order("window_end", { ascending: false })
     .limit(1)
     .maybeSingle();
