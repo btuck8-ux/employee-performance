@@ -143,7 +143,11 @@ test("the attendance denominator EXCLUDES non-punchers — null, never 0", () =>
   // marker and thread it through.
   assert.match(recomputeSrc, /punchesTimeClock\?: boolean/);
   assert.match(recomputeSrc, /opts\?\.punchesTimeClock === false/);
-  const threaded = recomputeSrc.match(/scheduledScoredThrough, punchesTimeClock \}/g) ?? [];
+  // Since the demarcation floor (mig 066) the same opts object also
+  // threads metricsStartFloor — the pin tracks the full call shape.
+  const threaded = recomputeSrc.match(
+    /scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart \}/g
+  ) ?? [];
   assert.equal(threaded.length, 2, "both computeMetricsForRange and recomputePerformanceForQuarter thread the marker");
   const fetches = recomputeSrc.match(/select\("punches_time_clock, punches_time_clock_since"\)/g) ?? [];
   assert.equal(fetches.length, 2, "both entry points fetch the marker AND its effective date");

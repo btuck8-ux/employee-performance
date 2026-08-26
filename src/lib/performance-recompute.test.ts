@@ -422,3 +422,126 @@ test("cover-ratio guard is CAP-BOUNDED: post-cap covers never null a legitimate 
   assert.equal(m.cover_dominated, false, "the guard ratio is capped");
   assert.equal(m.attendance_pct, 100);
 });
+
+// ---------------------------------------------------------------------------
+// THE DEMARCATION FLOOR (mig 066, 2026-08-26 packet §1b) — the cap's mirror
+// at the other end of the window. Entry dates strictly BEFORE the floor are
+// outside the measured window exactly as a future date is: not absent, not
+// zero, in no denominator. Unlike the cap, the floor removes BOTH sides —
+// below-floor punch data is the untrusted record the ruling exists to stop
+// scoring. Null floor = no floor (NOLA — ruled; never epoch, never today).
+// ---------------------------------------------------------------------------
+
+const FLOOR_CAP = { scheduledScoredThrough: "2026-12-31" };
+
+test("floor: below-floor scheduled days leave the denominator entirely — not missed, not attended", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-04-10", "scheduled", "09:00:00"), // below floor, no punch — must NOT read as missed
+      entry("2026-05-02", "scheduled", "09:00:00"),
+      entry("2026-05-02", "worked", "09:00:00"),
+      entry("2026-05-09", "scheduled", "09:00:00"), // above floor, no punch — a real miss
+    ],
+    { ...FLOOR_CAP, metricsStartFloor: "2026-04-30" }
+  );
+  assert.equal(m.scheduled_count, 2);
+  assert.equal(m.attended_count, 1);
+  assert.equal(m.missed_count, 1);
+  assert.equal(m.attendance_pct, 50);
+});
+
+test("floor removes BOTH sides — a below-floor punch is neither a cover nor attendance (deliberate asymmetry vs the cap)", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-04-10", "worked", "09:00:00"), // below floor, unscheduled — untrusted record
+      entry("2026-05-02", "scheduled", "09:00:00"),
+      entry("2026-05-02", "worked", "09:00:00"),
+    ],
+    { ...FLOOR_CAP, metricsStartFloor: "2026-04-30" }
+  );
+  assert.equal(m.covered_shifts, 0, "below-floor punch must not count as a cover");
+  assert.equal(m.attendance_pct, 100);
+  // The CAP keeps its opposite behaviour: a post-cap worked-without-schedule
+  // is still a covered shift (confirmed clock-in — the trusted side).
+  const capped = computeMetricsFromEntries(
+    [
+      entry("2026-05-02", "scheduled", "09:00:00"),
+      entry("2026-05-02", "worked", "09:00:00"),
+      entry("2026-06-01", "worked", "09:00:00"),
+    ],
+    { scheduledScoredThrough: "2026-05-15" }
+  );
+  assert.equal(capped.covered_shifts, 1, "post-cap cover still counts (trusted side)");
+});
+
+test("straddling window (HOU Q2 shape): scored from the floor forward as a partial period — never wiped whole", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-04-05", "scheduled", "09:00:00"),
+      entry("2026-04-12", "scheduled", "09:00:00"),
+      entry("2026-04-30", "scheduled", "09:00:00"),
+      entry("2026-04-30", "worked", "09:00:00"),
+      entry("2026-06-15", "scheduled", "09:00:00"),
+      entry("2026-06-15", "worked", "09:00:00"),
+    ],
+    { ...FLOOR_CAP, metricsStartFloor: "2026-04-30" }
+  );
+  assert.equal(m.scheduled_count, 2);
+  assert.equal(m.attendance_pct, 100);
+});
+
+test("whole window below the floor: zero counts, null percentages — outside the measured window, never 0%", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-05-01", "scheduled", "09:00:00"),
+      entry("2026-05-08", "scheduled", "09:00:00"),
+      entry("2026-05-01", "worked", "09:00:00"),
+    ],
+    { ...FLOOR_CAP, metricsStartFloor: "2026-07-02" }
+  );
+  assert.equal(m.scheduled_count, 0);
+  assert.equal(m.attendance_pct, null);
+  assert.equal(m.on_time_pct, null);
+  assert.equal(m.covered_shifts, 0);
+});
+
+test("null floor = NO floor (NOLA's ruled behaviour) — identical to the pre-066 computation", () => {
+  const entries = [
+    entry("2025-01-06", "scheduled", "09:00:00"),
+    entry("2025-01-06", "worked", "09:00:00"),
+    entry("2025-01-13", "scheduled", "09:00:00"),
+  ];
+  const withNull = computeMetricsFromEntries(entries, {
+    ...FLOOR_CAP,
+    metricsStartFloor: null,
+  });
+  const without = computeMetricsFromEntries(entries, FLOOR_CAP);
+  assert.deepEqual(withNull, without);
+  assert.equal(withNull.attendance_pct, 50);
+});
+
+test("the floor day itself is INSIDE the window (>= semantics — 'the date data starts')", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-07-02", "scheduled", "09:00:00"),
+      entry("2026-07-02", "worked", "09:00:00"),
+    ],
+    { ...FLOOR_CAP, metricsStartFloor: "2026-07-02" }
+  );
+  assert.equal(m.scheduled_count, 1);
+  assert.equal(m.attendance_pct, 100);
+});
+
+test("floor and cap compose: the measured window is [floor, cap]", () => {
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-06-01", "scheduled", "09:00:00"), // below floor
+      entry("2026-07-10", "scheduled", "09:00:00"),
+      entry("2026-07-10", "worked", "09:00:00"),
+      entry("2026-08-20", "scheduled", "09:00:00"), // beyond cap — future, unscored
+    ],
+    { scheduledScoredThrough: "2026-08-01", metricsStartFloor: "2026-07-01" }
+  );
+  assert.equal(m.scheduled_count, 1);
+  assert.equal(m.attendance_pct, 100);
+});

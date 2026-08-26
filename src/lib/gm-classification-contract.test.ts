@@ -131,6 +131,10 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
   const ALLOWLIST = new Set([
     "src/lib/store-attendance.ts",
     "src/lib/gm-classification-contract.test.ts",
+    // 2026-08-26 §3: pins mig 067's GM exclusion in the SQL location-side
+    // tip baselines — the one ruled exception to "never a metric input";
+    // the TS metric paths stay unlisted and flag-free.
+    "src/lib/metrics-floor.test.ts",
     "src/app/dashboard/employees/page.tsx",
     "src/app/dashboard/employees/[id]/page.tsx",
     "src/app/dashboard/employees/[id]/edit/actions.ts",

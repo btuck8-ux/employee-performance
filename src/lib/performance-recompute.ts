@@ -93,18 +93,34 @@ function timeToMinutes(t: string | null | undefined): number | null {
  * NOT apply to worked entries (those represent confirmed clock-ins) or
  * to covered-shifts counting (a worked-without-schedule on any date is
  * still a covered shift).
+ *
+ * `opts.metricsStartFloor` (YYYY-MM-DD | null) is THE DEMARCATION FLOOR
+ * (mig 066, 2026-08-26 ruling) — the cap's mirror at the other end. Entry
+ * dates strictly BEFORE the floor are outside the measured window, exactly
+ * as a future date is: not absent, not zero, in no denominator. Unlike the
+ * cap, the floor removes BOTH sides — scheduled AND worked/covered —
+ * because below-floor punch data is the untrusted record the ruling
+ * exists to stop scoring (the cap's asymmetry protects trusted confirmed
+ * clock-ins; there is no trusted side below the floor). Null/absent =
+ * no floor (NOLA — deliberate; never read as epoch or today).
  */
 export function computeMetricsFromEntries(
   entries: TimeEntryRow[],
-  opts?: { scheduledScoredThrough?: string; punchesTimeClock?: boolean }
+  opts?: {
+    scheduledScoredThrough?: string;
+    punchesTimeClock?: boolean;
+    metricsStartFloor?: string | null;
+  }
 ): PerformanceMetrics {
   const cap =
     opts?.scheduledScoredThrough ?? new Date().toISOString().slice(0, 10);
+  const floor = opts?.metricsStartFloor ?? null;
 
   const scheduledByDate = new Map<string, TimeEntryRow>();
   const workedByDate = new Map<string, TimeEntryRow>();
 
   for (const e of entries) {
+    if (floor !== null && e.entry_date < floor) continue; // below the floor: outside the measured window
     if (e.entry_type === "scheduled") scheduledByDate.set(e.entry_date, e);
     else workedByDate.set(e.entry_date, e);
   }
@@ -244,6 +260,15 @@ export interface RangeMetrics {
   // customer reviews
   customer_review_quantity: number;
   customer_service_rating: number | null;
+  // THE DEMARCATION FLOOR (§2, 2026-08-26): the labor window actually
+  // scored after clamping to the location's metrics_start_date. The
+  // asterisk is a first-class field, not a footnote — a clamped range must
+  // say so, never silently narrow. labor_window_start is null when the
+  // WHOLE requested window sits below the floor (not answerable — distinct
+  // from an empty result). Neither field ships on any partner wire (the
+  // feed routes pick their fields explicitly; feeds are NOT floor-gated).
+  labor_window_start: string | null;
+  labor_window_clamped: boolean;
   // POS tips (presence-based; null when no sales data exists for the window)
   hours_worked: number | null;
   sales_during_presence: number | null;
@@ -493,10 +518,12 @@ export async function computeMetricsForRange(
   // split / day-conditional fallback live there), time_entries at NOLA.
   let entries: TimeEntryRow[];
   let latestWorkedDate: string | null;
+  let metricsStart: string | null;
   try {
     const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
       await import("./flip-entries");
     const meta = await fetchLocationFlipMeta(supabase, locationId);
+    metricsStart = meta.metricsStart;
     const byEmployee = await fetchEffectiveEntries(
       supabase,
       locationId,
@@ -533,9 +560,21 @@ export async function computeMetricsForRange(
       ? latestWorkedDate
       : todayIso;
 
+  // THE DEMARCATION FLOOR (mig 066): labor entries below the location's
+  // metrics_start_date are outside the measured window — the cap's mirror.
+  // The tip metrics clamp themselves inside compute_employee_tip_metrics
+  // (same floor, SQL side — TS↔SQL lockstep by construction).
+  const laborWindowStart =
+    metricsStart !== null && metricsStart > periodEnd
+      ? null // whole window below the floor — not answerable
+      : metricsStart !== null && metricsStart > periodStart
+        ? metricsStart
+        : periodStart;
+  const laborWindowClamped = laborWindowStart !== periodStart;
+
   const shift = computeMetricsFromEntries(
     entries,
-    { scheduledScoredThrough, punchesTimeClock }
+    { scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart }
   );
 
   // ---- Tattle metrics ----
@@ -769,6 +808,8 @@ export async function computeMetricsForRange(
       on_time_count: shift.on_time_count,
       on_time_grace_count: shift.on_time_grace_count,
       cover_dominated: shift.cover_dominated,
+      labor_window_start: laborWindowStart,
+      labor_window_clamped: laborWindowClamped,
       surveys_assigned,
       surveys_completed,
       survey_engagement_pct,
@@ -930,10 +971,12 @@ export async function recomputePerformanceForQuarter(
   // computeMetricsForRange for the rules.
   let entries: TimeEntryRow[];
   let latestWorkedDate: string | null;
+  let metricsStart: string | null;
   try {
     const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
       await import("./flip-entries");
     const meta = await fetchLocationFlipMeta(supabase, locationId);
+    metricsStart = meta.metricsStart;
     const byEmployee = await fetchEffectiveEntries(
       supabase,
       locationId,
@@ -968,9 +1011,13 @@ export async function recomputePerformanceForQuarter(
       ? latestWorkedDate
       : todayIso;
 
+  // THE DEMARCATION FLOOR (mig 066): a straddling quarter (HOU Q2) scores
+  // from the floor forward as a partial period; a wholly-below-floor
+  // quarter's labor metrics go null with zero counts. Tip metrics clamp
+  // themselves inside compute_employee_tip_metrics (SQL side, same floor).
   const metrics = computeMetricsFromEntries(
     entries,
-    { scheduledScoredThrough, punchesTimeClock }
+    { scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart }
   );
 
   // ---- Tattle metrics (attributed surveys whose date_experienced is in this quarter) ----
@@ -1204,10 +1251,18 @@ export async function recomputePerformanceForQuarter(
   if (existingError) {
     return { ok: false, error: `performance_records existence read: ${existingError.message}` };
   }
+  // Floor-aware activity (mig 066): entries below the demarcation floor are
+  // outside the measured window and must not conjure a row — an employee
+  // whose only signals sit below the floor has no activity in the period.
+  const floorValue = metricsStart;
+  const scorableEntryCount =
+    floorValue !== null
+      ? entries.filter((e) => e.entry_date >= floorValue).length
+      : entries.length;
   if (
     !existingRow &&
     !periodHasActivity({
-      entry_count: entries.length,
+      entry_count: scorableEntryCount,
       tattle_quantity,
       customer_review_quantity,
       surveys_assigned,

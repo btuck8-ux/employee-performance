@@ -57,6 +57,11 @@ export interface FlipLocationMeta {
   isToast: boolean;
   goLive: string | null;
   tz: string;
+  /** The demarcation floor (mig 066, 2026-08-26 ruling): labor-derived
+   * metrics are computed only from entry dates >= this. NULL = no floor,
+   * score everything — NOLA's ruled behaviour, never "epoch" or "today".
+   * Gates scoring + UI only, NEVER the outbound feeds (§1d). */
+  metricsStart: string | null;
 }
 
 export async function fetchLocationFlipMeta(
@@ -65,7 +70,7 @@ export async function fetchLocationFlipMeta(
 ): Promise<FlipLocationMeta> {
   const { data, error } = await supabase
     .from("v_location_flip_config")
-    .select("is_toast, go_live, tz")
+    .select("is_toast, go_live, tz, metrics_start")
     .eq("location_id", locationId)
     .maybeSingle();
   if (error) throw new Error(`flip config: ${error.message}`);
@@ -73,6 +78,7 @@ export async function fetchLocationFlipMeta(
     isToast: data?.is_toast === true,
     goLive: (data?.go_live as string | null) ?? null,
     tz: (data?.tz as string | null) ?? timezoneForLocationCode(""),
+    metricsStart: (data?.metrics_start as string | null) ?? null,
   };
 }
 

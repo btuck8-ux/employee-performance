@@ -14,13 +14,15 @@
  * inside it. Non-Toast stores (NOLA — actuals_source='cake') keep the
  * time_entries path: their actuals genuinely live there.
  *
- * GM classification is a display/reporting dimension only: this module is
- * its ONE metric-adjacent consumer, and it never writes anything — the
- * store card renders both figures and neither is "the" number. Exclusion
- * from the actual metrics is deliberately NOT implemented: measured across
- * the seven Toast stores the two large excl-GM effects were the Toast
- * defect (GMs reading 0%), and at DTD/HRANCH the GM is the best attender
- * in the building, so excluding them makes the store look worse.
+ * GM classification: PRIMACY FLIPPED by the 2026-08-26 demarcation packet
+ * (§3, Tucker's ruling — "GM exclusion for store-wide rollups"). The module
+ * still computes BOTH ways, but excludingManagement is now the store-wide
+ * number and allStaff is the secondary reference. Context for the earlier
+ * stance (2026-08-24: "neither is the number") is retained in git history;
+ * what changed is the >16h finding — 4,173 phantom hours, 94% GM/Manager —
+ * which makes GM rows a measured distortion of store rollups, not a
+ * neutral inclusion. Per-employee metric paths still never read the flag
+ * (gm-classification-contract pins them).
  *
  * Combining rule (non-negotiable): rates are recomputed from SUMMED
  * numerators and denominators across employees, never averaged.
@@ -126,7 +128,7 @@ export async function computeStoreAttendance(
   locationId: string,
   periodStart: string,
   periodEnd: string
-): Promise<StoreAttendanceBothWays> {
+): Promise<StoreAttendanceBothWays & { metricsStart: string | null }> {
   // THE FLIP (2026-08-25): sources ride flip-entries.ts — the SAME layer
   // the recompute entry points use, so the store card and the employees
   // inside it can never disagree. (The card's local source builders moved
@@ -152,7 +154,9 @@ export async function computeStoreAttendance(
     employees.push(...((data ?? []) as EmpRow[]));
     if (!data || data.length < BATCH) break;
   }
-  if (employees.length === 0) return combineStoreMetrics([]);
+  if (employees.length === 0) {
+    return { ...combineStoreMetrics([]), metricsStart: meta.metricsStart };
+  }
 
   const entriesByEmployee = await fetchEffectiveEntries(
     supabase,
@@ -174,6 +178,8 @@ export async function computeStoreAttendance(
 
   const rows = employees.map((e) => ({
     isGeneralManager: e.is_general_manager === true,
+    // THE DEMARCATION FLOOR (mig 066): same clamp as the recompute entry
+    // points — the store card and the employees inside it stay in lockstep.
     metrics: computeMetricsFromEntries(entriesByEmployee.get(e.id) ?? [], {
       scheduledScoredThrough,
       punchesTimeClock: punchesTimeClockForPeriod(
@@ -181,8 +187,9 @@ export async function computeStoreAttendance(
         e.punches_time_clock_since ?? null,
         periodEnd
       ),
+      metricsStartFloor: meta.metricsStart,
     }),
   }));
 
-  return combineStoreMetrics(rows);
+  return { ...combineStoreMetrics(rows), metricsStart: meta.metricsStart };
 }

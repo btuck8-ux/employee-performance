@@ -52,11 +52,15 @@ export default async function LocationDetailPage({
     .eq("location_id", id)
     .order("employee_name");
 
-  // Store-wide attendance & punctuality, both ways (mig 057 §1): all staff
-  // AND excluding management, side by side — neither is "the" number. GMs
-  // stay in the metric; a fetch failure degrades to no card, never a 500.
+  // Store-wide attendance & punctuality, both ways. PRIMACY per the
+  // 2026-08-26 demarcation packet §3 (Tucker): excluding-management IS the
+  // store-wide number (4,173 phantom hours, 94% GM/Manager — the >16h
+  // never-clocked-out class); all-staff stays as the reference column. A
+  // fetch failure degrades to no card, never a 500.
   const storeQuarter = currentQuarter();
-  let storeAttendance: StoreAttendanceBothWays | null = null;
+  let storeAttendance:
+    | (StoreAttendanceBothWays & { metricsStart: string | null })
+    | null = null;
   try {
     storeAttendance = await computeStoreAttendance(
       supabase,
@@ -285,15 +289,23 @@ export default async function LocationDetailPage({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {storeAttendance.metricsStart &&
+              storeAttendance.metricsStart >
+                storeQuarter.periodStart.toISOString().slice(0, 10) && (
+                <p className="text-xs text-amber-700 mb-2">
+                  Data begins {storeAttendance.metricsStart} (Toast go-live) —
+                  days before that are outside the measured window.
+                </p>
+              )}
             <table className="w-full max-w-2xl text-sm">
               <thead className="text-left text-xs text-slate-500 uppercase border-b border-slate-200">
                 <tr>
                   <th className="py-2 pr-4" />
-                  <th className="py-2 pr-4">All staff</th>
                   <th className="py-2 pr-4">
-                    Excluding management ({storeAttendance.gmCount} GM
+                    Store-wide (excl. {storeAttendance.gmCount} GM
                     {storeAttendance.gmCount === 1 ? "" : "s"})
                   </th>
+                  <th className="py-2 pr-4">All staff (reference)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -325,15 +337,17 @@ export default async function LocationDetailPage({
                   <tr key={row.label}>
                     <td className="py-2 pr-4 text-slate-600">{row.label}</td>
                     <td className="py-2 pr-4">
-                      {row.all !== null ? `${row.all.toFixed(1)}%` : "—"}
+                      <span className="font-medium">
+                        {row.excl !== null ? `${row.excl.toFixed(1)}%` : "—"}
+                      </span>
                       <span className="ml-1.5 text-xs text-slate-400">
-                        {row.allDetail}
+                        {row.exclDetail}
                       </span>
                     </td>
                     <td className="py-2 pr-4">
-                      {row.excl !== null ? `${row.excl.toFixed(1)}%` : "—"}
+                      {row.all !== null ? `${row.all.toFixed(1)}%` : "—"}
                       <span className="ml-1.5 text-xs text-slate-400">
-                        {row.exclDetail}
+                        {row.allDetail}
                       </span>
                     </td>
                   </tr>
@@ -341,13 +355,13 @@ export default async function LocationDetailPage({
               </tbody>
             </table>
             <p className="text-xs text-slate-500 mt-3">
-              Both figures are computed from summed shift counts, never averaged
-              percentages, and neither is &ldquo;the&rdquo; number — GMs stay in
-              store metrics. GM punch patterns are expected to be irregular
-              (offsite work, on-call time that never reaches a time clock).
-              Evidenced non-punchers are excluded from both sides. Toast stores
-              count the pruned 7shifts schedule against Toast punches — the
-              same sources as the employee metrics.
+              Store-wide figures exclude general managers (2026-08-26 ruling —
+              GM punch patterns are irregular and never-closed GM shifts carry
+              phantom hours); the all-staff column is kept for reference. Both
+              are computed from summed shift counts, never averaged
+              percentages. Evidenced non-punchers are excluded from both
+              sides. Toast stores count the pruned 7shifts schedule against
+              Toast punches — the same sources as the employee metrics.
             </p>
           </CardContent>
         </Card>

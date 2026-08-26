@@ -126,7 +126,17 @@ export async function renderAndStoreCustomRangeReport(
   const m = computed.metrics;
 
   const generated_at = new Date().toISOString();
-  const periodLabel = "Custom: " + formatRangeLabel(range_start, range_end);
+  // Demarcation-floor disclosure (2026-08-26 §2): a clamped range states the
+  // clamp — never silently narrowed — and a range wholly below the floor is
+  // NOT ANSWERABLE for labor metrics, which must never render as an
+  // ordinary empty result.
+  const laborNote = m.labor_window_clamped
+    ? m.labor_window_start !== null
+      ? ` (labor data begins ${m.labor_window_start} — Toast go-live)`
+      : " (labor metrics not answerable — range predates this store's data)"
+    : "";
+  const periodLabel =
+    "Custom: " + formatRangeLabel(range_start, range_end) + laborNote;
 
   const reportData: ReportData = {
     employee_name: emp.employee_name as string,
