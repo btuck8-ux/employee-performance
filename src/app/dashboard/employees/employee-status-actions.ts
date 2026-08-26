@@ -94,28 +94,28 @@ export async function setEmployeeActiveAction(formData: FormData) {
     active: nextActive,
   });
 
-  // §7b person-level scope: only on DEACTIVATE, only when asked for.
+  // §7b person-level scope: only on DEACTIVATE, only when asked for. A
+  // failed or skipped sibling is NEVER swallowed (Codex should-fix): the
+  // operator confirmed "all stores", so a partial result surfaces as a
+  // status_error banner naming what did not happen.
   const scopeAll = String(formData.get("deactivate_scope") ?? "") === "all";
   if (!nextActive && scopeAll) {
-    const { data: primary } = await admin
+    const sibProblems: string[] = [];
+    const { data: primary, error: primaryError } = await admin
       .from("employees")
       .select("seven_shifts_user_id")
       .eq("id", employeeId)
       .single();
+    if (primaryError) sibProblems.push(`sibling lookup failed: ${primaryError.message}`);
     const sevenShiftsUserId = primary?.seven_shifts_user_id ?? null;
     if (sevenShiftsUserId !== null) {
       const { data: siblings, error: sibError } = await admin
         .from("employees")
-        .select("id, location_id")
+        .select("id, location_id, employee_code")
         .eq("seven_shifts_user_id", sevenShiftsUserId)
         .eq("active", true)
         .neq("id", employeeId);
-      if (sibError) {
-        console.error("[employees] sibling read failed", {
-          employee_id: employeeId,
-          error: sibError.message,
-        });
-      }
+      if (sibError) sibProblems.push(`sibling read failed: ${sibError.message}`);
       for (const sib of siblings ?? []) {
         const sibAllowed = await canReadEmployee(
           supabase,
@@ -129,6 +129,7 @@ export async function setEmployeeActiveAction(formData: FormData) {
             employee_id: sib.id,
             location_id: sib.location_id,
           });
+          sibProblems.push(`${sib.employee_code}: outside your scope, not deactivated`);
           continue;
         }
         const { error: sibUpdateError } = await admin
@@ -141,6 +142,7 @@ export async function setEmployeeActiveAction(formData: FormData) {
             employee_id: sib.id,
             error: sibUpdateError.message,
           });
+          sibProblems.push(`${sib.employee_code}: ${sibUpdateError.message}`);
           continue;
         }
         console.log("[employees] status toggled (person-level sibling)", {
@@ -152,6 +154,15 @@ export async function setEmployeeActiveAction(formData: FormData) {
         });
         revalidatePath(`/dashboard/employees/${sib.id}`);
       }
+    }
+    if (sibProblems.length > 0) {
+      revalidatePath("/dashboard/employees");
+      revalidatePath(`/dashboard/employees/${employeeId}`);
+      redirect(
+        `${returnTo}${returnTo.includes("?") ? "&" : "?"}status_error=${encodeURIComponent(
+          `Deactivated at this store, but not everywhere: ${sibProblems.join("; ")}`
+        )}`
+      );
     }
   }
 

@@ -41,15 +41,31 @@ export async function updateEmployeeAction(formData: FormData) {
   const supabase = await createClient();
 
   // Fetch the current location_id so we know whether this is a transfer
-  // and can keep performance_records.location_id consistent.
+  // and can keep performance_records.location_id consistent — and the
+  // current tier for the mig 071 lockstep below.
   const { data: current } = await supabase
     .from("employees")
-    .select("location_id")
+    .select("location_id, epd_role")
     .eq("id", id)
     .single();
 
   const old_location_id = current?.location_id;
   const isTransfer = old_location_id && old_location_id !== new_location_id;
+
+  // Mig 071 lockstep (Codex should-fix, epd_role sprint): the wire derives
+  // is_general_manager from epd_role, so a GM change writes BOTH — flag for
+  // the UI/partners mid-transition, tier for the truth — or they drift.
+  // Only user↔manager rows sync: an area_admin+ row is never silently
+  // re-tiered from a checkbox; that change is an operator decision on the
+  // tier itself, so the GM toggle is skipped and logged instead.
+  const tierSyncable =
+    current?.epd_role === "user" || current?.epd_role === "manager";
+  if (gmSubmitted && !tierSyncable) {
+    console.warn("[employees] GM toggle skipped — admin-tier row", {
+      employee_id: id,
+      epd_role: current?.epd_role ?? null,
+    });
+  }
 
   const { error } = await supabase
     .from("employees")
@@ -63,7 +79,12 @@ export async function updateEmployeeAction(formData: FormData) {
       wage_pay_type,
       active,
       ...(ptcSubmitted ? { punches_time_clock, punches_time_clock_since } : {}),
-      ...(gmSubmitted ? { is_general_manager } : {}),
+      ...(gmSubmitted && tierSyncable
+        ? {
+            is_general_manager,
+            epd_role: is_general_manager ? "manager" : "user",
+          }
+        : {}),
     })
     .eq("id", id);
 

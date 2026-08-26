@@ -87,9 +87,13 @@ test("the ONLY writer besides the migration seed is the SA employee-edit surface
   assert.match(editPageSrc, /name="is_general_manager"/);
   // Same sentinel discipline as the mig 056 marker: absent ≠ unchecked.
   assert.match(editPageSrc, /name="is_general_manager_present"/);
+  // Mig 071 lockstep: the wire derives is_general_manager from epd_role,
+  // so the GM toggle writes BOTH — and only on user↔manager rows (an
+  // admin-tier row is never re-tiered from a checkbox).
+  assert.match(editActionsSrc, /\.\.\.\(gmSubmitted && tierSyncable/);
   assert.match(
     editActionsSrc,
-    /\.\.\.\(gmSubmitted \? \{ is_general_manager \} : \{\}\)/
+    /epd_role: is_general_manager \? "manager" : "user"/
   );
   // Never derived from title/pay type.
   assert.doesNotMatch(

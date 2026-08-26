@@ -148,7 +148,33 @@ as $$
               and (sib.id = e.id
                    or (e.seven_shifts_user_id is not null
                        and sib.seven_shifts_user_id = e.seven_shifts_user_id))
-              and te.entry_date > current_date - 30)
+              and te.entry_date > current_date - 30
+              -- §1g ghost doctrine (Codex should-fix, this sprint): a mirror
+              -- row within the nightly's refresh reach (~14d back onward)
+              -- counts as evidence only if the location's last successful
+              -- cp_schedule run refreshed it — time_entries has no tombstone,
+              -- so a ghost row would suppress a real departure forever
+              -- (Josiah Ornelas's shape). Older rows are historical facts; a
+              -- location with no successful run has no reference and its
+              -- rows count (the departure-report GET's exact rule).
+              and (te.entry_date < current_date - 14
+                   or te.updated_at >= coalesce((
+                        select max(ir.started_at)
+                        from public.ingest_runs ir
+                        where ir.location_id = sib.location_id
+                          and ir.source = 'cp_schedule'
+                          and ir.status = 'success'), timestamptz '-infinity')))
+      and not exists (  -- a DISMISSAL STANDS until new activity starts a new
+                        -- dormant stretch (Codex should-fix, this sprint):
+                        -- without this, a dismissed person reinserts on every
+                        -- run and the queue trains operators to ignore it.
+                        -- New evidence after the dismissal re-arms the sweep.
+            select 1 from public.departure_candidates dc
+            where dc.employee_id = e.id
+              and dc.status = 'dismissed'
+              and dc.resolved_at >= greatest(
+                    coalesce(lw.last_worked, date '1900-01-01'),
+                    coalesce(ls.last_scheduled, date '1900-01-01'))::timestamptz)
     on conflict do nothing
     returning 1
   )

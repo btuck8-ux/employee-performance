@@ -65,6 +65,17 @@ test("every evidence clause is person-level: siblings correlate on seven_shifts_
   assert.match(migration, /seven_shifts_shifts/);
 });
 
+test("§1g: recent scheduled mirror rows are freshness-tested — a ghost never suppresses a departure", () => {
+  assert.match(migration, /ir\.source = 'cp_schedule'/);
+  assert.match(migration, /ir\.status = 'success'/);
+  assert.match(migration, /te\.entry_date < current_date - 14\s*\n\s*or te\.updated_at >=/);
+});
+
+test("a dismissal stands until new activity — dismissed people do not reinsert every run", () => {
+  assert.match(migration, /dc\.status = 'dismissed'/);
+  assert.match(migration, /dc\.resolved_at >= greatest\(/);
+});
+
 test("candidate table carries the operator-review lifecycle", () => {
   assert.match(migration, /status\s+text not null default 'open'/);
   assert.match(migration, /resolved_at\s+timestamptz/);
