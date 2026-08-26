@@ -8,32 +8,34 @@
  * So every punch/receipt timestamp must be projected into the store's local
  * zone before it lands.
  *
- * Zones are keyed by `location_code` (migration 027). All Colorado stores are
- * America/Denver; NOLA and Houston are America/Chicago.
+ * The zone comes from `locations.timezone` — the table OWNS this fact
+ * (Tucker 2026-08-26: DO NOT KEEP A COPY OF ANYTHING THE DATABASE OWNS).
+ * The hand-maintained map that used to live here was a live latent bug: its
+ * fallback silently defaulted to the Denver zone with only a warn line, so
+ * FCCSU's 228 shift rows and 150 punches carried correct local times BY
+ * COINCIDENCE of being a Denver store. A Houston- or NOLA-shaped store
+ * seeded the same way would have written every timestamp an hour wrong.
+ *
+ * storeTimezone() therefore takes the location ROW (whose `timezone` column
+ * every loader now selects) and THROWS when the zone is missing — a
+ * fallback that is right by accident is indistinguishable from one that is
+ * right by design until the day it isn't. Halting one store's ingest run is
+ * the correct cost: its error lands in ingest_runs + the fatal alert, while
+ * a guessed zone lands wrong wall-clocks nobody can distinguish from data.
  */
 
-export const LOCATION_TIMEZONES: Record<string, string> = {
-  NOLA: "America/Chicago",
-  HOU: "America/Chicago",
-  CPD: "America/Denver",
-  COS: "America/Denver",
-  DTD: "America/Denver",
-  FCOL: "America/Denver",
-  HRANCH: "America/Denver",
-  LONGM: "America/Denver",
-};
-
-export function timezoneForLocationCode(locationCode: string): string {
-  const tz = LOCATION_TIMEZONES[locationCode];
-  if (!tz) {
-    // Default to Denver rather than throwing — a missing entry shouldn't halt
-    // ingest, but it's a config bug worth a loud log.
-    console.warn(
-      `[ingest/tz] no timezone mapped for location_code "${locationCode}"; defaulting to America/Denver`
+export function storeTimezone(loc: {
+  location_code: string;
+  timezone: string | null | undefined;
+}): string {
+  if (!loc.timezone) {
+    throw new Error(
+      `[ingest/tz] locations.timezone is unset for "${loc.location_code}" — ` +
+        "refusing to guess a zone (a defaulted timezone writes local " +
+        "wall-clocks silently wrong). Set locations.timezone for this store."
     );
-    return "America/Denver";
   }
-  return tz;
+  return loc.timezone;
 }
 
 export interface LocalWallClock {

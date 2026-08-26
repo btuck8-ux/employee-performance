@@ -1,21 +1,25 @@
 import type { AdminClient } from "../sevenshifts/crosswalk";
 
 /**
- * Resolve NOLA's locations.id at runtime instead of hardcoding the GUID
- * (previously duplicated in the two cake-* admin routes; seeded by migration
- * 027). NOLA is the only cake-actuals store, so the pair is a unique key.
+ * Resolve the CAKE-actuals store at runtime, keyed on the fact the database
+ * OWNS: `locations.actuals_source = 'cake'` (mig 033/061). Previously keyed
+ * on a hardcoded location-code literal — the copy-of-a-DB-fact defect class
+ * (LOCATION_CODES packet 2026-08-26). The CAKE feed is single-store by
+ * design, so `.single()` is the loud guard: a second cake store (or none)
+ * errors here instead of silently mis-landing a timesheet.
  */
-export async function nolaLocationId(supabase: AdminClient): Promise<string> {
+export async function cakeLocation(
+  supabase: AdminClient
+): Promise<{ id: string; location_code: string }> {
   const { data, error } = await supabase
     .from("locations")
-    .select("id")
-    .eq("location_code", "NOLA")
+    .select("id, location_code")
     .eq("actuals_source", "cake")
     .single();
   if (error || !data?.id) {
     throw new Error(
-      `NOLA location lookup failed (location_code='NOLA', actuals_source='cake'): ${error?.message ?? "no row"}`
+      `cake location lookup failed (expected exactly one locations row with actuals_source='cake'): ${error?.message ?? "no row"}`
     );
   }
-  return data.id as string;
+  return { id: data.id as string, location_code: data.location_code as string };
 }

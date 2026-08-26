@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { LOCATION_CODES } from "@/lib/location-codes";
+import { isKnownLocationCode } from "@/lib/location-codes";
 
 /**
  * EPD -> Culture Pulse IDENTITY feed.
@@ -52,7 +52,7 @@ export async function GET(request: Request) {
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
   const offset = Number.isNaN(rawOffset) ? 0 : Math.max(Math.trunc(rawOffset), 0);
 
-  if (locationCode && !LOCATION_CODES.includes(locationCode)) {
+  if (locationCode && !(await isKnownLocationCode(locationCode))) {
     return NextResponse.json({ error: "Unknown location_code" }, { status: 400 });
   }
   if (since && Number.isNaN(Date.parse(since))) {

@@ -20,7 +20,7 @@ import {
   normalizeOrders,
   type ToastOrder,
 } from "./normalize";
-import { timezoneForLocationCode } from "../sevenshifts/tz";
+import { storeTimezone } from "../sevenshifts/tz";
 import { recomputeAfterSalesUpsert } from "../sevenshifts/recompute";
 import type { AdminClient } from "../sevenshifts/crosswalk";
 import type { RunOutcome } from "../sevenshifts/runs";
@@ -53,7 +53,7 @@ export async function ingestToastSales(
   };
 
   try {
-    const tz = timezoneForLocationCode(loc.location_code);
+    const tz = storeTimezone(loc);
     const { dates, truncated } = businessDatesForWindow(
       windowStart,
       windowEnd,

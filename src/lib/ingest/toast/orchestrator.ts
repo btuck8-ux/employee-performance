@@ -43,6 +43,8 @@ export interface ToastLocation {
   id: string;
   name: string;
   location_code: string;
+  /** locations.timezone — the DB owns the zone; storeTimezone() throws if unset. */
+  timezone: string | null;
   toast_restaurant_guid: string;
   /** YYYY-MM-DD Toast go-live; the hard floor for every pull window. */
   toast_sales_start_date: string;
@@ -53,7 +55,7 @@ export async function loadToastCrosswalk(
 ): Promise<ToastLocation[]> {
   const { data, error } = await supabase
     .from("locations")
-    .select("id, name, location_code, toast_restaurant_guid, toast_sales_start_date")
+    .select("id, name, location_code, timezone, toast_restaurant_guid, toast_sales_start_date")
     .eq("toast_sales_enabled", true)
     // A sales-enabled store must still carry its GUID; the flag is the
     // authorization, the GUID the address.
@@ -77,6 +79,7 @@ export async function loadToastCrosswalk(
       id: r.id as string,
       name: r.name as string,
       location_code: r.location_code as string,
+      timezone: (r.timezone as string | null) ?? null,
       toast_restaurant_guid: r.toast_restaurant_guid as string,
       toast_sales_start_date: goLive,
     };

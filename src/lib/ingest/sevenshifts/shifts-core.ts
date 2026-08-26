@@ -6,7 +6,7 @@
  * shifts.ts for the feed's full doctrine.
  */
 
-import { utcToLocalWallClock, timezoneForLocationCode } from "./tz.ts";
+import { utcToLocalWallClock, storeTimezone } from "./tz.ts";
 import type { LocationCrosswalk } from "./crosswalk";
 
 export interface RawShift {
@@ -115,7 +115,7 @@ export function classifyShifts(
       out.skippedOpenOrUnassigned += 1;
       continue;
     }
-    const tz = timezoneForLocationCode(loc.location_code);
+    const tz = storeTimezone(loc);
     const local = utcToLocalWallClock(s.start, tz);
     if (!local || typeof s.id !== "number") {
       out.skippedNoStart += 1;

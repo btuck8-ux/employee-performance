@@ -19,6 +19,7 @@ const COS: LocationCrosswalk = {
   id: "epd-cos",
   name: "Colorado Springs",
   location_code: "COS",
+  timezone: "America/Denver",
   company_id: 185592,
   seven_shifts_location_id: 488681,
   pos_via_7shifts: false,

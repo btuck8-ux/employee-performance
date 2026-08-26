@@ -3,7 +3,7 @@ import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createCpClient } from "@/lib/ingest/culture-pulse/client";
 import { loadCrosswalk } from "@/lib/ingest/sevenshifts/crosswalk";
-import { CP_LOCATION_MAP } from "@/lib/ingest/culture-pulse/crosswalk";
+import { loadCpSyncLocations } from "@/lib/ingest/culture-pulse/crosswalk";
 import { getAll } from "@/lib/ingest/sevenshifts/client";
 
 /**
@@ -181,11 +181,12 @@ export async function GET(request: Request) {
     // company -> its stores' CP location ids (7s crosswalk ⋈ CP crosswalk on
     // location_code) and 7shifts location ids, for the Q1 comparison and the
     // location-match check.
+    const cpLocations = await loadCpSyncLocations(supabase);
     const cpIdByCode = new Map(
-      CP_LOCATION_MAP.map((m) => [m.location_code, m.cp_location_id])
+      cpLocations.map((m) => [m.location_code, m.cp_location_id])
     );
     const codeByCpId = new Map(
-      CP_LOCATION_MAP.map((m) => [m.cp_location_id, m.location_code])
+      cpLocations.map((m) => [m.cp_location_id, m.location_code])
     );
 
     // The decisive-test employee (§4-C1 / addendum §5): stored schedule vs

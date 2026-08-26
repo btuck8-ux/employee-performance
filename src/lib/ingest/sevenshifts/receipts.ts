@@ -16,7 +16,7 @@
  */
 
 import { getAll } from "./client";
-import { utcToLocalWallClock, timezoneForLocationCode } from "./tz";
+import { utcToLocalWallClock, storeTimezone } from "./tz";
 import { recomputeAfterSalesUpsert } from "./recompute";
 import type { AdminClient, LocationCrosswalk } from "./crosswalk";
 import type { RunOutcome } from "./runs";
@@ -71,7 +71,7 @@ export async function ingestReceipts(
   };
 
   try {
-    const tz = timezoneForLocationCode(loc.location_code);
+    const tz = storeTimezone(loc);
 
     const receipts = await getAll<Receipt>(loc.company_id, "receipts", {
       location_id: loc.seven_shifts_location_id,

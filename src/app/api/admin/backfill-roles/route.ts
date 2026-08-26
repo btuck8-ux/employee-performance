@@ -9,7 +9,7 @@ import {
   employeeMapForLocation,
   type TimePunch,
 } from "@/lib/ingest/sevenshifts/time";
-import { timezoneForLocationCode } from "@/lib/ingest/sevenshifts/tz";
+import { storeTimezone } from "@/lib/ingest/sevenshifts/tz";
 
 /**
  * ROLE-ONLY backfill for time_entries (handoff 2026-07-28 §3.3).
@@ -69,7 +69,7 @@ async function backfillStore(
     roles_written: {},
   };
 
-  const tz = timezoneForLocationCode(loc.location_code);
+  const tz = storeTimezone(loc);
   const userToEmployee = await employeeMapForLocation(supabase, loc.id);
   // Backfill is a deliberate repair — a failed roles lookup is a hard error
   // here, not a degrade (there is nothing to do without the name map).

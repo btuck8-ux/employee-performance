@@ -8,6 +8,8 @@ export interface LocationCrosswalk {
   id: string; // EPD locations.id (uuid)
   name: string;
   location_code: string;
+  /** locations.timezone — the DB owns the zone; storeTimezone() throws if unset. */
+  timezone: string | null;
   company_id: number; // seven_shifts_company_id
   seven_shifts_location_id: number;
   pos_via_7shifts: boolean;
@@ -30,7 +32,7 @@ export async function loadCrosswalk(
   const { data, error } = await supabase
     .from("locations")
     .select(
-      "id, name, location_code, seven_shifts_company_id, seven_shifts_location_id, pos_via_7shifts, actuals_source"
+      "id, name, location_code, timezone, seven_shifts_company_id, seven_shifts_location_id, pos_via_7shifts, actuals_source"
     )
     .not("seven_shifts_company_id", "is", null)
     .not("seven_shifts_location_id", "is", null)
@@ -44,6 +46,7 @@ export async function loadCrosswalk(
     id: r.id as string,
     name: r.name as string,
     location_code: r.location_code as string,
+    timezone: (r.timezone as string | null) ?? null,
     company_id: Number(r.seven_shifts_company_id),
     seven_shifts_location_id: Number(r.seven_shifts_location_id),
     pos_via_7shifts: Boolean(r.pos_via_7shifts),

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { timezoneForLocationCode } from "@/lib/ingest/sevenshifts/tz";
+import { storeTimezone } from "@/lib/ingest/sevenshifts/tz";
 import { isValidIsoDate } from "@/lib/range-feed";
 import {
   addDaysIso,
@@ -183,7 +183,7 @@ export async function GET(request: Request) {
           };
         }
       }
-      const tz = loc.timezone ?? timezoneForLocationCode(loc.location_code);
+      const tz = storeTimezone(loc);
       const entry = buildCoverageEntry(
         loc.location_code,
         loc.actuals_source,

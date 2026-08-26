@@ -1,16 +1,52 @@
+import { createAdminClient } from "@/lib/supabase/admin";
+
 /**
- * Shared location crosswalk codes (migration 027) — the single source for the
- * EPD->CP feed routes (/api/scores + /api/identity), which reject anything
- * else with 400. LOCATION_TIMEZONES (ingest/sevenshifts/tz.ts) is keyed by
- * the same codes.
+ * Location codes, read from `public.locations` — the table OWNS this fact.
+ *
+ * THE RULE (Tucker, 2026-08-26, adopting THQ's formulation): DO NOT KEEP A
+ * COPY OF ANYTHING THE DATABASE OWNS. The previous hand-maintained array
+ * here is exactly how FCCSU 400'd on /api/scores and /api/identity and
+ * silently vanished from an unfiltered /api/scores/range: the store existed
+ * in `locations` and not in the copy. Adding the new code to the array
+ * would have reproduced the defect one location later.
+ *
+ * Validation semantics are unchanged: an unknown code still 400s at the
+ * feed routes. Every consumer is force-dynamic, so a per-request read is
+ * cheap; the short TTL below only smooths bursts (staleness ceiling: a
+ * brand-new store is queryable within a minute, which is faster than any
+ * ingest can populate it).
+ *
+ * A structural sweep test (location-literals-sweep.test.ts) fails the build
+ * if a hardcoded location literal reappears anywhere in src/.
  */
-export const LOCATION_CODES = [
-  "CPD",
-  "COS",
-  "DTD",
-  "FCOL",
-  "HRANCH",
-  "HOU",
-  "LONGM",
-  "NOLA",
-];
+
+const TTL_MS = 60_000;
+let cache: { codes: string[]; fetchedAt: number } | null = null;
+
+/** The live location_code set, ordered — same shape the old const carried. */
+export async function getLocationCodes(): Promise<string[]> {
+  if (cache && Date.now() - cache.fetchedAt < TTL_MS) return cache.codes;
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("locations")
+    .select("location_code")
+    .order("location_code");
+  if (error) throw new Error(`location codes read: ${error.message}`);
+  const codes = (data ?? []).map((r) => String(r.location_code));
+  if (codes.length === 0) {
+    // Zero rows is a broken read (locations is never empty), not an empty
+    // estate — caching it would 400 every filtered feed call for the TTL.
+    throw new Error("location codes read returned zero rows — refusing to cache");
+  }
+  cache = { codes, fetchedAt: Date.now() };
+  return codes;
+}
+
+export async function isKnownLocationCode(code: string): Promise<boolean> {
+  return (await getLocationCodes()).includes(code);
+}
+
+/** Test hook: drop the cache so a test can observe a fresh read. */
+export function __clearLocationCodesCache(): void {
+  cache = null;
+}

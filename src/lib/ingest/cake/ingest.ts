@@ -15,6 +15,7 @@ import {
   type CakeProfile,
   type CakeTimeEntry,
 } from "./timesheet-csv";
+import { cakeLocation } from "./nola-location";
 
 /** Load cake_profile_crosswalk into a profile_id -> identity map. */
 export async function loadCakeCrosswalk(
@@ -49,10 +50,13 @@ export async function ingestCakeTimesheetCsv(
   csvText: string,
   opts?: { windowStart?: string; windowEnd?: string }
 ): Promise<CakeIngestResult> {
+  // The run's location label comes from the DB fact (actuals_source='cake'),
+  // never a hardcoded code (LOCATION_CODES packet 2026-08-26).
+  const cake = await cakeLocation(supabase);
   const base: CakeIngestResult = {
     source: "cake_timesheets",
-    location_id: "",
-    location_code: "NOLA",
+    location_id: cake.id,
+    location_code: cake.location_code,
     status: "running",
     rows_in: 0,
     rows_upserted: 0,

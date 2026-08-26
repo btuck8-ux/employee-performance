@@ -37,10 +37,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { TimeEntryRow } from "./performance-recompute";
-import {
-  timezoneForLocationCode,
-  utcToLocalWallClock,
-} from "./ingest/sevenshifts/tz";
+import { utcToLocalWallClock } from "./ingest/sevenshifts/tz";
 
 const BATCH = 1000;
 /** PostgREST .in() lists ride the URL — chunk id lists well below limits
@@ -74,10 +71,20 @@ export async function fetchLocationFlipMeta(
     .eq("location_id", locationId)
     .maybeSingle();
   if (error) throw new Error(`flip config: ${error.message}`);
+  const tz = (data?.tz as string | null) ?? null;
+  if (!tz) {
+    // v_location_flip_config.tz reads locations.timezone — the DB owns the
+    // zone. Missing means the location row is absent or unset; refuse to
+    // guess (a defaulted zone writes local wall-clocks silently wrong —
+    // the FCCSU coincidence, Tucker 2026-08-26).
+    throw new Error(
+      `flip config: no timezone for location ${locationId} — set locations.timezone`
+    );
+  }
   return {
     isToast: data?.is_toast === true,
     goLive: (data?.go_live as string | null) ?? null,
-    tz: (data?.tz as string | null) ?? timezoneForLocationCode(""),
+    tz,
     metricsStart: (data?.metrics_start as string | null) ?? null,
   };
 }

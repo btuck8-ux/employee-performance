@@ -3,7 +3,7 @@ import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPagedList } from "@/lib/ingest/toast/client";
 import { normalizeOrders, type ToastOrder } from "@/lib/ingest/toast/normalize";
-import { timezoneForLocationCode } from "@/lib/ingest/sevenshifts/tz";
+import { storeTimezone } from "@/lib/ingest/sevenshifts/tz";
 import { recomputeAfterSalesUpsert } from "@/lib/ingest/sevenshifts/recompute";
 
 /**
@@ -118,7 +118,7 @@ export async function GET(request: Request) {
   const supabase = createAdminClient();
   const { data: loc, error: locError } = await supabase
     .from("locations")
-    .select("id, location_code, toast_restaurant_guid, toast_sales_start_date")
+    .select("id, location_code, timezone, toast_restaurant_guid, toast_sales_start_date")
     .eq("location_code", locationCode)
     .maybeSingle();
   if (locError) {
@@ -159,7 +159,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const tz = timezoneForLocationCode(loc.location_code as string);
+    const tz = storeTimezone({
+      location_code: loc.location_code as string,
+      timezone: loc.timezone as string | null,
+    });
     const orders: ToastOrder[] = [];
     for (const isoDate of dates) {
       const batch = await getPagedList<ToastOrder>(

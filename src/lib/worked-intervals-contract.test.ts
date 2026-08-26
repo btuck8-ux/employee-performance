@@ -24,13 +24,19 @@ const migSrc = read("supabase/migrations/058_worked_intervals_flip.sql");
 const tzSrc = read("src/lib/ingest/sevenshifts/tz.ts");
 const tisSrc = read("src/lib/total-impact-score.ts");
 
-test("locations.timezone mirrors tz.ts exactly — TS↔SQL parity", () => {
-  // tz.ts: NOLA + HOU are America/Chicago; the six CO stores America/Denver.
-  const chicago = [...tzSrc.matchAll(/(\w+): "America\/Chicago"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(chicago, ["HOU", "NOLA"], "tz.ts Chicago set changed — update mig 058");
+test("tz.ts keeps NO copy of the zone map — locations.timezone is the single source", () => {
+  // This test used to assert TS↔SQL parity between a hand-maintained map
+  // and mig 058's seed. The map is GONE (LOCATION_CODES packet 2026-08-26:
+  // do not keep a copy of anything the database owns) — the property now
+  // pinned is its absence, plus the loud fallback: a store with no
+  // locations.timezone THROWS instead of guessing (the old warn-and-default
+  // made FCCSU correct by coincidence of being a Denver store).
+  assert.doesNotMatch(tzSrc, /America\/(Denver|Chicago)/, "no hardcoded zones in tz.ts");
+  assert.match(tzSrc, /export function storeTimezone/);
+  assert.match(tzSrc, /throw new Error/, "missing zone throws");
+  assert.doesNotMatch(tzSrc, /console\.warn/, "no warn-and-guess fallback");
+  // mig 058 remains the historical record that seeded the column.
   assert.match(migSrc, /add column if not exists timezone text not null default 'America\/Denver'/);
-  assert.match(migSrc, /location_code in \('HOU', 'NOLA'\)/);
-  assert.match(migSrc, /set timezone = 'America\/Chicago'/);
 });
 
 test("the split is GO-LIVE-DATED, not all-or-nothing per store — and a null go-live loses nothing", () => {

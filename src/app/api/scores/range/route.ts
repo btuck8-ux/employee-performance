@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { LOCATION_CODES } from "@/lib/location-codes";
+import { getLocationCodes } from "@/lib/location-codes";
 import {
   computeMetricsForRange,
 } from "@/lib/performance-recompute";
@@ -262,7 +262,10 @@ export async function GET(request: Request) {
   if (denied) return denied;
 
   const url = new URL(request.url);
-  const validated = validateRangeParams(url.searchParams);
+  // Known codes come from public.locations (the table owns this fact); the
+  // validator stays pure and receives them injected.
+  const knownCodes = await getLocationCodes();
+  const validated = validateRangeParams(url.searchParams, knownCodes);
   if (!validated.ok) {
     return NextResponse.json({ error: validated.reason }, { status: 400 });
   }
@@ -272,12 +275,14 @@ export async function GET(request: Request) {
   const supabase = createAdminClient();
 
   try {
-    // Locations: the filter set, or all eight.
-    const codes = locationCodes.length > 0 ? locationCodes : LOCATION_CODES;
-    const { data: locations, error: locErr } = await supabase
-      .from("locations")
-      .select("id, location_code")
-      .in("location_code", codes);
+    // Locations: the filter set, or EVERY store in public.locations — an
+    // unfiltered range query must never silently omit a store the hand
+    // -maintained list forgot (the FCCSU defect).
+    let locQuery = supabase.from("locations").select("id, location_code");
+    if (locationCodes.length > 0) {
+      locQuery = locQuery.in("location_code", locationCodes);
+    }
+    const { data: locations, error: locErr } = await locQuery;
     if (locErr) throw new Error(`locations query failed: ${locErr.message}`);
     const codeByLocationId = new Map<string, string>(
       (locations ?? []).map((l) => [l.id as string, l.location_code as string])

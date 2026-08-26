@@ -10,7 +10,6 @@
  * before merge, never a code-side judgment call.
  */
 import type { RangeMetrics } from "./performance-recompute";
-import { LOCATION_CODES } from "./location-codes";
 
 /** Earliest queryable window start (contract memo §2 param table). */
 export const RANGE_FEED_MIN_START = "2026-01-01";
@@ -118,9 +117,14 @@ function parsePositiveInt(raw: string | null, fallback: number): number | null {
 /**
  * Validate the query params per the locked contract. Every failure carries
  * a human-readable reason (the route returns it as `{ error }` with 400).
+ *
+ * `knownLocationCodes` is INJECTED by the caller (the route reads it from
+ * `public.locations` via getLocationCodes()) — this module keeps no copy of
+ * a fact the database owns, and stays pure/sync for the contract tests.
  */
 export function validateRangeParams(
-  searchParams: URLSearchParams
+  searchParams: URLSearchParams,
+  knownLocationCodes: readonly string[]
 ): RangeFeedValidation {
   const start = searchParams.get("start");
   const end = searchParams.get("end");
@@ -157,7 +161,7 @@ export function validateRangeParams(
     if (locationCodes.length === 0 || locationCodes.some((c) => c === "")) {
       return { ok: false, reason: "location_code must be a CSV of codes" };
     }
-    const unknown = locationCodes.find((c) => !LOCATION_CODES.includes(c));
+    const unknown = locationCodes.find((c) => !knownLocationCodes.includes(c));
     if (unknown) {
       return { ok: false, reason: `Unknown location_code: ${unknown}` };
     }
