@@ -59,12 +59,36 @@ export async function updateEmployeeAction(formData: FormData) {
   // re-tiered from a checkbox; that change is an operator decision on the
   // tier itself, so the GM toggle is skipped and logged instead.
   const tierSyncable =
-    current?.epd_role === "user" || current?.epd_role === "manager";
+    current?.epd_role === "user" ||
+    current?.epd_role === "manager" ||
+    current?.epd_role === "unclassified";
   if (gmSubmitted && !tierSyncable) {
     console.warn("[employees] GM toggle skipped — admin-tier row", {
       employee_id: id,
       epd_role: current?.epd_role ?? null,
     });
+  }
+
+  // ONE GM PER STORE (Tucker 2026-08-26, mig 075's wire-8 model; Codex
+  // should-fix — the tier surface enforced this but this writer did not):
+  // checking the box while the store already has another ACTIVE manager row
+  // is rejected with the incumbent named. Demote the incumbent first.
+  if (gmSubmitted && tierSyncable && is_general_manager) {
+    const { data: incumbent } = await supabase
+      .from("employees")
+      .select("employee_code, employee_name")
+      .eq("location_id", new_location_id)
+      .eq("epd_role", "manager")
+      .eq("active", true)
+      .neq("id", id)
+      .maybeSingle();
+    if (incumbent) {
+      redirect(
+        `/dashboard/employees/${id}/edit?error=${encodeURIComponent(
+          `This store already has a GM — ${incumbent.employee_name} (${incumbent.employee_code}). One GM per store; demote the incumbent first.`
+        )}`
+      );
+    }
   }
 
   const { error } = await supabase

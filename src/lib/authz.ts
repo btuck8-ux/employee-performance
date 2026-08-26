@@ -19,7 +19,13 @@ export type EpdRole =
   | "regional_admin"
   | "area_admin"
   | "manager"
-  | "user";
+  | "user"
+  // Sixth shared value (CSU memo §6, 2026-08-26): a ROSTER state, never a
+  // grantable login role (mig 077 CHECK rejects it on user_roles) — but an
+  // employee-BACKED login whose row is unclassified derives it through
+  // epd_user_role(), so the union must model it. Resolves to zero
+  // authorized locations (fails closed) until a human classifies the row.
+  | "unclassified";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 

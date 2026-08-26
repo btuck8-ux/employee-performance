@@ -86,7 +86,7 @@ export default async function EmployeesPage({
   let q = supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, is_general_manager, seven_shifts_user_id, locations!inner(id, name, client_id)"
+      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, is_general_manager, epd_role, seven_shifts_user_id, locations!inner(id, name, client_id)"
     )
     .order("employee_name");
 
@@ -288,6 +288,15 @@ export default async function EmployeesPage({
                           >
                             GM
                           </span>
+                        )}
+                        {emp.epd_role === "unclassified" && role === "system_admin" && (
+                          <Link
+                            href="/dashboard/admin/unclassified-tiers"
+                            className="ml-2 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-900 hover:bg-amber-100"
+                            title="No human has decided this person's tier yet — classify on the admin surface (steady pressure, not an alert)"
+                          >
+                            Unclassified
+                          </Link>
                         )}
                       </td>
                       <td className="py-2 pr-4">
