@@ -3,6 +3,7 @@ import { getSessionRole } from "@/lib/authz";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatTenure } from "@/lib/format";
 import { EmployeeStatusButton } from "@/components/employee/EmployeeStatusButton";
+import { fetchActiveSiblingStoresMap } from "@/lib/active-sibling-stores";
 import { createCpClient } from "@/lib/ingest/culture-pulse/client";
 import { countPendingDetections } from "@/lib/triage/detections";
 
@@ -85,7 +86,7 @@ export default async function EmployeesPage({
   let q = supabase
     .from("employees")
     .select(
-      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, is_general_manager, locations!inner(id, name, client_id)"
+      "id, employee_code, employee_name, hire_date, wage, wage_pay_type, active, is_general_manager, seven_shifts_user_id, locations!inner(id, name, client_id)"
     )
     .order("employee_name");
 
@@ -107,6 +108,19 @@ export default async function EmployeesPage({
   }
 
   const { data: employees } = await q;
+
+  // §7b: multi-store people get the "also deactivate at [other stores]?"
+  // prompt — one batched, purview-scoped sibling lookup for the whole list.
+  const siblingStores = canToggleStatus
+    ? await fetchActiveSiblingStoresMap(
+        supabase,
+        (employees ?? []).map((e) => ({
+          id: String(e.id),
+          seven_shifts_user_id:
+            (e.seven_shifts_user_id as number | string | null) ?? null,
+        }))
+      )
+    : new Map<string, never[]>();
 
   // Build the description line.
   let scopeDesc: string;
@@ -325,6 +339,7 @@ export default async function EmployeesPage({
                               employeeName={emp.employee_name}
                               active={!!emp.active}
                               returnTo={returnTo}
+                              otherActiveStores={siblingStores.get(emp.id) ?? []}
                             />
                           )}
                         </td>

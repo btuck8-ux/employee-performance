@@ -19,6 +19,14 @@ import { LOCATION_CODES } from "@/lib/location-codes";
  * Auth: `Authorization: Bearer <SCORES_FEED_TOKEN>` — reuses the scores-feed
  * token (same EPD->CP consumer + trust boundary). Queries via the service-role
  * client (bypasses RLS); allowlisted in proxy.ts the same way as /api/scores.
+ *
+ * Mig 071 (epd_role spec 2026-08-26 §4/§8): `is_general_manager` is now
+ * DERIVED (epd_role = 'manager') — same name, type, and semantics, only
+ * where the truth lives moved — and `epd_role` rides as the 11th column,
+ * additive, the shared five-value tier vocabulary partners adopt off the
+ * wire. ⚠️ 'manager' here means GENERAL MANAGER (employment tier), never
+ * users.role's app-permission 'manager'. Pinned by
+ * identity-feed-contract.test.ts.
  */
 
 export const dynamic = "force-dynamic";

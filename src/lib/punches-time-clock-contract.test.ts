@@ -98,6 +98,10 @@ test("structural sweep: every src file touching the column is on the allowlist",
     // its report ("non-puncher exclusion" vs "no scheduled shifts") — it
     // never writes it and never derives it.
     "src/app/api/admin/recompute-quarter/route.ts",
+    // Identity-feed contract test (mig 071): pins the flag's POSITION on
+    // the /api/identity wire (column 9, mig 068's §1h append) — reads the
+    // name only, never the value.
+    "src/lib/identity-feed-contract.test.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

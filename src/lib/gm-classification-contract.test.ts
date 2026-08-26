@@ -141,6 +141,14 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
     "src/app/dashboard/employees/[id]/edit/page.tsx",
     "src/app/dashboard/admin/toast-crosswalk/data.ts",
     "src/app/dashboard/admin/toast-crosswalk/page.tsx",
+    // Mig 071 (epd_role spec 2026-08-26 §4): the flag became DERIVED —
+    // (epd_role = 'manager') in v_employee_identity, same wire name/type.
+    // These three touch the NAME only: the two contract tests pin the
+    // derivation + wire position; the identity route's doc comment states
+    // it for the partner-facing contract.
+    "src/lib/epd-role-contract.test.ts",
+    "src/lib/identity-feed-contract.test.ts",
+    "src/app/api/identity/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

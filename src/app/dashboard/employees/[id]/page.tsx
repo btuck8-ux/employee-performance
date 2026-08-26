@@ -42,6 +42,7 @@ import { generateCustomRangePerformanceReportAction } from "./generate-custom-ra
 import { updateManagerFeedbackAction } from "./manager-feedback-actions";
 import { HourlyTipRateView } from "@/components/teams/HourlyTipRateView";
 import { fetchMultiLocationProfile } from "@/lib/multi-location-fetch";
+import { fetchActiveSiblingStoresMap } from "@/lib/active-sibling-stores";
 import { MultiLocationCard } from "@/components/employee/MultiLocationCard";
 import type { HourlyTipRateRow } from "@/app/dashboard/locations/[id]/teams/fetch-hourly-tip-rate-actions";
 // Server-safe module — importing these helpers from TimeWindowPicker (a
@@ -106,6 +107,16 @@ export default async function EmployeeDetailPage({
       ? (empSevenShiftsUserId as number)
       : null
   );
+
+  // §7b: the "also deactivate at [other stores]?" prompt needs the person's
+  // OTHER active rows (purview-scoped — same client as the action's checks).
+  const profileSiblingStores = canToggleStatus
+    ? (
+        await fetchActiveSiblingStoresMap(supabase, [
+          { id: emp.id, seven_shifts_user_id: empSevenShiftsUserId },
+        ])
+      ).get(emp.id) ?? []
+    : [];
 
   // ---- Per-quarter records (from performance_records) ----
   const { data: records } = await supabase
@@ -668,6 +679,7 @@ export default async function EmployeeDetailPage({
                 employeeName={emp.employee_name as string}
                 active={!!emp.active}
                 returnTo={`/dashboard/employees/${emp.id}`}
+                otherActiveStores={profileSiblingStores}
               />
             )}
           </div>
