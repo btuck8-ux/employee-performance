@@ -256,3 +256,71 @@ test("an explicit since WINS over fromFloor — the intent flag can never widen 
     "fromFloor must be the else-if behind the since branch"
   );
 });
+
+// ── §7a: the auto-close correction (spec rev 2, mig 079) ───────────────────
+
+const mig079 = read("supabase/migrations/079_auto_close_correction.sql");
+
+test("§7a: corrected_out_at lives on toast_time_entries and NEVER on time_entries", () => {
+  // time_entries carries an unconditional BEFORE UPDATE trigger bumping the
+  // exact updated_at that mig 072's ghost guard reads — a correction written
+  // there would mark ghosts as freshly served and suppress departures.
+  assert.match(mig079, /alter table public\.toast_time_entries\s*\n\s*add column if not exists corrected_out_at/);
+  assert.doesNotMatch(mig079, /alter table public\.time_entries/);
+  assert.doesNotMatch(mig079, /update public\.time_entries/);
+});
+
+test("§7a: the vendor's out_at is KEPT AS RECEIVED — the correction sits beside it", () => {
+  // An upstream value is a claim; overwriting it destroys the ability to
+  // check the claim later. The function may only ever SET corrected_out_at.
+  const setClauses = mig079.match(/set\s+\w+\s*=/gi) ?? [];
+  for (const clause of setClauses) {
+    assert.match(clause, /corrected_out_at/, `only corrected_out_at may be written, saw: ${clause}`);
+  }
+});
+
+test("§7a: corrected hours are RECOMPUTED from the interval, never scaled from vendor fields", () => {
+  // Toast assigns phantom hours to OVERTIME (Rexroad 08-01: regular 0.00,
+  // overtime 17.38) — the vendor's hour fields embed the inflation, so the
+  // corrected branch must derive from the corrected interval and must win
+  // over the vendor-hours branch in the CASE order.
+  const correctedBranch = mig079.indexOf("when tte.corrected_out_at is not null");
+  const vendorHoursBranch = mig079.indexOf("when tte.regular_hours is not null or tte.overtime_hours is not null");
+  assert.ok(correctedBranch > 0 && vendorHoursBranch > 0 && correctedBranch < vendorHoursBranch,
+    "corrected-interval branch must precede the vendor-hours branch");
+  assert.match(mig079, /extract\(epoch from \(tte\.corrected_out_at - tte\.in_at\)\) \/ 3600\.0/);
+});
+
+test("§7a: idempotent (NULL-guarded) and a scheduled end at/before clock-in is not a correction", () => {
+  assert.match(mig079, /where tte\.corrected_out_at is null/);
+  assert.match(mig079, /and s\.sched_end > s\.in_at/);
+});
+
+test("§7a: execute is service_role-only", () => {
+  assert.match(mig079, /revoke execute on function public\.apply_auto_close_corrections\(\)\s*\n\s*from public, anon, authenticated/);
+  assert.match(mig079, /grant execute on function public\.apply_auto_close_corrections\(\) to service_role/);
+});
+
+test("§7a: the ongoing pass rides the nightly — after all store passes, non-fatal, alert on failure", () => {
+  // One home for the rule: the ingest calls the SAME function the backfill
+  // used. It must run after the per-store loop (fresh punches first), its
+  // failure must reach extraReasons (the alert path) rather than throw, and
+  // its counts must land on the summary — a silently-skipped correction is
+  // the "absence is not a signal" trap.
+  assert.match(laborSrc, /supabase\.rpc\("apply_auto_close_corrections"\)/);
+  assert.match(laborSrc, /extraReasons\.push\(`toast_labor auto-close correction pass failed/);
+  assert.match(laborSrc, /auto_close_correction: autoCloseCorrection/);
+  const rpcAt = laborSrc.indexOf('supabase.rpc("apply_auto_close_corrections")');
+  const alertAt = laborSrc.indexOf("maybeSendFailureAlert(outcomes, extraReasons)");
+  const loopEndAt = laborSrc.indexOf("await sleep(REQUEST_DELAY_MS);");
+  assert.ok(loopEndAt > 0 && loopEndAt < rpcAt, "the pass runs after the per-store loop");
+  assert.ok(rpcAt < alertAt, "the pass runs before the alert so its failure can ride it");
+});
+
+test("§7a: NOTHING in the migration recomputes scores — the gated recompute is the only mover", () => {
+  // The gate holds the deployment, not just the write (ruling 13). The
+  // migration stamps annotations; scored values move only in the single
+  // reviewed recompute pass.
+  assert.doesNotMatch(mig079, /performance_records/);
+  assert.doesNotMatch(mig079, /recompute_employee|recompute_team|compute_employee/);
+});

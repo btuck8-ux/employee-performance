@@ -712,6 +712,15 @@ export interface ToastLaborSummary {
     rows_skipped: number;
     error_text: string | null;
   }>;
+  /** §7a ongoing pass (mig 079): counts from apply_auto_close_corrections(),
+   * or null when the RPC failed — the failure itself rides the alert path.
+   * skipped_no_schedule is a standing count (those rows stay unstamped and
+   * re-report every run — deliberate: report them, never guess). */
+  auto_close_correction: {
+    corrected: number;
+    skipped_no_schedule: number;
+    skipped_nonpositive: number;
+  } | null;
 }
 
 export interface ToastLaborOptions {
@@ -849,6 +858,35 @@ export async function runToastLaborIngest(
     await sleep(REQUEST_DELAY_MS);
   }
 
+  // §7a ongoing pass (spec rev 2, mig 079): stamp corrected_out_at on any
+  // auto-closed / never-closed punches this run upserted. The function is
+  // estate-wide and idempotent (NULL-guarded), so one call after all store
+  // passes covers every fresh row — the reconcileAttributions pattern, one
+  // level up. Non-fatal: a failing correction pass must reach the alert
+  // path, not sink the ingest — a silently-skipped correction is the
+  // "absence is not a signal" trap.
+  let autoCloseCorrection: ToastLaborSummary["auto_close_correction"] = null;
+  {
+    const { data, error } = await supabase.rpc("apply_auto_close_corrections");
+    if (error) {
+      extraReasons.push(`toast_labor auto-close correction pass failed: ${error.message}`);
+    } else {
+      const row = (Array.isArray(data) ? data[0] : data) as {
+        corrected: number;
+        skipped_no_schedule: number;
+        skipped_nonpositive: number;
+      } | null;
+      if (row) {
+        autoCloseCorrection = {
+          corrected: row.corrected,
+          skipped_no_schedule: row.skipped_no_schedule,
+          skipped_nonpositive: row.skipped_nonpositive,
+        };
+        console.log("[toast-labor] auto-close correction", JSON.stringify(autoCloseCorrection));
+      }
+    }
+  }
+
   const alert = await maybeSendFailureAlert(outcomes, extraReasons);
   const byStatus: Record<string, number> = {};
   for (const o of outcomes) byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
@@ -870,5 +908,6 @@ export async function runToastLaborIngest(
       rows_skipped: o.rows_skipped,
       error_text: o.error_text,
     })),
+    auto_close_correction: autoCloseCorrection,
   };
 }
