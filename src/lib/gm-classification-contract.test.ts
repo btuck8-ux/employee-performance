@@ -21,6 +21,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 const migSrc = read("supabase/migrations/057_gm_classification.sql");
 const editActionsSrc = read("src/app/dashboard/employees/[id]/edit/actions.ts");
 const editPageSrc = read("src/app/dashboard/employees/[id]/edit/page.tsx");
+const tierActionsSrc = read(
+  "src/app/dashboard/admin/unclassified-tiers/actions.ts"
+);
 
 const GM_IDS = [
   "9303203e-88f2-423f-af56-b4056a6580cc", // Nick Goins, COS
@@ -83,6 +86,15 @@ test("ingest-immune: no import/upload/ingest/matcher path touches it (the wage_p
   }
 });
 
+test("the tier surface writes the flag ONLY in lockstep with the tier — per store", () => {
+  // The second sanctioned writer (CSU memo §6): classifying a tier IS
+  // setting the flag, because the wire derives from the tier. Per-store
+  // (Tucker 2026-08-26): flag = (tier == 'manager') for THAT row only,
+  // with the one-GM-per-store incumbent check ahead of it.
+  assert.match(tierActionsSrc, /is_general_manager: tier === "manager"/);
+  assert.match(tierActionsSrc, /\.eq\("epd_role", "manager"\)\s*\n\s*\.eq\("active", true\)/);
+});
+
 test("the ONLY writer besides the migration seed is the SA employee-edit surface", () => {
   assert.match(editPageSrc, /name="is_general_manager"/);
   // Same sentinel discipline as the mig 056 marker: absent ≠ unchecked.
@@ -117,6 +129,11 @@ test("TRAP GUARD (Tucker 2026-08-26): the lockstep DIES with the stored column",
       editActionsSrc,
       /is_general_manager/,
       "employees.is_general_manager was dropped — delete the GM-toggle lockstep and every stored-flag write from the edit surface (and retire this trap)"
+    );
+    assert.doesNotMatch(
+      tierActionsSrc,
+      /is_general_manager/,
+      "employees.is_general_manager was dropped — delete the lockstep write from the tier surface too"
     );
   }
   // Never derived from title/pay type.
@@ -177,6 +194,9 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
     "src/lib/epd-role-contract.test.ts",
     "src/lib/identity-feed-contract.test.ts",
     "src/app/api/identity/route.ts",
+    // CSU memo §6: the tier surface is the second sanctioned writer —
+    // classifying a tier writes the flag in lockstep (pinned above).
+    "src/app/dashboard/admin/unclassified-tiers/actions.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];
