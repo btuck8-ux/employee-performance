@@ -260,7 +260,7 @@ export async function archiveEmployeeAction(formData: FormData) {
 
   const { data: emp, error: empErr } = await supabase
     .from("employees")
-    .select("id, employee_code, active")
+    .select("id, employee_code, active, epd_role")
     .eq("id", employeeId)
     .maybeSingle();
   if (empErr || !emp) {
@@ -268,6 +268,20 @@ export async function archiveEmployeeAction(formData: FormData) {
   }
   if (emp.active === false) {
     redirect(backWith({ already: "1", code: String(emp.employee_code) }));
+  }
+
+  // §7c tier gate (the regional-admin incident): every deactivation path
+  // calls role_is_sweepable — above-manager tiers are immune here too.
+  const { data: sweepable, error: gateError } = await supabase.rpc(
+    "role_is_sweepable",
+    { r: emp.epd_role }
+  );
+  if (gateError || sweepable !== true) {
+    redirect(
+      backWith({
+        error: `Archive refused: ${emp.employee_code} is ${emp.epd_role} — above-manager tiers are immune. Re-tier first if truly departed.`,
+      })
+    );
   }
 
   const { error } = await supabase

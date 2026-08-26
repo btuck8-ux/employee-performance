@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const sql = readFileSync(
@@ -79,6 +79,92 @@ test("077: unclassified is NOT sweep-exempt — the unlooked-at population must 
   // and the one population nobody has looked at becomes the one population
   // the departure notifier cannot see — exactly backwards.
   assert.match(sql077, /select r in \('user','manager','unclassified'\)/);
+});
+
+// ── mig 078: the sweep gate is an ORDERING — table-driven, coverage-asserted ─
+
+test("078: sweepability is table-driven over the LIVE enum — a seventh value fails the build until a human places it", () => {
+  // Derive the enum's declaration order from the migrations themselves
+  // (046 creates it; later migrations may append). A string-match on the
+  // function body would pass forever regardless of what the enum does —
+  // this test re-derives the verdict per value from the ordinal rule and
+  // compares against the RULED table, and asserts every enum value has a
+  // case so a new value cannot slip past by not having one.
+  const migrationsDir = join(process.cwd(), "supabase/migrations");
+  const files = readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort();
+  let enumOrder: string[] = [];
+  for (const f of files) {
+    const src = readFileSync(join(migrationsDir, f), "utf8");
+    const created = src.match(
+      /create type public\.epd_role as enum\s*\n?\s*\(([^)]+)\)/
+    );
+    if (created) {
+      enumOrder = [...created[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
+    }
+    for (const add of src.matchAll(
+      /alter\s+type\s+public\.epd_role\s+add\s+value(?:\s+if\s+not\s+exists)?\s+'(\w+)'([^;]*)/gi
+    )) {
+      assert.doesNotMatch(
+        add[2],
+        /\b(before|after)\b/i,
+        `${f} adds an epd_role value with BEFORE/AFTER — teach this parser the position before merging`
+      );
+      if (!enumOrder.includes(add[1])) enumOrder.push(add[1]);
+    }
+  }
+  assert.ok(enumOrder.length >= 6, "enum order derived from migrations");
+
+  // The RULED table (Tucker 2026-08-26): everything above manager immune.
+  const EXPECTED_SWEEPABLE: Record<string, boolean> = {
+    system_admin: false,
+    regional_admin: false,
+    area_admin: false,
+    manager: true,
+    user: true,
+    unclassified: true,
+  };
+  assert.deepEqual(
+    [...enumOrder].sort(),
+    Object.keys(EXPECTED_SWEEPABLE).sort(),
+    "every epd_role value must carry an explicit sweepability case — a new enum value lands HERE first"
+  );
+
+  // The ordinal rule (078): r >= 'manager' in declaration order.
+  const managerIdx = enumOrder.indexOf("manager");
+  for (const value of enumOrder) {
+    assert.equal(
+      enumOrder.indexOf(value) >= managerIdx,
+      EXPECTED_SWEEPABLE[value],
+      `${value}: ordinal verdict must match the ruled table — if adding a value, its INSERT POSITION in the enum is the decision`
+    );
+  }
+
+  // And the live definition IS the ordinal form, not a list.
+  const sql078 = readFileSync(
+    join(migrationsDir, "078_sweepable_ordinal.sql"),
+    "utf8"
+  );
+  assert.match(sql078, /select r >= 'manager'::public\.epd_role/);
+});
+
+test("078: every deactivation path calls the gate — a rule enforced by a function is only enforced where the function is called", () => {
+  // The regional-admin incident: the function was right and the caller was
+  // somewhere else. Each app-side deactivation path must consult the SQL
+  // source of truth via RPC, never a TS re-list.
+  for (const p of [
+    "src/app/dashboard/employees/employee-status-actions.ts",
+    "src/app/dashboard/admin/departure-candidates/actions.ts",
+    "src/app/dashboard/admin/toast-crosswalk/actions.ts",
+    // The edit form's Active checkbox is a deactivation path too (Codex
+    // blocker on this branch).
+    "src/app/dashboard/employees/[id]/edit/actions.ts",
+  ]) {
+    assert.match(
+      readFileSync(join(process.cwd(), p), "utf8"),
+      /rpc\(\s*"role_is_sweepable"/,
+      `${p} must gate deactivation on role_is_sweepable`
+    );
+  }
 });
 
 test("077: unclassified is a roster state, never a grantable login role", () => {
