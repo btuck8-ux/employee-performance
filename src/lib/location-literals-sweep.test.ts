@@ -26,7 +26,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const LITERAL_RE =
-  /['"](CPD|COS|DTD|FCOL|FCCSU|HRANCH|HOU|LONGM|NOLA)['"]/;
+  /['"`](CPD|COS|DTD|FCOL|FCCSU|HRANCH|HOU|LONGM|NOLA)['"`]/;
 
 const ALLOWLIST = new Set([
   // Operator probe tool: ?deep_dive_code defaults to one store for CLI

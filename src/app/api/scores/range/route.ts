@@ -263,8 +263,20 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   // Known codes come from public.locations (the table owns this fact); the
-  // validator stays pure and receives them injected.
-  const knownCodes = await getLocationCodes();
+  // validator stays pure and receives them injected. A failed read returns
+  // the route's JSON error shape, never an unhandled 500 (Codex should-fix).
+  let knownCodes: string[];
+  try {
+    knownCodes = await getLocationCodes();
+  } catch (err) {
+    console.error("[range-feed] location codes read failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json(
+      { error: "Internal error resolving locations" },
+      { status: 500 }
+    );
+  }
   const validated = validateRangeParams(url.searchParams, knownCodes);
   if (!validated.ok) {
     return NextResponse.json({ error: validated.reason }, { status: 400 });

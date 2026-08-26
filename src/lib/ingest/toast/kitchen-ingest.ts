@@ -398,14 +398,46 @@ export async function runToastKitchenIngest(
 
   const outcomes: RunOutcome[] = [];
   for (const loc of runnable) {
-    const tz = storeTimezone(loc);
-    const dates = localDatesForPull(loc, tz, { from: options.from, to: options.to });
+    // Window derivation can now throw (a store with no locations.timezone
+    // refuses to guess). That failure must land as THIS store's error row
+    // in ingest_runs — never a loop-killing fatal that leaves no per-store
+    // evidence (Codex should-fix, LOCATION_CODES packet).
+    let dates: string[];
+    let windowStart = startedAt;
+    let windowEnd = startedAt;
+    try {
+      const tz = storeTimezone(loc);
+      dates = localDatesForPull(loc, tz, { from: options.from, to: options.to });
+      if (dates.length) {
+        windowStart = `${dates[0]}T00:00:00.000Z`;
+        windowEnd = `${dates[dates.length - 1]}T23:59:59.000Z`;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const runId = await startRun(supabase, "toast_kitchen", loc.id, startedAt, startedAt);
+      const outcome: RunOutcome = {
+        source: "toast_kitchen",
+        location_id: loc.id,
+        location_code: loc.location_code,
+        status: "error",
+        rows_in: 0,
+        rows_upserted: 0,
+        rows_skipped: 0,
+        detail: null,
+        error_text: message,
+        window_start: startedAt,
+        window_end: startedAt,
+      };
+      await finishRun(supabase, runId, outcome);
+      outcomes.push(outcome);
+      continue;
+    }
     const runId = await startRun(
       supabase,
       "toast_kitchen",
       loc.id,
-      dates.length ? `${dates[0]}T00:00:00.000Z` : startedAt,
-      dates.length ? `${dates[dates.length - 1]}T23:59:59.000Z` : startedAt
+      windowStart,
+      windowEnd
     );
     const outcome = await ingestToastKitchen(supabase, loc, dates);
     await finishRun(supabase, runId, outcome);
