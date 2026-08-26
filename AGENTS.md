@@ -83,6 +83,21 @@ derivable from the code alone.
 
 ## Scoring
 
+- **The demarcation floor (mig 066, 2026-08-26 ruling):**
+  `locations.metrics_start_date` — labor-derived metrics are computed only
+  from entry dates >= the store's own Toast go-live. A FLOOR, not a delete:
+  no source row was removed. NULL = no floor (NOLA — deliberate; never read
+  null as epoch/today). It gates scoring + UI (custom ranges clamp with the
+  clamp DISCLOSED; a range ending below the floor is not-answerable, never
+  empty) — but **NEVER the outbound feeds**: /api/scores serves stored
+  history unchanged because THQ's frozen-quarter fingerprints (Q3 2025 =
+  160 rows, Q4 2025 = 178) live below every floor. The TS guard is
+  `computeMetricsFromEntries`'s `metricsStartFloor` (the scoredThrough
+  cap's mirror); the SQL twins clamp inside
+  `compute_employee_tip_metrics` / `recompute_team_tip_impact`. Store-wide
+  tip baselines exclude GMs (mig 067 — the one ruled exception to "GM flag
+  is never a metric input"; per-employee paths still never read it).
+  Shifts >16h are FLAGGED in run detail, never capped.
 - **Scoring math exists TWICE** — TS (`customer-service-score.ts`,
   `total-impact-score.ts`, kitchen/tip logic in
   `performance-recompute.ts`) and SQL (migrations 023/025/026/043). Keep

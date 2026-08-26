@@ -158,3 +158,43 @@ test("v_employee_scores_latest: DISTINCT ON latest-period semantics survive", ()
   assert.match(stmt, /distinct on \(employee_code, location_code\)/i);
   assert.match(stmt, /order by employee_code, location_code, period_start desc/i);
 });
+
+// ---------------------------------------------------------------------------
+// §1d (demarcation packet 2026-08-26): THE FEED IS DELIBERATELY NOT GATED
+// by the metrics_start_date floor. Training HQ holds value-only fingerprints
+// on the frozen quarters — Q3 2025 = 160 rows / Q4 2025 = 178 — and both
+// quarters sit entirely below every store's floor. Gating the feed would
+// delete both fingerprints overnight and void the frozen-quarter
+// arrangement; gating only scoring + UI leaves those rows stored and
+// served. This is the whole reason the floor was chosen over a delete.
+// The live counterpart of this pin: after any floor-adjacent deploy, assert
+// /api/scores serves exactly 160 Q3-2025 and 178 Q4-2025 rows.
+// ---------------------------------------------------------------------------
+
+test("§1d: the demarcation floor never leaks into the scores feed — route and views are floor-blind", () => {
+  const routeSrc = readFileSync(
+    join(process.cwd(), "src/app/api/scores/route.ts"),
+    "utf8"
+  );
+  const rangeRouteSrc = readFileSync(
+    join(process.cwd(), "src/app/api/scores/range/route.ts"),
+    "utf8"
+  );
+  for (const [name, src] of [
+    ["scores route", routeSrc],
+    ["scores/range route", rangeRouteSrc],
+    ["scores views migration", sql],
+  ] as const) {
+    assert.ok(
+      !src.includes("metrics_start"),
+      `${name} must not reference the floor — feeds serve stored history unchanged`
+    );
+  }
+  // The range feed computes live through computeMetricsForRange (whose
+  // labor window self-clamps) but its 18-field wire must not grow the
+  // disclosure fields without THQ coordination.
+  assert.ok(
+    !rangeRouteSrc.includes("labor_window"),
+    "labor_window_* are internal fields — a wire addition is a cross-project contract change"
+  );
+});

@@ -41,10 +41,14 @@ export default async function DashboardHome({
   const supabase = await createClient();
 
   // RLS trims locations to the session's purview (SA = all 8); the store
-  // toggle below only narrows WITHIN that purview.
+  // toggle below only narrows WITHIN that purview. metrics_start_date is
+  // the demarcation floor (mig 066) — read for DISCLOSURE here; the metric
+  // math clamps inside the range engine itself.
   const { data: locationRows } = await supabase
     .from("locations")
-    .select("id, name, location_code, active, last_data_uploaded_at")
+    .select(
+      "id, name, location_code, active, last_data_uploaded_at, metrics_start_date"
+    )
     .order("location_code");
   const allStores = (locationRows ?? [])
     .filter((l) => l.location_code)
@@ -54,6 +58,7 @@ export default async function DashboardHome({
       location_code: l.location_code as string,
       active: l.active as boolean | null,
       last_data_uploaded_at: l.last_data_uploaded_at as string | null,
+      metrics_start_date: (l.metrics_start_date as string | null) ?? null,
     }));
 
   // ---- Scope: ?stores=CPD,COS (default all in purview) ----
@@ -79,30 +84,72 @@ export default async function DashboardHome({
     period_end: p.period_end as string,
   }));
   const today = new Date().toISOString().slice(0, 10);
-  const currentQuarter =
-    quarters.find((q) => q.period_start <= today && today <= q.period_end) ??
-    quarters[0] ??
-    null;
 
   const fromParam = pickStr(search.from);
   const toParam = pickStr(search.to);
-  const rangeMode =
+  const customRangeMode =
     isValidIsoDate(fromParam) && isValidIsoDate(toParam) && fromParam <= toParam;
   const quarterParam = pickStr(search.quarter);
-  const selectedQuarter = rangeMode
+  const selectedQuarter = customRangeMode
     ? null
-    : (quarters.find((q) => q.id === quarterParam) ?? currentQuarter);
+    : (quarters.find((q) => q.id === quarterParam) ?? null);
+
+  // WEEKLY PRIMARY (demarcation packet 2026-08-26 §2): no explicit period =
+  // this ISO week to date. Quarter and custom range stay available.
+  const todayDate = new Date(`${today}T12:00:00Z`);
+  const isoDow = (todayDate.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+  const weekMonday = new Date(todayDate);
+  weekMonday.setUTCDate(weekMonday.getUTCDate() - isoDow);
+  const weekStart = weekMonday.toISOString().slice(0, 10);
 
   // ---- Metric grid ----
   let grid: OverviewMetricsResult | null = null;
   let periodLabel = "";
-  if (rangeMode) {
+  let periodStart = "";
+  let periodEnd = "";
+  if (customRangeMode) {
     grid = await computeRangeOverview(supabase, effectiveStores, fromParam, toParam);
     periodLabel = `${fromParam} → ${toParam}`;
+    periodStart = fromParam;
+    periodEnd = toParam;
   } else if (selectedQuarter) {
     grid = await computeQuarterOverview(supabase, effectiveStores, selectedQuarter.id);
     periodLabel = selectedQuarter.label;
+    periodStart = selectedQuarter.period_start;
+    periodEnd = selectedQuarter.period_end;
+  } else {
+    grid = await computeRangeOverview(supabase, effectiveStores, weekStart, today);
+    periodLabel = `This week (${weekStart} → ${today})`;
+    periodStart = weekStart;
+    periodEnd = today;
   }
+
+  // ---- Demarcation-floor disclosure (§2/§2a) — the asterisk is a
+  // first-class field. Per store: clamped (range starts below the floor —
+  // labor metrics scored from the floor forward) vs not answerable (range
+  // ENDS below the floor — labor cells are not an empty result, they are
+  // outside the measured window). Ragged start: when effective labor
+  // windows differ across the selected stores, the rollup is not
+  // like-for-like and says so (HOU floors 04-30, Colorado in July; every
+  // store has a full common quarter from 2026-10-01).
+  const floorByStore = new Map(
+    effectiveStores.map((s) => [s.id, s.metrics_start_date])
+  );
+  const storeFloorNote = (locationId: string): string | null => {
+    const floor = floorByStore.get(locationId) ?? null;
+    if (!floor || !periodStart || floor <= periodStart) return null;
+    if (floor > periodEnd) {
+      return `labor metrics not answerable — data begins ${floor} (Toast go-live)`;
+    }
+    return `labor data begins ${floor} (Toast go-live)`;
+  };
+  const effectiveLaborStarts = new Set(
+    effectiveStores.map((s) => {
+      const floor = s.metrics_start_date;
+      return floor && periodStart && floor > periodStart ? floor : periodStart;
+    })
+  );
+  const rollupNotLikeForLike = effectiveLaborStarts.size > 1;
 
   // ---- KPI tiles + stale locations, scoped to the toggled stores ----
   const scopedIds = effectiveStores.map((s) => s.id);
@@ -159,8 +206,8 @@ export default async function DashboardHome({
           selectedCodes={effectiveStores.map((s) => s.location_code)}
           quarters={quarters.map((q) => ({ id: q.id, label: q.label }))}
           selectedQuarterId={selectedQuarter?.id ?? null}
-          rangeFrom={rangeMode ? fromParam : null}
-          rangeTo={rangeMode ? toParam : null}
+          rangeFrom={customRangeMode ? fromParam : null}
+          rangeTo={customRangeMode ? toParam : null}
         />
       </div>
 
@@ -195,25 +242,40 @@ export default async function DashboardHome({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {grid.stores.map((row) => (
-                    <tr key={row.location_id}>
-                      <td className="py-2.5 pr-4">
-                        <span className="font-medium">{row.name}</span>
-                        {row.location_code && (
-                          <span className="text-xs text-slate-400 ml-1.5">
-                            {row.location_code}
-                          </span>
-                        )}
-                      </td>
-                      {renderCells(row.cells)}
-                    </tr>
-                  ))}
+                  {grid.stores.map((row) => {
+                    const floorNote = storeFloorNote(row.location_id);
+                    return (
+                      <tr key={row.location_id}>
+                        <td className="py-2.5 pr-4">
+                          <span className="font-medium">{row.name}</span>
+                          {row.location_code && (
+                            <span className="text-xs text-slate-400 ml-1.5">
+                              {row.location_code}
+                            </span>
+                          )}
+                          {floorNote && (
+                            <span className="block text-[11px] text-amber-700">
+                              {floorNote}
+                            </span>
+                          )}
+                        </td>
+                        {renderCells(row.cells)}
+                      </tr>
+                    );
+                  })}
                   <tr className="border-t-2 border-slate-200 bg-slate-50/60">
                     <td className="py-2.5 pr-4 font-semibold">
                       All selected stores
                       <span className="text-xs text-slate-400 ml-1.5 font-normal">
                         {grid.rollupEmployeeCount} records
                       </span>
+                      {rollupNotLikeForLike && (
+                        <span className="block text-[11px] text-amber-700 font-normal">
+                          ⚠ effective labor windows differ across these stores
+                          (Toast go-lives are staggered) — labor cells in this
+                          rollup are not like-for-like before 2026-10-01
+                        </span>
+                      )}
                     </td>
                     {renderCells(grid.rollup)}
                   </tr>

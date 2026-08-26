@@ -411,6 +411,14 @@ export interface LaborLocationDetail {
   skipped_no_guid: number;
   skipped_no_date: number;
   skipped_no_in: number;
+  /** §3 (demarcation packet 2026-08-26): punches whose regular+OT hours
+   * exceed 16 — flagged, never capped; written faithfully. */
+  punches_over_16h: number;
+  punches_over_16h_sample: Array<{
+    toast_time_entry_guid: string;
+    entry_date: string;
+    hours: number;
+  }>;
 }
 
 /**
@@ -457,6 +465,16 @@ export async function ingestToastLaborForLocation(
     untilDate
   );
   const classified = classifyPunches(entries, loc.id, existing, nowIso);
+  // §3 (demarcation packet 2026-08-26): flag >16h punches at read time.
+  const over16h = classified.rows
+    .map((r) => ({
+      toast_time_entry_guid: r.toast_time_entry_guid,
+      entry_date: r.entry_date,
+      hours:
+        Math.round(((r.regular_hours ?? 0) + (r.overtime_hours ?? 0)) * 100) /
+        100,
+    }))
+    .filter((r) => r.hours > 16);
   let upserted = 0;
   const UPSERT_BATCH = 500;
   for (let i = 0; i < classified.rows.length; i += UPSERT_BATCH) {
@@ -648,6 +666,11 @@ export async function ingestToastLaborForLocation(
     skipped_no_guid: classified.skippedNoGuid,
     skipped_no_date: classified.skippedNoDate,
     skipped_no_in: classified.skippedNoIn,
+    // §3 (2026-08-26): >16h single-punch totals — the never-clocked-out /
+    // phantom-hours class. Flag, never cap; the rows above were written
+    // faithfully and the flag is what tells a manager to fix the punch.
+    punches_over_16h: over16h.length,
+    punches_over_16h_sample: over16h.slice(0, 20),
   };
 }
 

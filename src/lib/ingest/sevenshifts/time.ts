@@ -92,7 +92,19 @@ export interface CollapseOutcome {
   skippedDeleted: number;
   /** Days where one person punched under more than one role. */
   multiRoleDays: number;
+  /**
+   * §3 (demarcation packet 2026-08-26): collapsed days whose worked hours
+   * exceed 16 — the never-clocked-out signature (276 rows / 4,173 phantom
+   * hours estate-wide, 94% GM/Manager, clock-out one minute before
+   * clock-in). FLAG, NEVER CAP: a silent cap hides an operational problem
+   * the floor should fix — the flag is what tells a manager to correct
+   * their punch. The rows are still written faithfully.
+   */
+  over16hDays: Array<{ employee_id: string; entry_date: string; hours: number }>;
 }
+
+/** §3: single-day worked hours above this are flagged (regardless of role). */
+export const SHIFT_HOURS_FLAG_THRESHOLD = 16;
 
 /**
  * Collapse raw punches to one entry per (employee, local business date) —
@@ -202,12 +214,21 @@ export function collapsePunches(
     entry.role_id = bestId;
   }
 
+  const over16hDays = Array.from(collapsed.values())
+    .filter((e) => e.hours > SHIFT_HOURS_FLAG_THRESHOLD)
+    .map((e) => ({
+      employee_id: e.employee_id,
+      entry_date: e.entry_date,
+      hours: Math.round(e.hours * 100) / 100,
+    }));
+
   return {
     entries: Array.from(collapsed.values()),
     unmatchedUserIds: Array.from(unmatchedUserIds),
     skippedOpen,
     skippedDeleted,
     multiRoleDays,
+    over16hDays,
   };
 }
 
@@ -409,6 +430,10 @@ export async function ingestTimePunches(
       skipped_deleted: collapse.skippedDeleted,
       unmatched_seven_shifts_user_ids: collapse.unmatchedUserIds,
       multi_role_days: collapse.multiRoleDays,
+      // §3 flag (2026-08-26): >16h single-day totals — written faithfully,
+      // flagged loudly, never capped.
+      shifts_over_16h: collapse.over16hDays.length,
+      shifts_over_16h_sample: collapse.over16hDays.slice(0, 20),
       unmapped_role_ids: Array.from(unmappedRoleIds),
       ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
@@ -428,6 +453,11 @@ export async function ingestTimePunches(
     }
     if (rolesLookupError) {
       problems.push("roles lookup failed — role column left untouched this run");
+    }
+    if (collapse.over16hDays.length > 0) {
+      problems.push(
+        `${collapse.over16hDays.length} day(s) exceed 16 worked hours (never-clocked-out signature) — written faithfully, see detail; the punch needs correcting upstream`
+      );
     }
     if (rc.failures.length > 0) {
       problems.push(`${rc.failures.length} recompute failure(s); see detail`);

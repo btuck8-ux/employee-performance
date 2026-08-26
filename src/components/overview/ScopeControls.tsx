@@ -8,10 +8,17 @@ import { Button } from "@/components/ui/button";
 
 /**
  * Overview scope controls (kickoff §5a + Tucker's §8-E override): store
- * multi-select (radix dialog with checkboxes + all/none), quarter picker
+ * multi-select (radix dialog with checkboxes + all/none), period picker
  * (radix select), and a custom date-range mode. Selection persists in the
  * URL (?stores=CPD,COS&quarter=…  or  ?from=…&to=…) — shareable, no
  * localStorage, server-component-friendly.
+ *
+ * WEEKLY PRIMARY (demarcation packet 2026-08-26 §2, Tucker's ruling):
+ * "This week" is the default period — no period params in the URL means
+ * the current ISO week to date. Quarterly stays available (it grows more
+ * useful each quarter as post-floor data accrues); custom ranges remain
+ * the most important horizon and are clamped to each store's demarcation
+ * floor server-side, with the clamp disclosed, never silent.
  */
 
 export interface StoreOption {
@@ -164,9 +171,11 @@ export function ScopeControls({
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* ---- Quarter picker ---- */}
+      {/* ---- Period picker: This week (default) | quarters | custom ---- */}
       <Select.Root
-        value={isRangeMode ? "__custom" : (selectedQuarterId ?? "")}
+        value={
+          isRangeMode ? "__custom" : (selectedQuarterId ?? "__week")
+        }
         onValueChange={(value) => {
           if (value === "__custom") {
             const today = new Date().toISOString().slice(0, 10);
@@ -176,13 +185,16 @@ export function ScopeControls({
             setDraftFrom(from);
             setDraftTo(today);
             push({ from, to: today });
+          } else if (value === "__week") {
+            // The default: no period params = this week to date.
+            push({ quarterId: null, from: null, to: null });
           } else {
             push({ quarterId: value, from: null, to: null });
           }
         }}
       >
         <Select.Trigger className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm hover:bg-slate-50">
-          <Select.Value placeholder="Quarter" />
+          <Select.Value placeholder="Period" />
           <Select.Icon>
             <ChevronDown className="h-3.5 w-3.5" />
           </Select.Icon>
@@ -194,6 +206,15 @@ export function ScopeControls({
             className="z-50 min-w-40 rounded-md border border-slate-200 bg-white p-1 shadow-md"
           >
             <Select.Viewport>
+              <Select.Item
+                value="__week"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-slate-100"
+              >
+                <Select.ItemText>This week</Select.ItemText>
+                <Select.ItemIndicator>
+                  <Check className="h-3.5 w-3.5 text-ikes-purple" />
+                </Select.ItemIndicator>
+              </Select.Item>
               {quarters.map((q) => (
                 <Select.Item
                   key={q.id}
