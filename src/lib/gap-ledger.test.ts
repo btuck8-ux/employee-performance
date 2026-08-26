@@ -22,7 +22,10 @@ import { join } from "node:path";
 
 const {
   seedVerdictForGapDay,
+  finalizeSeedVerdict,
   isConvictingStatus,
+  EXPORT_RECONCILED_STORES,
+  NO_PUNCH_RECORDED_EVIDENCE,
   SEED_EVIDENCE,
   TAGGART_SEVEN_SHIFTS_USER_ID,
 } = await import("./gap-ledger.ts");
@@ -148,6 +151,89 @@ test("§3e: late/none convicts; no_show does NOT acquit; null/junk is nothing", 
   assert.equal(isConvictingStatus("attended"), false);
 });
 
+// ---------------------------------------------------------------------------
+// §0a / §10 step 2 — the fifth verdict (post-export revision).
+// ---------------------------------------------------------------------------
+
+test("§0a: a blind day at an export-reconciled store is TERMINAL — no_punch_recorded_anywhere", () => {
+  // Chazz Limon's shape at DTD: zero punches ever, and the DTD export
+  // reconciles to the row (§0a-v) — 7shifts itself never recorded a punch.
+  const ruled = seedVerdictForGapDay({
+    gapDate: "2026-05-14",
+    firstPunchEver: null,
+    lastPunchEver: null,
+    attendedSignal: null,
+  });
+  const final = finalizeSeedVerdict(ruled, "DTD");
+  assert.equal(final.verdict, "no_punch_recorded_anywhere");
+  assert.equal(final.evidence, NO_PUNCH_RECORDED_EVIDENCE);
+});
+
+test("§0a-0 REACH: a blind day at a store where the export is SHORT stays still_unknown", () => {
+  // LONGM's export is short by 132 rows — a source that cannot account for
+  // its own completeness cannot support a conclusion about absence (§9).
+  const ruled = seedVerdictForGapDay({
+    gapDate: "2026-04-20",
+    firstPunchEver: "2026-06-23",
+    lastPunchEver: "2026-08-20",
+    attendedSignal: null,
+  });
+  assert.equal(ruled.reason, "blind");
+  for (const store of ["FCOL", "LONGM", "NOLA", "HOU"]) {
+    const final = finalizeSeedVerdict(ruled, store);
+    assert.equal(final.verdict, "still_unknown", `${store} must withhold`);
+    assert.equal(final.evidence, SEED_EVIDENCE.blind);
+  }
+});
+
+test("§3e-i still outranks the export: a late/none conviction at a reconciled store stays still_unknown", () => {
+  // 7shifts' shift flag says attended; 7shifts' own hours report has no
+  // punch. That is a live contradiction to investigate, not a terminal
+  // never-recorded — the signal wins, as it wins over every shape rule.
+  const ruled = seedVerdictForGapDay({
+    gapDate: "2026-05-14",
+    firstPunchEver: null,
+    lastPunchEver: null,
+    attendedSignal: "late_none",
+  });
+  const final = finalizeSeedVerdict(ruled, "HRANCH");
+  assert.equal(final.verdict, "still_unknown");
+  assert.equal(final.evidence, SEED_EVIDENCE.late_none_conviction);
+});
+
+test("the export re-verdict touches ONLY blind days — sighted and departure shapes pass through", () => {
+  const sighted = finalizeSeedVerdict(
+    seedVerdictForGapDay({
+      gapDate: "2026-04-15",
+      firstPunchEver: "2025-06-08",
+      lastPunchEver: "2026-08-20",
+      attendedSignal: null,
+    }),
+    "COS"
+  );
+  assert.equal(sighted.verdict, "confirmed_absent");
+  const departed = finalizeSeedVerdict(
+    seedVerdictForGapDay({
+      gapDate: "2026-06-25",
+      firstPunchEver: "2026-01-10",
+      lastPunchEver: "2026-06-19",
+      attendedSignal: null,
+    }),
+    "COS"
+  );
+  assert.equal(departed.verdict, "scheduled_after_departure");
+});
+
+test("§0a-0: the reconciled-store set is exactly HRANCH/COS/DTD/CPD", () => {
+  assert.deepEqual(
+    [...EXPORT_RECONCILED_STORES].sort(),
+    ["COS", "CPD", "DTD", "HRANCH"]
+  );
+  for (const short of ["FCOL", "LONGM", "NOLA", "HOU"]) {
+    assert.equal(EXPORT_RECONCILED_STORES.has(short), false);
+  }
+});
+
 test("evidence strings: never bare rule names — each cites its section and its caveat", () => {
   assert.match(SEED_EVIDENCE.late_none_conviction, /§3e-i/);
   assert.match(SEED_EVIDENCE.discarded_punch, /§5b-i/);
@@ -164,6 +250,9 @@ test("evidence strings: never bare rule names — each cites its section and its
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 const migrationSrc = read("supabase/migrations/064_q2_gap_ledger.sql");
+const mig065Src = read(
+  "supabase/migrations/065_q2_gap_ledger_fifth_verdict.sql"
+);
 const ledgerRouteSrc = read("src/app/api/admin/q2-gap-ledger/route.ts");
 const departureSrc = read("src/app/api/admin/departure-candidates/route.ts");
 const probeSrc = read("src/app/api/admin/probe-7shifts-punches/route.ts");
@@ -171,7 +260,7 @@ const shiftsSrc = read("src/lib/ingest/sevenshifts/shifts.ts");
 const shiftsRouteSrc = read("src/app/api/admin/backfill-shifts-window/route.ts");
 const timeSrc = read("src/lib/ingest/sevenshifts/time.ts");
 
-test("mig 064: exactly the four §5b verdicts, unique per (employee, gap_date), SA-only RLS", () => {
+test("mig 064: the four §5b seed verdicts, unique per (employee, gap_date), SA-only RLS", () => {
   for (const v of [
     "punch_recovered",
     "confirmed_absent",
@@ -183,6 +272,23 @@ test("mig 064: exactly the four §5b verdicts, unique per (employee, gap_date), 
   assert.match(migrationSrc, /unique \(employee_id, gap_date\)/);
   assert.match(migrationSrc, /enable row level security/);
   assert.match(migrationSrc, /epd_is_system_admin/);
+});
+
+test("mig 065: widens the SAME named constraint to carry the fifth verdict — all five values, nothing dropped", () => {
+  assert.match(mig065Src, /drop constraint q2_gap_ledger_verdict_check/);
+  assert.match(mig065Src, /add constraint q2_gap_ledger_verdict_check/);
+  for (const v of [
+    "punch_recovered",
+    "confirmed_absent",
+    "scheduled_after_departure",
+    "still_unknown",
+    "no_punch_recorded_anywhere",
+  ]) {
+    assert.match(mig065Src, new RegExp(v), `widened constraint carries ${v}`);
+  }
+  // The reach limit travels with the migration: proof only where the
+  // export reconciles (§0a-0).
+  assert.match(mig065Src, /§0a-0/);
 });
 
 test("ledger route: dry-run default, insert-only re-seed, and the §0 trap held out", () => {

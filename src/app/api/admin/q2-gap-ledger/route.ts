@@ -4,9 +4,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchEffectiveEntries, fetchLocationFlipMeta } from "@/lib/flip-entries";
 import {
   DISCARDED_PUNCH_SIGNAL,
+  EXPORT_RECONCILED_STORES,
+  finalizeSeedVerdict,
   isConvictingStatus,
   LATE_NONE_SIGNAL,
-  SEED_EVIDENCE,
   seedVerdictForGapDay,
   SIGNAL_CONTRADICTION_SUFFIX,
   TAGGART_EVIDENCE,
@@ -22,8 +23,11 @@ import {
  * THE DELIVERABLE IS THE LEDGER, not a backfill: one row per Q2 gap day
  * (scheduled day, no punch from either punch source), each with exactly one
  * verdict — punch_recovered / confirmed_absent / scheduled_after_departure /
- * still_unknown. Q2 is recomputed once, when still_unknown is a number
- * Tucker has seen and accepted (§7). Nothing publishes before that.
+ * still_unknown / no_punch_recorded_anywhere (§0a, mig 065: the export
+ * proved the blind days were never recorded by anyone; terminal where the
+ * export reconciles, per-store reach in gap-ledger.ts). Q2 is recomputed
+ * once, when still_unknown is a number Tucker has seen and accepted (§7).
+ * Nothing publishes before that.
  *
  * MODES:
  *   (default)       report — read q2_gap_ledger and count verdicts/signals
@@ -351,15 +355,21 @@ export async function GET(request: Request) {
             lastPunchEver: bounds.last,
             attendedSignal,
           });
+          // §0a / §10 step 2: blind days at export-reconciled stores take
+          // the terminal fifth verdict — the export proved the punch was
+          // never recorded by anyone. Reach is store-limited per §0a-0.
+          const finalized = finalizeSeedVerdict(ruled, loc.location_code);
           const isTaggart =
             emp.seven_shifts_user_id === TAGGART_SEVEN_SHIFTS_USER_ID;
           // Human confirmation outranks even the signals — but a
           // contradiction is RECORDED, never silently resolved.
-          const verdict: GapVerdict = isTaggart ? "confirmed_absent" : ruled.verdict;
+          const verdict: GapVerdict = isTaggart
+            ? "confirmed_absent"
+            : finalized.verdict;
           const evidence = isTaggart
             ? TAGGART_EVIDENCE +
               (attendedSignal !== null ? SIGNAL_CONTRADICTION_SUFFIX : "")
-            : SEED_EVIDENCE[ruled.reason];
+            : finalized.evidence;
           seeds.push({
             employee_id: emp.id,
             employee_code: emp.employee_code,
@@ -402,19 +412,32 @@ export async function GET(request: Request) {
           (s) => s.signal === DISCARDED_PUNCH_SIGNAL
         ).length,
       },
-      // The spec's measured shape (§5b-i / §10 — 463, not the retracted
-      // 458), for reconciliation at a glance. The 12 late/none and 5
-      // cutover-discard days seed still_unknown with evidence attached, so
-      // computed still_unknown reads HIGHER and confirmed_absent LOWER
-      // than the pure shape-rule split — that drift is the §3e-i fix
-      // working. Drift is also expected once backfills land; a large
-      // unexplained drift BEFORE any backfill is a computation question.
-      spec_expectation: {
-        total: 463,
-        still_unknown: 230,
-        confirmed_absent: 210,
-        scheduled_after_departure: 23,
-        note: "§10 shape-rule figures; the signal days (11 sighted + 1 already-blind late/none, + 5 discarded-punch) shift the computed split toward still_unknown per §3e-i / §5b-i",
+      // §10 step 1 — RESOLVED 2026-08-25. The spec's 463/23 (raw flip-aware:
+      // time_entries scheduled minus v_worked_intervals) and this route's
+      // 423/8 differ by exactly two known flip behaviors, attributed at the
+      // (employee, day) level: 49 June days DROPPED because the pruned
+      // direct feed is authoritative on covered days and holds no shift —
+      // the deletion-artifact class, including 15 post-departure ghost
+      // schedules (Leia Parker 6, Joshua Bernauer Beg 3, Connor Barrow 3…)
+      // that 7shifts deleted upstream; and 9 June days ADDED where the
+      // direct feed carries a schedule time_entries never received (Tavian
+      // Jones 5, Evan Becker 3, Nick Miller 1). 463 − 49 + 9 = 423. The
+      // decisive test: this route's computation reproduces ALL 119 stored
+      // Q2 attendance_pct values exactly (0 mismatches) — the raw
+      // measurement does not. The ledger's contract is reconciliation with
+      // the published metric by construction (§5b-i), so 423 is the ledger
+      // population; the 49 are not gap days in anything scoring publishes.
+      reconciliation: {
+        resolved: "2026-08-25 (§10 step 1)",
+        route: { gap_days: 423, scheduled_after_departure: 8 },
+        raw_flip_aware: { gap_days: 463, scheduled_after_departure: 23 },
+        attendance_pct_reproduced: "119/119 exactly, raw reproduces fewer",
+        note: "49 flip-dropped June deletion-artifact days (15 of them post-departure ghosts) − 9 direct-feed-only schedule days = the 40-day delta",
+      },
+      export_reverdict: {
+        applied_stores: [...EXPORT_RECONCILED_STORES],
+        withheld_stores: ["FCOL", "LONGM", "NOLA", "HOU"],
+        note: "§0a-0: blind days take no_punch_recorded_anywhere only where the export reconciles exactly; elsewhere they stay still_unknown pending a re-export. §10 step 2 as written moves all blind days — the narrower reach is a flagged Tucker decision, not a silent resolution.",
       },
     };
 

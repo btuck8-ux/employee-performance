@@ -60,7 +60,8 @@ export type GapVerdict =
   | "punch_recovered"
   | "confirmed_absent"
   | "scheduled_after_departure"
-  | "still_unknown";
+  | "still_unknown"
+  | "no_punch_recorded_anywhere";
 
 /** An attended signal: positive evidence the person worked that day, from
  * a source the scoring path does not read (§3e-i / §5b-i). */
@@ -160,4 +161,68 @@ export const SIGNAL_CONTRADICTION_SUFFIX =
 
 export function isConvictingStatus(status: string | null | undefined): boolean {
   return status === "late" || status === "none";
+}
+
+/**
+ * §0a / §10 step 2 — THE FIFTH VERDICT (spec REVISED 2, post-export).
+ *
+ * Tucker's export of 7shifts' own "Hours and Wages Summary" (2026-01-01 →
+ * 2026-09-03, all locations, 10,097 punch rows) settled the blind bucket's
+ * central question: the blind days are not un-fetched punches — 7shifts has
+ * no record of them either. Those days are TERMINAL, not a hunt:
+ * no_punch_recorded_anywhere. What they mean (no-shows? scheduled before a
+ * start date? a store not enforcing clock-in?) is a floor question, not a
+ * data question.
+ *
+ * ⚠️ HOW FAR THE PROOF REACHES (§0a-0): the export is NOT complete at every
+ * store, and a source that cannot account for its own completeness cannot
+ * support a conclusion about absence (§9). The export reconciles with EPD's
+ * punch person-days EXACTLY at HRANCH, COS and CPD, and at DTD to the row
+ * once Jesse Cooper's 6 discarded-identity days are counted (§0a-v) — at
+ * those stores, absence from the export IS proof of never-recorded. At
+ * FCOL, LONGM, NOLA and HOU the export is SHORT (by 33/132/133/30 rows), so
+ * absence there proves nothing and blind days stay still_unknown pending a
+ * re-export.
+ *
+ * §10 step 2 as written moves ALL blind days; §0a-0's own rule limits the
+ * evidence to the reconciled stores. The code implements the §0a-0 reach —
+ * the narrower, defensible claim — and the difference is flagged to Tucker
+ * as a decision point, not silently resolved.
+ *
+ * Precedence: only a day the BLIND rule produced can take this verdict. The
+ * attended signals (§3e-i) still outrank everything — a late/none conviction
+ * at a reconciled store is a live CONTRADICTION between 7shifts' shift flag
+ * and 7shifts' own hours report, and stays still_unknown with the signal.
+ */
+export const EXPORT_RECONCILED_STORES: ReadonlySet<string> = new Set([
+  "HRANCH",
+  "COS",
+  "DTD",
+  "CPD",
+]);
+
+export const NO_PUNCH_RECORDED_EVIDENCE =
+  "§0a: 7shifts' own Hours & Wages export (2026-01-01→2026-09-03, all " +
+  "locations, 10,097 punch rows) holds no punch for this person-day, and at " +
+  "this store the export reconciles with EPD's punch person-days exactly " +
+  "(§0a-0) — the punch was never recorded by anyone. Terminal: a floor " +
+  "question (no-show / scheduled before start / clock-in not enforced), " +
+  "not a data hunt";
+
+/**
+ * Seed-time finalization: applies the §0a export re-verdict to what the
+ * shape rules produced. Pure — the route passes the store code; everything
+ * else is the ruled verdict itself.
+ */
+export function finalizeSeedVerdict(
+  ruled: SeedVerdict,
+  locationCode: string
+): { verdict: GapVerdict; evidence: string } {
+  if (ruled.reason === "blind" && EXPORT_RECONCILED_STORES.has(locationCode)) {
+    return {
+      verdict: "no_punch_recorded_anywhere",
+      evidence: NO_PUNCH_RECORDED_EVIDENCE,
+    };
+  }
+  return { verdict: ruled.verdict, evidence: SEED_EVIDENCE[ruled.reason] };
 }
