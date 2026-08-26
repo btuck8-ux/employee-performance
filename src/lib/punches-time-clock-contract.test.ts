@@ -102,6 +102,12 @@ test("structural sweep: every src file touching the column is on the allowlist",
     // the /api/identity wire (column 9, mig 068's §1h append) — reads the
     // name only, never the value.
     "src/lib/identity-feed-contract.test.ts",
+    // Range-feed wire shaping (THQ wire item 2, packet 5 §7.3): documents
+    // ruling 8's null-never-0 count mapping. Reads the exclusion ONLY via
+    // RangeMetrics.attendance_denominator_excluded (threaded through
+    // punchesTimeClockForPeriod in performance-recompute) — never the
+    // column itself.
+    "src/lib/range-feed.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

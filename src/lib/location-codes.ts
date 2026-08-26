@@ -46,6 +46,34 @@ export async function isKnownLocationCode(code: string): Promise<boolean> {
   return (await getLocationCodes()).includes(code);
 }
 
+/**
+ * Store floors for the feed envelopes (THQ wire item 3, packet 5 §7.3):
+ * location_code -> metrics_start_date (data_start_date on the wire). A
+ * floor is a property of a STORE — putting it only on rows means every
+ * Houston employee carries an identical copy of a fact Houston owns, and a
+ * store-scoped envelope field survives a zero-row response. `codes` scopes
+ * to the request's stores; omitted/empty = the whole estate.
+ *
+ * THQ DECLINED a second envelope field for correction coverage — Houston's
+ * 32-day blend and NOLA-being-CAKE live in the contract note, not on the
+ * wire. Do not add envelope fields here without the same cross-project
+ * coordination as the row shape.
+ */
+export async function fetchLocationFloors(
+  codes?: string[]
+): Promise<Record<string, string | null>> {
+  const supabase = createAdminClient();
+  let q = supabase.from("locations").select("location_code, metrics_start_date");
+  if (codes && codes.length > 0) q = q.in("location_code", codes);
+  const { data, error } = await q.order("location_code");
+  if (error) throw new Error(`location floors read: ${error.message}`);
+  const out: Record<string, string | null> = {};
+  for (const r of data ?? []) {
+    out[String(r.location_code)] = (r.metrics_start_date as string | null) ?? null;
+  }
+  return out;
+}
+
 /** Test hook: drop the cache so a test can observe a fresh read. */
 export function __clearLocationCodesCache(): void {
   cache = null;

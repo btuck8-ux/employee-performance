@@ -6,9 +6,10 @@
  * UTC, Training HQ 11:15 UTC) parse it in production. These tests pin the
  * contract at its source — the latest view-replacing migration (070):
  *
- *   (a) 28 columns in locked order: the original 11, the 9 metrics (mig 045),
+ *   (a) 30 columns in locked order: the original 11, the 9 metrics (mig 045),
  *       the 6 per-metric counts (mig 048), the 2 effective-window fields
- *       (mig 069, §2b — THQ contract) — always appended, never reordered;
+ *       (mig 069, §2b — THQ contract), the 2 attendance counts (mig 083,
+ *       THQ wire item 1, packet 5 §7.3) — always appended, never reordered;
  *   (b) every metric and count is a straight `pr.<col> as <col>` pass-through
  *       — no coalesce/nullif, so SQL null (not-computed) reaches the wire as
  *       JSON null, never 0 (317 real surveys_completed=0 rows depend on the
@@ -26,7 +27,7 @@ import { join } from "node:path";
 
 const MIGRATION_FILE = join(
   process.cwd(),
-  "supabase/migrations/070_effective_window_frozen_derivation.sql"
+  "supabase/migrations/083_scores_feed_scheduled_attended_counts.sql"
 );
 
 /** The 11 columns both live consumers already parse — order matters. */
@@ -71,6 +72,12 @@ const COUNTS_6 = [
  * appended, present on EVERY row — absence is never the encoding for "no
  * clamp applied". data_start_date null = no floor (NOLA), never epoch/today. */
 const WINDOW_2 = ["data_start_date", "effective_period_start"];
+
+/** The 2 attendance counts (mig 083, THQ wire item 1, packet 5 §7.3): 28 →
+ * 30, appended. "0 of 5 is a fact" — the counts substantiate the pct. Null
+ * = not-computed (pre-083 row, or ruling-8 excluded non-puncher — null,
+ * never 0); integer 0 = computed, zero judgeable days. */
+const ATTENDANCE_2 = ["scheduled_count", "attended_count"];
 
 const sql = readFileSync(MIGRATION_FILE, "utf8");
 
@@ -129,16 +136,22 @@ function outputColumns(stmt: string): string[] {
 }
 
 for (const view of ["v_employee_scores", "v_employee_scores_latest"]) {
-  test(`${view}: 28-column shape — 11 original + 9 metrics + 6 counts + 2 window fields, in order`, () => {
+  test(`${view}: 30-column shape — 11 original + 9 metrics + 6 counts + 2 window fields + 2 attendance counts, in order`, () => {
     const cols = outputColumns(viewStatement(view));
-    assert.deepEqual(cols, [...ORIGINAL_11, ...NEW_9, ...COUNTS_6, ...WINDOW_2]);
-    assert.equal(cols.length, 28, "key count rises by exactly two (§2b)");
+    assert.deepEqual(cols, [
+      ...ORIGINAL_11,
+      ...NEW_9,
+      ...COUNTS_6,
+      ...WINDOW_2,
+      ...ATTENDANCE_2,
+    ]);
+    assert.equal(cols.length, 30, "key count rises by exactly two (mig 083)");
   });
 }
 
 test("v_employee_scores: each metric and count is a straight pass-through (null stays null)", () => {
   const stmt = viewStatement("v_employee_scores");
-  for (const col of [...NEW_9, ...COUNTS_6]) {
+  for (const col of [...NEW_9, ...COUNTS_6, ...ATTENDANCE_2]) {
     const line = stmt
       .split("\n")
       .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/\s+/g, " "))
@@ -166,7 +179,7 @@ test("v_employee_scores_latest: each metric and count is a bare column pass-thro
     .map((l) =>
       l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/^s\./, "")
     );
-  for (const col of [...NEW_9, ...COUNTS_6, ...WINDOW_2]) {
+  for (const col of [...NEW_9, ...COUNTS_6, ...WINDOW_2, ...ATTENDANCE_2]) {
     assert.ok(
       lines.includes(col),
       `${col} must be selected as a bare identifier — no coalesce/nullif/expressions`
@@ -296,4 +309,32 @@ test("§1d: the floor never FILTERS the feed — data_start_date is disclosure m
     !rangeRouteSrc.includes("labor_window"),
     "labor_window_* are internal fields — a wire addition is a cross-project contract change"
   );
+});
+
+// ── mig 083: the attendance-count pair (THQ wire item 1, packet 5 §7.3) ────
+
+test("083: the recompute WRITES the pair, with ruling 8 at the write boundary", () => {
+  // The columns are only as real as their writer. An excluded non-puncher's
+  // counts are not-computed — null, never 0 (the compute path's zeros are
+  // internal placeholders, not facts).
+  const src = readFileSync(
+    join(process.cwd(), "src/lib/performance-recompute.ts"),
+    "utf8"
+  );
+  assert.match(src, /scheduled_count: punchesTimeClock \? metrics\.scheduled_count : null/);
+  assert.match(src, /attended_count: punchesTimeClock \? metrics\.attended_count : null/);
+});
+
+test("083: /api/scores envelope carries location_floors — store-scoped, zero-row-survivable (THQ wire item 3)", () => {
+  // A floor is a property of a STORE: on-row data_start_date remains (069),
+  // and the envelope key answers the zero-row case. THQ DECLINED a
+  // correction-coverage envelope field — do not add one; Houston's 32-day
+  // blend and NOLA-being-CAKE live in the contract note, not on the wire.
+  const src = readFileSync(
+    join(process.cwd(), "src/app/api/scores/route.ts"),
+    "utf8"
+  );
+  assert.match(src, /await fetchLocationFloors\(/);
+  assert.match(src, /location_floors: locationFloors/);
+  assert.doesNotMatch(src, /correction_coverage|corrections_applied/);
 });

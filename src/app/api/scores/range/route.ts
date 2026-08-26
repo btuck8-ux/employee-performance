@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getLocationCodes } from "@/lib/location-codes";
+import { fetchLocationFloors, getLocationCodes } from "@/lib/location-codes";
 import {
   computeMetricsForRange,
 } from "@/lib/performance-recompute";
@@ -375,11 +375,21 @@ export async function GET(request: Request) {
     );
     if (computeError) throw new Error(computeError);
 
+    // Envelope location_floors (THQ wire item 3, packet 5 §7.3 — additive):
+    // store-scoped data_start_date, keyed by location_code; scoped to the
+    // request's stores (the whole estate when unfiltered). It survives a
+    // zero-row response — a window wholly below a store's floor answers
+    // with the floor, never with a bare empty array.
+    const locationFloors = await fetchLocationFloors(
+      locationCodes.length > 0 ? locationCodes : undefined
+    );
+
     return NextResponse.json({
       data: rows,
       pagination: { page, limit, count },
       range: { start, end },
       computed_at: new Date().toISOString(),
+      location_floors: locationFloors,
     });
   } catch (e) {
     // Log the underlying error server-side; never leak internals to the

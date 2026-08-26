@@ -25,9 +25,17 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Row shape, in locked wire order: the 3 identity fields, the 9 metrics
- * (same wire names as /api/scores, mig 045), the 6 counts (mig 048).
- * Composites are deliberately ABSENT in v1 (contract memo §2 scope note —
- * THQ confirmed; renders "Quarterly only" tiles instead). No hooks for them.
+ * (same wire names as /api/scores, mig 045), the 6 counts (mig 048), and —
+ * appended 2026-08-26 (THQ wire item 2, packet 5 §7.3; 18 → 20) — the 2
+ * attendance counts. Composites are deliberately ABSENT in v1 (contract
+ * memo §2 scope note — THQ confirmed; renders "Quarterly only" tiles
+ * instead). No hooks for them.
+ *
+ * scheduled_count / attended_count differ from the six original counts:
+ * they are number | null — null when the employee is excluded from the
+ * attendance denominator (punches_time_clock=false; ruling 8: null, never
+ * 0 — a zero here would be the exact unsubstantiated-accusation shape the
+ * counts exist to prevent). The six original counts stay always-integers.
  */
 export const RANGE_FEED_FIELDS = [
   "employee_code",
@@ -48,6 +56,8 @@ export const RANGE_FEED_FIELDS = [
   "tattle_quantity",
   "tasks_accountable",
   "tasks_completed",
+  "scheduled_count",
+  "attended_count",
 ] as const;
 
 export interface RangeFeedRow {
@@ -69,6 +79,8 @@ export interface RangeFeedRow {
   tattle_quantity: number;
   tasks_accountable: number;
   tasks_completed: number;
+  scheduled_count: number | null;
+  attended_count: number | null;
 }
 
 export interface RangeFeedParams {
@@ -243,5 +255,8 @@ export function toRangeFeedRow(
     tattle_quantity: m.tattle_quantity,
     tasks_accountable: m.tasks_accountable,
     tasks_completed: m.tasks_completed,
+    // Ruling 8 at the wire boundary: excluded non-puncher → null, never 0.
+    scheduled_count: m.attendance_denominator_excluded ? null : m.scheduled_count,
+    attended_count: m.attendance_denominator_excluded ? null : m.attended_count,
   };
 }
