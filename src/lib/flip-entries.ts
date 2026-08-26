@@ -478,15 +478,20 @@ export async function fetchRemovedShiftEvidence(
   supabase: SupabaseClient,
   locationId: string,
   employeeIds: string[],
-  window: { start: string; end: string }
+  window: { start: string | null; end: string }
 ): Promise<Map<string, import("./performance-recompute").RemovedShiftEvidence>> {
   const out = new Map<
     string,
     import("./performance-recompute").RemovedShiftEvidence
   >();
 
+  // STORE-level coverage start reads the DEFINER view (mig 061), not the
+  // base table: the profile page calls this under the SESSION client, and
+  // a Class-1 viewer's RLS-filtered min would be their OWN first date —
+  // viewer-dependent metrics, the exact failure the flip's day set already
+  // dodged (Codex blocker follow-through, 2026-08-26).
   const { data: coverageRow, error: covError } = await supabase
-    .from("seven_shifts_shifts")
+    .from("v_direct_feed_days")
     .select("entry_date")
     .eq("location_id", locationId)
     .order("entry_date", { ascending: true })
@@ -498,7 +503,11 @@ export async function fetchRemovedShiftEvidence(
 
   if (mirrorCoverageStart === null) {
     for (const id of employeeIds) {
-      out.set(id, { mirrorCoverageStart: null, liveDates: null });
+      out.set(id, {
+        mirrorCoverageStart: null,
+        employeeCoverageStart: null,
+        liveDates: null,
+      });
     }
     return out;
   }
@@ -524,21 +533,32 @@ export async function fetchRemovedShiftEvidence(
     ),
   ];
   const liveByUser = new Map<number, Set<string>>();
+  // Per-EMPLOYEE coverage start, deliberately UNBOUNDED by the window (the
+  // Kevin Montie rule at the evidence layer — Codex blocker 2026-08-26): a
+  // window-bounded min would read "never appeared" for an employee whose
+  // mirror record begins after the window and judge their fallback
+  // time_entries scheduled days as removals. Same filters as liveDates —
+  // if the pruned mirror has never carried the employee, the correction
+  // has no standing to judge any of their days.
+  const firstByUser = new Map<number, string>();
   if (userIds.length > 0) {
     const rows = await pagedRows<{ seven_shifts_user_id: number; entry_date: string }>(
-      (from, to) =>
-        supabase
+      (from, to) => {
+        let q = supabase
           .from("seven_shifts_shifts")
           .select("seven_shifts_user_id, entry_date")
           .eq("location_id", locationId)
           .in("seven_shifts_user_id", userIds)
           .eq("deleted", false)
           .is("missing_upstream_since", null)
-          .gte("entry_date", window.start)
           .lte("entry_date", window.end)
           .order("entry_date", { ascending: true })
           .order("seven_shifts_shift_id", { ascending: true })
-          .range(from, to),
+          .range(from, to);
+        // null start = unbounded history (the profile's all-time case).
+        if (window.start) q = q.gte("entry_date", window.start);
+        return q;
+      },
       "removed-shift evidence"
     );
     for (const r of rows) {
@@ -547,12 +567,33 @@ export async function fetchRemovedShiftEvidence(
       set.add(String(r.entry_date).slice(0, 10));
       liveByUser.set(uid, set);
     }
+    const firstRows = await pagedRows<{ seven_shifts_user_id: number; entry_date: string }>(
+      (from, to) =>
+        supabase
+          .from("seven_shifts_shifts")
+          .select("seven_shifts_user_id, entry_date")
+          .eq("location_id", locationId)
+          .in("seven_shifts_user_id", userIds)
+          .eq("deleted", false)
+          .is("missing_upstream_since", null)
+          .order("entry_date", { ascending: true })
+          .order("seven_shifts_shift_id", { ascending: true })
+          .range(from, to),
+      "removed-shift employee coverage"
+    );
+    for (const r of firstRows) {
+      const uid = Number(r.seven_shifts_user_id);
+      const d = String(r.entry_date).slice(0, 10);
+      const prev = firstByUser.get(uid);
+      if (prev === undefined || d < prev) firstByUser.set(uid, d);
+    }
   }
 
   for (const id of employeeIds) {
     const uid = userIdByEmployee.get(id) ?? null;
     out.set(id, {
       mirrorCoverageStart,
+      employeeCoverageStart: uid === null ? null : firstByUser.get(uid) ?? null,
       liveDates: uid === null ? null : liveByUser.get(uid) ?? new Set<string>(),
     });
   }

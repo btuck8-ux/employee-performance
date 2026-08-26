@@ -110,6 +110,14 @@ export interface RemovedShiftEvidence {
    * location has no mirror rows at all: correct NOTHING (absent must mean
    * unknown, the mig-072 freshness rule). */
   mirrorCoverageStart: string | null;
+  /** This EMPLOYEE's earliest live mirror date at the location, ALL-TIME
+   * (window-unbounded — the Kevin Montie rule applied at the evidence
+   * layer; Codex blocker 2026-08-26): a date before the employee ever
+   * appears in the mirror is absence of COVERAGE for them, not removal —
+   * their fallback time_entries scheduled rows there must stay in the
+   * denominator uncorrected. null = never appeared in the mirror: correct
+   * nothing for them. */
+  employeeCoverageStart: string | null;
   /** Dates carrying a LIVE mirror shift for this employee (not deleted, not
    * tombstoned). null = the employee cannot be judged (no 7shifts user id)
    * — correct nothing for them. */
@@ -193,8 +201,15 @@ export function computeMetricsFromEntries(
       if (
         rs !== undefined &&
         rs.mirrorCoverageStart !== null &&
+        rs.employeeCoverageStart !== null &&
         rs.liveDates !== null &&
         date >= rs.mirrorCoverageStart &&
+        // The Montie rule at the evidence layer (Codex blocker
+        // 2026-08-26): the boundary must be authoritative for THIS
+        // employee, not just for the store — a store-covered day before
+        // the employee's own mirror record begins cannot distinguish
+        // "removed" from "never observed".
+        date >= rs.employeeCoverageStart &&
         !rs.liveDates.has(date)
       ) {
         continue; // vendor-removed and unpunched: not an absence — dropped

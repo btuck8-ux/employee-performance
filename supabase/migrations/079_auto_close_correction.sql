@@ -33,6 +33,14 @@
 alter table public.toast_time_entries
   add column if not exists corrected_out_at timestamptz;
 
+-- 058 narrowed toast_time_entries to a COLUMN-level grant list for
+-- authenticated; v_worked_intervals is security_invoker and now reads
+-- corrected_out_at, so session-client callers need the one new column
+-- granted or every Toast-store row errors (Codex blocker, 2026-08-26).
+-- Raw vendor columns stay ungranted — this is the correction annotation,
+-- not the blob.
+grant select (corrected_out_at) on public.toast_time_entries to authenticated;
+
 comment on column public.toast_time_entries.corrected_out_at is
   'Advisory corrected clock-out (spec rev 2 §7a): scheduled end applied to '
   'Toast auto-closes (and null-outs) — the vendor''s out_at is kept as '

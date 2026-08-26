@@ -80,6 +80,7 @@ test("a removed, unpunched scheduled day is DROPPED from both sides — not an a
       ...CAP,
       removedShifts: {
         mirrorCoverageStart: "2026-06-01",
+        employeeCoverageStart: "2026-06-01",
         liveDates: new Set(["2026-06-01", "2026-06-03"]),
       },
     }
@@ -100,6 +101,7 @@ test("§2 THE TRAP: a removed-but-PUNCHED day counts ATTENDED — a punch outran
       ...CAP,
       removedShifts: {
         mirrorCoverageStart: "2026-06-01",
+        employeeCoverageStart: "2026-06-01",
         liveDates: new Set<string>(), // nothing live — the shift is gone
       },
     }
@@ -116,6 +118,7 @@ test("§3: dates before the mirror's coverage stay in the denominator uncorrecte
       ...CAP,
       removedShifts: {
         mirrorCoverageStart: "2026-06-01",
+        employeeCoverageStart: "2026-06-01",
         liveDates: new Set<string>(),
       },
     }
@@ -127,7 +130,11 @@ test("§3: dates before the mirror's coverage stay in the denominator uncorrecte
 test("§3: a location with no mirror rows corrects nothing (coverage null)", () => {
   const m = computeMetricsFromEntries([entry("2026-06-02", "scheduled")], {
     ...CAP,
-    removedShifts: { mirrorCoverageStart: null, liveDates: new Set<string>() },
+    removedShifts: {
+      mirrorCoverageStart: null,
+      employeeCoverageStart: null,
+      liveDates: new Set<string>(),
+    },
   });
   assert.equal(m.missed_count, 1);
 });
@@ -135,7 +142,11 @@ test("§3: a location with no mirror rows corrects nothing (coverage null)", () 
 test("§3: an employee the mirror cannot judge (liveDates null) corrects nothing", () => {
   const m = computeMetricsFromEntries([entry("2026-06-02", "scheduled")], {
     ...CAP,
-    removedShifts: { mirrorCoverageStart: "2026-06-01", liveDates: null },
+    removedShifts: {
+      mirrorCoverageStart: "2026-06-01",
+      employeeCoverageStart: "2026-06-01",
+      liveDates: null,
+    },
   });
   assert.equal(m.missed_count, 1);
 });
@@ -150,4 +161,42 @@ test("no evidence passed → behaviour is byte-identical to before the correctio
   assert.equal(without.scheduled_count, 2);
   assert.equal(without.missed_count, 1);
   assert.equal(without.attendance_pct, 50);
+});
+
+test("§3 MONTIE RULE (Codex blocker 2026-08-26): dates before the EMPLOYEE's own mirror record stay uncorrected", () => {
+  // Store coverage begins 06-01 but this employee first appears in the
+  // mirror 07-07 (the Kevin Montie shape). His June fallback time_entries
+  // scheduled days are absence of COVERAGE for him, not removals — they
+  // must stay in the denominator (here: a real miss), never be dropped.
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-06-10", "scheduled"), // pre-employee-coverage, unpunched
+      entry("2026-07-08", "scheduled"), // post-coverage, live, attended
+      entry("2026-07-08", "worked"),
+      entry("2026-07-09", "scheduled"), // post-coverage, removed, unpunched → dropped
+    ],
+    {
+      ...CAP,
+      removedShifts: {
+        mirrorCoverageStart: "2026-06-01",
+        employeeCoverageStart: "2026-07-07",
+        liveDates: new Set(["2026-07-08"]),
+      },
+    }
+  );
+  assert.equal(m.missed_count, 1, "the June day stays a miss — do not infer");
+  assert.equal(m.scheduled_count, 2, "June miss + July attended; the removed July day dropped");
+  assert.equal(m.attended_count, 1);
+  assert.equal(m.attendance_pct, 50);
+
+  // An employee who NEVER appears in the mirror is corrected nowhere.
+  const never = computeMetricsFromEntries([entry("2026-06-10", "scheduled")], {
+    ...CAP,
+    removedShifts: {
+      mirrorCoverageStart: "2026-06-01",
+      employeeCoverageStart: null,
+      liveDates: new Set<string>(),
+    },
+  });
+  assert.equal(never.missed_count, 1);
 });
