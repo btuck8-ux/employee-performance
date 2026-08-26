@@ -20,6 +20,15 @@ import {
  * server-side pass-through with a 10-min cache TTL, never written to their
  * mirror).
  *
+ * ⚠️ CP AND THQ DO NOT POLL THIS ROUTE — /api/scores IS THE CONSUMER WIRE
+ * (2026-08-25, pinned). This route computes LIVE per request
+ * (computeMetricsForRange); the wire is STORED (v_employee_scores →
+ * performance_records). "The flip is live here" says nothing about what
+ * consumers see — that mistake reached THQ once, disproved by their own
+ * computed_at stamps 34 minutes after the deploy. If you are reasoning
+ * about what a partner receives, you are in the wrong file: go one
+ * directory up.
+ *
  * Contract: memo-to-training-hq-range-contract-2026-08-14.md, accepted
  * VERBATIM by THQ 2026-08-14 and LOCKED — params (start/end calendar-valid,
  * start >= 2026-01-01, window <= 366 days; optional location_code CSV +

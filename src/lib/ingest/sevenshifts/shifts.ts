@@ -61,7 +61,15 @@ const LOOKBACK_DAYS = 14;
 const LOOKAHEAD_DAYS = 21;
 /** First-run backfill floor — the cp_schedule floor, for a like-for-like
  * reconciliation baseline. Deeper history IS servable by 7shifts (probe Q2)
- * but a historical rebuild is a separate Tucker decision (§4-C4 flag). */
+ * but a historical rebuild is a separate Tucker decision (§4-C4 flag).
+ *
+ * ⚠️ LOAD-BEARING BY COINCIDENCE (2026-08-25): this floor is also what
+ * keeps the FROZEN QUARTERS (Q3/Q4 2025) safe from the flip — the pruned
+ * denominator applies only where the direct feed has coverage, and
+ * coverage starts here. That protection was chosen for a reconciliation
+ * baseline, not as a policy boundary. If the §4-C4 historical rebuild ever
+ * moves this floor earlier, the frozen-quarter guarantee moves with it —
+ * that decision must involve THQ, not just this constant. */
 export const SHIFTS_BACKFILL_FLOOR = "2026-06-01";
 
 const LIST_LIMIT = 100;
@@ -291,6 +299,28 @@ export async function ingestSevenShiftsShifts(
               seen,
               nowIso
             );
+            // First-exercise observability (2026-08-25): tombstoning has
+            // run in production exactly zero times before tonight, and the
+            // pruned denominator the flip rests on depends on it. The
+            // count was always recorded in detail; now it is LOUD — the
+            // number a human sanity-checks against CP's independent ghost
+            // count (26 measured, ~21 expected after CP's own prune). An
+            // implausible share additionally reaches the ingest alert via
+            // tombstoneAlertReasons below.
+            const windowRows = rows.length;
+            const share =
+              windowRows + tombstoned > 0
+                ? tombstoned / (windowRows + tombstoned)
+                : 0;
+            console.log(
+              `[7shifts-shifts] ${loc.location_code} tombstoned ${tombstoned} row(s)`,
+              JSON.stringify({
+                window: { since: sinceDate, until: untilDate },
+                rows_in_window: windowRows,
+                tombstoned,
+                share_pct: Math.round(share * 1000) / 10,
+              })
+            );
           }
 
           const locUnmatched = rows
@@ -333,4 +363,37 @@ export async function ingestSevenShiftsShifts(
   }
 
   return outcomes;
+}
+
+/** Alert thresholds for an implausible tombstone share: at least this many
+ * rows AND this share of the store's window. 13 real ghosts at DTD against
+ * a ~35-day window is ~2% — logs, no alert; a flaky pull erasing a fifth
+ * of a store's schedule is the "API flakiness read as mass cancellation"
+ * path the module header names as the most dangerous. */
+const TOMBSTONE_ALERT_MIN_ROWS = 10;
+const TOMBSTONE_ALERT_SHARE = 0.2;
+
+/**
+ * Reasons for the shared ingest alert (2026-08-25): a run that tombstoned
+ * an implausible share of a store's window must reach a human, not just a
+ * log line. Derived from the outcomes' recorded detail so the orchestrator
+ * wiring stays explicit and signature-free.
+ */
+export function tombstoneAlertReasons(outcomes: RunOutcome[]): string[] {
+  const reasons: string[] = [];
+  for (const o of outcomes) {
+    if (o.source !== SHIFTS_SOURCE) continue;
+    const detail = o.detail as Record<string, unknown> | null;
+    const tombstoned = detail?.["tombstoned_missing_upstream"];
+    if (typeof tombstoned !== "number") continue;
+    const windowRows = o.rows_in;
+    const share =
+      windowRows + tombstoned > 0 ? tombstoned / (windowRows + tombstoned) : 0;
+    if (tombstoned >= TOMBSTONE_ALERT_MIN_ROWS && share > TOMBSTONE_ALERT_SHARE) {
+      reasons.push(
+        `7shifts_shifts tombstoned an implausible share at ${o.location_code}: ${tombstoned} row(s), ${Math.round(share * 100)}% of the window — verify against 7shifts/CP before trusting the prune (the "API flakiness read as mass cancellation" path)`
+      );
+    }
+  }
+  return reasons;
 }
