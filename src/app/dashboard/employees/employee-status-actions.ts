@@ -71,6 +71,37 @@ export async function setEmployeeActiveAction(formData: FormData) {
   }
 
   const admin = createAdminClient();
+
+  // §7c tier gate (Tucker 2026-08-26, the regional-admin incident): every
+  // deactivation path calls role_is_sweepable — the SQL source of truth,
+  // never a TS re-list. Above-manager tiers are immune; if such a person
+  // has truly departed, re-tier them first, then deactivate. Reactivation
+  // is never gated.
+  if (!nextActive) {
+    const { data: target } = await admin
+      .from("employees")
+      .select("epd_role")
+      .eq("id", employeeId)
+      .single();
+    const { data: sweepable, error: gateError } = await admin.rpc(
+      "role_is_sweepable",
+      { r: target?.epd_role ?? "user" }
+    );
+    if (gateError || sweepable !== true) {
+      console.warn("[employees] deactivation refused (tier immune)", {
+        actor: user.id,
+        employee_id: employeeId,
+        epd_role: target?.epd_role ?? null,
+        gate_error: gateError?.message ?? null,
+      });
+      redirect(
+        `${returnTo}${returnTo.includes("?") ? "&" : "?"}status_error=${encodeURIComponent(
+          `${target?.epd_role ?? "This"} tier is immune to deactivation — re-tier the person first if they have truly departed.`
+        )}`
+      );
+    }
+  }
+
   const { error } = await admin
     .from("employees")
     .update({ active: nextActive })
@@ -111,12 +142,24 @@ export async function setEmployeeActiveAction(formData: FormData) {
     if (sevenShiftsUserId !== null) {
       const { data: siblings, error: sibError } = await admin
         .from("employees")
-        .select("id, location_id, employee_code")
+        .select("id, location_id, employee_code, epd_role")
         .eq("seven_shifts_user_id", sevenShiftsUserId)
         .eq("active", true)
         .neq("id", employeeId);
       if (sibError) sibProblems.push(`sibling read failed: ${sibError.message}`);
       for (const sib of siblings ?? []) {
+        // §7c: tiers are PER-STORE — a person user here can be an admin
+        // tier elsewhere, and that row is immune even in a person-level
+        // deactivation. Skipped loudly, never silently.
+        const { data: sibSweepable } = await admin.rpc("role_is_sweepable", {
+          r: sib.epd_role,
+        });
+        if (sibSweepable !== true) {
+          sibProblems.push(
+            `${sib.employee_code}: ${sib.epd_role} tier is immune, not deactivated`
+          );
+          continue;
+        }
         const sibAllowed = await canReadEmployee(
           supabase,
           String(sib.id),

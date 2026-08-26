@@ -56,7 +56,10 @@ export async function resolveDepartureCandidateAction(formData: FormData) {
   const resolvedEmployeeIds: string[] = [String(candidate.employee_id)];
 
   if (resolution === "actioned") {
-    // Person-level target set: the candidate's row + active siblings.
+    // Person-level target set: the candidate's row + active siblings —
+    // each gated on role_is_sweepable (§7c, the regional-admin incident):
+    // tiers are per-store, and an admin-tier row is immune even inside a
+    // person-level deactivation. Immune rows are skipped loudly.
     const targetIds = new Set<string>([String(candidate.employee_id)]);
     const sevenShiftsUserId =
       emp?.seven_shifts_user_id === null || emp?.seven_shifts_user_id === undefined
@@ -72,6 +75,37 @@ export async function resolveDepartureCandidateAction(formData: FormData) {
         redirect(`${QUEUE_PATH}?error=${encodeURIComponent(`sibling read: ${sibError.message}`)}`);
       }
       for (const s of siblings ?? []) targetIds.add(String(s.id));
+    }
+
+    const immune: string[] = [];
+    for (const targetId of [...targetIds]) {
+      const { data: row } = await admin
+        .from("employees")
+        .select("employee_code, epd_role")
+        .eq("id", targetId)
+        .single();
+      const { data: sweepable, error: gateError } = await admin.rpc(
+        "role_is_sweepable",
+        { r: row?.epd_role ?? "user" }
+      );
+      if (gateError || sweepable !== true) {
+        immune.push(`${row?.employee_code ?? targetId} (${row?.epd_role ?? "?"})`);
+        targetIds.delete(targetId);
+      }
+    }
+    if (targetIds.size === 0) {
+      redirect(
+        `${QUEUE_PATH}?error=${encodeURIComponent(
+          `Nothing deactivated — every row is tier-immune: ${immune.join("; ")}. Re-tier first if truly departed.`
+        )}`
+      );
+    }
+    if (immune.length > 0) {
+      console.warn("[departure-queue] immune rows skipped", {
+        actor: user.id,
+        candidate_id: candidateId,
+        skipped: immune,
+      });
     }
 
     const { error: deactError } = await admin
