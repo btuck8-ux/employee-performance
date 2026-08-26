@@ -129,3 +129,35 @@ test("§2: the clamp is a first-class disclosure — RangeMetrics carries the ef
   // ordinary empty result.
   assert.match(recomputeSrc, /\? null \/\/ whole window below the floor — not answerable/);
 });
+
+// ── mig 080: the floor is NOT NULL, and it gates computation, not retrieval ─
+
+test("080: metrics_start_date is NOT NULL — a nullable clamp column is a silent whole-store outage", () => {
+  // `entry_date >= floor` with a NULL floor evaluates NULL and matches
+  // NOTHING: NOLA's 20 kept attendance values would have vanished with no
+  // error. The meaning must not live inside an absence (ruling 2026-08-26,
+  // final). A future migration relaxing this must fail here first.
+  const sql080 = read("supabase/migrations/080_nola_floor_not_null.sql");
+  assert.match(sql080, /alter column metrics_start_date set not null/);
+  assert.match(sql080, /GATES COMPUTATION, '\s*\n\s*'NOT RETRIEVAL/);
+  assert.match(sql080, /set metrics_start_date = date '2025-07-01'/);
+});
+
+test("080: the floor NEVER filters a read path — the frozen quarters live below every floor", () => {
+  // Q3 2025 (119 attendance values) and Q4 2025 (103) sit below EVERY
+  // store's floor and are frozen by mig 063. A `>= floor` comparison on
+  // the way out blanks all 222 of them — which is why the ruling is
+  // phrased computation-versus-retrieval, not as a date filter. No feed
+  // route may reference the column at all.
+  for (const p of [
+    "src/app/api/scores/route.ts",
+    "src/app/api/scores/range/route.ts",
+    "src/app/api/identity/route.ts",
+  ]) {
+    assert.doesNotMatch(
+      read(p),
+      /metrics_start_date/,
+      `${p} must not touch the floor column — the floor gates computation, never retrieval`
+    );
+  }
+});
