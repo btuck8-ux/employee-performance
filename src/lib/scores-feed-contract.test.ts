@@ -4,7 +4,7 @@
  * The route serves `select("*")` straight off `v_employee_scores(_latest)`, so
  * the wire shape IS the view shape. Two live consumers (Culture Pulse 09:00
  * UTC, Training HQ 11:15 UTC) parse it in production. These tests pin the
- * contract at its source — the latest view-replacing migration (069):
+ * contract at its source — the latest view-replacing migration (070):
  *
  *   (a) 28 columns in locked order: the original 11, the 9 metrics (mig 045),
  *       the 6 per-metric counts (mig 048), the 2 effective-window fields
@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 const MIGRATION_FILE = join(
   process.cwd(),
-  "supabase/migrations/069_scores_feed_effective_window.sql"
+  "supabase/migrations/070_effective_window_frozen_derivation.sql"
 );
 
 /** The 11 columns both live consumers already parse — order matters. */
@@ -114,8 +114,11 @@ function outputColumns(stmt: string): string[] {
       cols.push(aliased[1]);
     } else {
       // Bare identifiers, optionally source-qualified (069's latest view
-      // reads s.<col> from the history view).
-      const bare = line.match(/^(?:[a-z_]+\.)?([a-z_]+),?$/i);
+      // reads s.<col> from the history view). CASE-expression keywords are
+      // never columns (070's effective_period_start derivation).
+      const bare =
+        !/^(case|when|then|else|end)\b/i.test(line) &&
+        line.match(/^(?:[a-z_]+\.)?([a-z_]+),?$/i);
       if (bare) cols.push(bare[1]);
       else {
         depth += (line.match(/\(/g) ?? []).length - (line.match(/\)/g) ?? []).length;
@@ -171,6 +174,41 @@ test("v_employee_scores_latest: each metric and count is a bare column pass-thro
   }
   const code = stmt.replace(/--.*$/gm, "");
   assert.doesNotMatch(code, /coalesce|nullif/i, "no null-rewriting anywhere in the view");
+});
+
+test("§2b-i (070): effective_period_start — frozen rows keep their OWN window; null branched explicitly", () => {
+  // 069's unconditional greatest() labelled 216 real frozen-quarter values
+  // "never measurable" (FCOL Q3 2025: greatest → 2026-07-08 > period_end,
+  // rendered over a 75.0% tile). The row describes what IT measured, not
+  // what today's policy would measure.
+  const stmt = viewStatement("v_employee_scores");
+  const code = stmt.replace(/--.*$/gm, "");
+  assert.match(code, /when rp\.frozen\s+then rp\.period_start/);
+  // Explicit null branch — never greatest()'s engine-dependent null
+  // handling (§2b-i: "this is the exact place a silent wrong answer would
+  // be invisible").
+  assert.match(code, /when l\.metrics_start_date is null\s+then rp\.period_start/);
+  assert.match(code, /when l\.metrics_start_date > rp\.period_start\s+then l\.metrics_start_date/);
+  assert.doesNotMatch(
+    code,
+    /greatest/i,
+    "no unconditional greatest() anywhere in the derivation"
+  );
+});
+
+test("§2b-iii: period_label is a period NAME and nothing else — window state never rides the label", () => {
+  // The transport-level hole (found by CP): window language inside
+  // period_label renders next to a live score, past every null gate,
+  // with no window check for a reviewer to find. Constrain the transport:
+  // the label is a bare rp.label pass-through; window state lives ONLY in
+  // data_start_date / effective_period_start. Live-side, THQ asserts
+  // period_label ~ ^Q[1-4] \d{4}$ on every served row.
+  const stmt = viewStatement("v_employee_scores");
+  const line = stmt
+    .split("\n")
+    .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/\s+/g, " "))
+    .find((l) => l.endsWith("as period_label"));
+  assert.equal(line, "rp.label as period_label");
 });
 
 test("§1d restoration (069): the HISTORY view serves every stored row — no active filter", () => {
