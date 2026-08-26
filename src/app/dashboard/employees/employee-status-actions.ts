@@ -19,6 +19,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *
  * Audit trail: one console line per toggle with actor/target ids (the
  * /api/reports/[id] pattern).
+ *
+ * §7b (epd_role spec 2026-08-26): deactivation is a person-level fact. When
+ * the form carries deactivate_scope=all (the DEFAULT-CHECKED prompt for
+ * multi-store people), the person's OTHER active rows — re-derived
+ * server-side from seven_shifts_user_id, never trusted from the client —
+ * are deactivated too, each behind its own epd_can_read_employee row gate.
+ * A sibling outside the actor's purview is skipped with a warn line, never
+ * silently written.
  */
 
 const ALLOWED_TIERS = new Set([
@@ -85,6 +93,78 @@ export async function setEmployeeActiveAction(formData: FormData) {
     location_id: locationId,
     active: nextActive,
   });
+
+  // §7b person-level scope: only on DEACTIVATE, only when asked for. A
+  // failed or skipped sibling is NEVER swallowed (Codex should-fix): the
+  // operator confirmed "all stores", so a partial result surfaces as a
+  // status_error banner naming what did not happen.
+  const scopeAll = String(formData.get("deactivate_scope") ?? "") === "all";
+  if (!nextActive && scopeAll) {
+    const sibProblems: string[] = [];
+    const { data: primary, error: primaryError } = await admin
+      .from("employees")
+      .select("seven_shifts_user_id")
+      .eq("id", employeeId)
+      .single();
+    if (primaryError) sibProblems.push(`sibling lookup failed: ${primaryError.message}`);
+    const sevenShiftsUserId = primary?.seven_shifts_user_id ?? null;
+    if (sevenShiftsUserId !== null) {
+      const { data: siblings, error: sibError } = await admin
+        .from("employees")
+        .select("id, location_id, employee_code")
+        .eq("seven_shifts_user_id", sevenShiftsUserId)
+        .eq("active", true)
+        .neq("id", employeeId);
+      if (sibError) sibProblems.push(`sibling read failed: ${sibError.message}`);
+      for (const sib of siblings ?? []) {
+        const sibAllowed = await canReadEmployee(
+          supabase,
+          String(sib.id),
+          String(sib.location_id)
+        );
+        if (!sibAllowed) {
+          console.warn("[employees] sibling deactivate skipped (scope)", {
+            actor: user.id,
+            role,
+            employee_id: sib.id,
+            location_id: sib.location_id,
+          });
+          sibProblems.push(`${sib.employee_code}: outside your scope, not deactivated`);
+          continue;
+        }
+        const { error: sibUpdateError } = await admin
+          .from("employees")
+          .update({ active: false })
+          .eq("id", sib.id)
+          .eq("active", true);
+        if (sibUpdateError) {
+          console.error("[employees] sibling deactivate failed", {
+            employee_id: sib.id,
+            error: sibUpdateError.message,
+          });
+          sibProblems.push(`${sib.employee_code}: ${sibUpdateError.message}`);
+          continue;
+        }
+        console.log("[employees] status toggled (person-level sibling)", {
+          actor: user.id,
+          role,
+          employee_id: sib.id,
+          location_id: sib.location_id,
+          active: false,
+        });
+        revalidatePath(`/dashboard/employees/${sib.id}`);
+      }
+    }
+    if (sibProblems.length > 0) {
+      revalidatePath("/dashboard/employees");
+      revalidatePath(`/dashboard/employees/${employeeId}`);
+      redirect(
+        `${returnTo}${returnTo.includes("?") ? "&" : "?"}status_error=${encodeURIComponent(
+          `Deactivated at this store, but not everywhere: ${sibProblems.join("; ")}`
+        )}`
+      );
+    }
+  }
 
   revalidatePath("/dashboard/employees");
   revalidatePath(`/dashboard/employees/${employeeId}`);

@@ -87,10 +87,38 @@ test("the ONLY writer besides the migration seed is the SA employee-edit surface
   assert.match(editPageSrc, /name="is_general_manager"/);
   // Same sentinel discipline as the mig 056 marker: absent ≠ unchecked.
   assert.match(editPageSrc, /name="is_general_manager_present"/);
+  // Mig 071 lockstep: the wire derives is_general_manager from epd_role,
+  // so the GM toggle writes BOTH — and only on user↔manager rows (an
+  // admin-tier row is never re-tiered from a checkbox).
+  assert.match(editActionsSrc, /\.\.\.\(gmSubmitted && tierSyncable/);
   assert.match(
     editActionsSrc,
-    /\.\.\.\(gmSubmitted \? \{ is_general_manager \} : \{\}\)/
+    /epd_role: is_general_manager \? "manager" : "user"/
   );
+});
+
+test("TRAP GUARD (Tucker 2026-08-26): the lockstep DIES with the stored column", () => {
+  // The GM-toggle lockstep writes employees.is_general_manager. The column
+  // is scheduled to be DROPPED in a later migration once CP + THQ confirm
+  // the derived wire field. The day that drop migration lands in this
+  // repo, this test fails until the lockstep (and every other stored-flag
+  // write) is removed — the removal is FORCED, not remembered ("a
+  // commitment that exists only in a document protects nothing").
+  const migrationsDir = join(process.cwd(), "supabase/migrations");
+  const dropped = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .some((f) =>
+      /drop\s+column\s+(if\s+exists\s+)?is_general_manager/i.test(
+        read(`supabase/migrations/${f}`)
+      )
+    );
+  if (dropped) {
+    assert.doesNotMatch(
+      editActionsSrc,
+      /is_general_manager/,
+      "employees.is_general_manager was dropped — delete the GM-toggle lockstep and every stored-flag write from the edit surface (and retire this trap)"
+    );
+  }
   // Never derived from title/pay type.
   assert.doesNotMatch(
     editActionsSrc,
@@ -141,6 +169,14 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
     "src/app/dashboard/employees/[id]/edit/page.tsx",
     "src/app/dashboard/admin/toast-crosswalk/data.ts",
     "src/app/dashboard/admin/toast-crosswalk/page.tsx",
+    // Mig 071 (epd_role spec 2026-08-26 §4): the flag became DERIVED —
+    // (epd_role = 'manager') in v_employee_identity, same wire name/type.
+    // These three touch the NAME only: the two contract tests pin the
+    // derivation + wire position; the identity route's doc comment states
+    // it for the partner-facing contract.
+    "src/lib/epd-role-contract.test.ts",
+    "src/lib/identity-feed-contract.test.ts",
+    "src/app/api/identity/route.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];

@@ -33,6 +33,12 @@ const SURFACES = [
     description:
       "Map Toast punch accounts to EPD employees. Unmatched accounts with punches queue here; auto-matches are listed and reversible.",
   },
+  {
+    href: "/dashboard/admin/departure-candidates",
+    title: "Departure candidates",
+    description:
+      "The sweep is a notifier: people dormant 30 days at every associated store queue here. Dismiss or deactivate — a human decides, never the sweep.",
+  },
 ];
 
 export default async function AdminIndexPage() {

@@ -5,8 +5,10 @@ import { addDaysIso } from "@/lib/punch-days";
 
 /**
  * §7b — departure-candidate report (Q2 punch-recovery spec REVISED 2,
- * 2026-08-25). GET /api/admin/departure-candidates. READ-ONLY — no writes,
- * ever, from this route.
+ * 2026-08-25). GET /api/admin/departure-candidates. GET is READ-ONLY — no
+ * writes, ever. POST (epd_role spec 2026-08-26 §6) is the NOTIFIER sweep:
+ * it writes departure_candidates rows for operator review and NEVER touches
+ * employees — see the handler's doc below.
  *
  * THE FINDING THIS SERVES: EPD has no departure signal. Exactly 2 of 218
  * employee rows have archived_at set; people stop punching and stay on the
@@ -277,6 +279,50 @@ export async function GET(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[departure-candidates] fatal:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/**
+ * §6 (epd_role spec 2026-08-26) — the sweep becomes a NOTIFIER. "GOING
+ * FORWARD, the tombstone should act as a notifier" — Tucker. Tonight's 80
+ * archives stand; this governs every run after them.
+ *
+ * POST runs sweep_departure_candidates() (mig 072): dormant sweepable people
+ * (30 days without a punch or schedule at ANY associated store, tier-gated
+ * by role_is_sweepable — area_admin and above are immune) land as OPEN rows
+ * in departure_candidates for the §7c queue. Re-running is a no-op on anyone
+ * already surfaced (partial unique index). NO update to employees anywhere
+ * in this path — deactivation is a human act on the queue surface.
+ *
+ * AUTH: Bearer <CRON_SECRET> (operator lever, same as GET).
+ */
+export async function POST(request: Request) {
+  const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
+  if (denied) return denied;
+
+  const supabase = createAdminClient();
+  try {
+    const { data, error } = await supabase.rpc("sweep_departure_candidates");
+    if (error) throw new Error(`sweep rpc: ${error.message}`);
+    const newlySurfaced = Number(data ?? 0);
+
+    const { count, error: countError } = await supabase
+      .from("departure_candidates")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open");
+    if (countError) throw new Error(`open-count read: ${countError.message}`);
+
+    return NextResponse.json({
+      sweep: "departure-notifier",
+      newly_surfaced: newlySurfaced,
+      open_total: count ?? 0,
+      note:
+        "Notifier only — wrote departure_candidates; employees untouched. A human decides on /dashboard/admin/departure-candidates.",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[departure-candidates] sweep fatal:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
