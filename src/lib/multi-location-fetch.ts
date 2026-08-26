@@ -170,11 +170,19 @@ export async function fetchMultiLocationProfile(
   // Toast stores, time_entries at NOLA — matching computeMetricsForRange
   // exactly. One flip-meta fetch per sibling location (they are different
   // employee ids at different stores — the §4-B4 join detail).
-  const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
-    await import("./flip-entries");
+  const {
+    fetchLocationFlipMeta,
+    fetchEffectiveEntries,
+    latestEffectiveWorkedDate,
+    fetchRemovedShiftEvidence,
+  } = await import("./flip-entries");
   const todayIso = new Date().toISOString().slice(0, 10);
   const capByLocation = new Map<string, string>();
   const entriesBySibling = new Map<string, TimeEntryRow[]>();
+  const removedBySibling = new Map<
+    string,
+    import("./performance-recompute").RemovedShiftEvidence
+  >();
   for (const s of siblings) {
     const meta = await fetchLocationFlipMeta(supabase, s.locationId);
     const latest = await latestEffectiveWorkedDate(supabase, s.locationId, meta);
@@ -190,6 +198,15 @@ export async function fetchMultiLocationProfile(
       meta
     );
     entriesBySibling.set(s.employeeId, byEmployee.get(s.employeeId) ?? []);
+    // Denominator spec rev 2 §3–§4: same evidence as the recompute entry
+    // points — the combined profile and the store card must not disagree.
+    const evidence = (
+      await fetchRemovedShiftEvidence(supabase, s.locationId, [s.employeeId], {
+        start: windowStart,
+        end: windowEnd,
+      })
+    ).get(s.employeeId);
+    if (evidence) removedBySibling.set(s.employeeId, evidence);
   }
 
   // Tattle + review attributions per sibling across the whole window,
@@ -259,6 +276,7 @@ export async function fetchMultiLocationProfile(
           s.punchesTimeClockSince,
           q.period_end
         ),
+        removedShifts: removedBySibling.get(s.employeeId),
       });
       const qTattles = tattles.filter(
         (t) =>

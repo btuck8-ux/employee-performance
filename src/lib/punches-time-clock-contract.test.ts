@@ -102,6 +102,12 @@ test("structural sweep: every src file touching the column is on the allowlist",
     // the /api/identity wire (column 9, mig 068's §1h append) — reads the
     // name only, never the value.
     "src/lib/identity-feed-contract.test.ts",
+    // Range-feed wire shaping (THQ wire item 2, packet 5 §7.3): documents
+    // ruling 8's null-never-0 count mapping. Reads the exclusion ONLY via
+    // RangeMetrics.attendance_denominator_excluded (threaded through
+    // punchesTimeClockForPeriod in performance-recompute) — never the
+    // column itself.
+    "src/lib/range-feed.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];
@@ -149,8 +155,10 @@ test("the attendance denominator EXCLUDES non-punchers — null, never 0", () =>
   assert.match(recomputeSrc, /opts\?\.punchesTimeClock === false/);
   // Since the demarcation floor (mig 066) the same opts object also
   // threads metricsStartFloor — the pin tracks the full call shape.
+  // Since the removed-shift correction (denominator spec rev 2) the opts
+  // object threads four members — the pin tracks the full call shape.
   const threaded = recomputeSrc.match(
-    /scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart \}/g
+    /scheduledScoredThrough,\s*punchesTimeClock,\s*metricsStartFloor: metricsStart,\s*removedShifts: removedEvidence,/g
   ) ?? [];
   assert.equal(threaded.length, 2, "both computeMetricsForRange and recomputePerformanceForQuarter thread the marker");
   const fetches = recomputeSrc.match(/select\("punches_time_clock, punches_time_clock_since"\)/g) ?? [];

@@ -4,9 +4,10 @@
  * (memo-to-training-hq-range-contract-2026-08-14.md), accepted VERBATIM by
  * THQ — these tests pin:
  *
- *   (a) the 18 wire fields in locked order (3 identity + 9 metrics + 6
- *       counts, wire names identical to /api/scores mig 045/048) and that
- *       composites are ABSENT (v1 scope, THQ-confirmed);
+ *   (a) the 20 wire fields in locked order (3 identity + 9 metrics + 6
+ *       counts, wire names identical to /api/scores mig 045/048; + the 2
+ *       attendance counts appended 2026-08-26, THQ wire item 2 — 18 → 20)
+ *       and that composites are ABSENT (v1 scope, THQ-confirmed);
  *   (b) param validation: calendar-valid dates, start <= end, floor
  *       2026-01-01, window <= 366 days, location_code CSV against the 8
  *       codes, strict EMP-NNNNNN employee_code, page/limit strictness with
@@ -92,7 +93,7 @@ const routeSrc = readFileSync(ROUTE_FILE, "utf8");
 
 // ---- (a) wire shape ----
 
-test("18 wire fields in locked order: 3 identity + 9 metrics + 6 counts", () => {
+test("20 wire fields in locked order: 3 identity + 9 metrics + 6 counts + 2 attendance counts", () => {
   assert.deepEqual(
     [...RANGE_FEED_FIELDS],
     [
@@ -114,6 +115,11 @@ test("18 wire fields in locked order: 3 identity + 9 metrics + 6 counts", () => 
       "tattle_quantity",
       "tasks_accountable",
       "tasks_completed",
+      // Appended 2026-08-26 (THQ wire item 2, packet 5 §7.3): "0 of 5 is a
+      // fact" — the counts substantiate the percentage. APPENDED, never
+      // reordered — the first 18 stay byte-identical for THQ's parser.
+      "scheduled_count",
+      "attended_count",
     ]
   );
 });
@@ -158,6 +164,9 @@ function metricsFixture(overrides: Partial<RangeMetricsT>): RangeMetricsT {
     tattle_quantity: 0,
     tasks_accountable: 0,
     tasks_completed: 0,
+    scheduled_count: 0,
+    attended_count: 0,
+    attendance_denominator_excluded: false,
     // Present on the engine result but NEVER emitted on the wire (the
     // cover-ratio guard flag included — Codex nit 2026-08-25):
     customer_service_score: 87.5,
@@ -324,6 +333,35 @@ test("computed values and counts pass through untouched; composites never leak",
   assert.ok(!("total_impact_score" in row));
 });
 
+test("ruling 8 on the wire: an excluded non-puncher's attendance counts are null, never 0", () => {
+  // The compute path zeroes the counts on its excluded branch — those zeros
+  // are internal placeholders, not facts (the person's scheduled days
+  // exist; they are deliberately not judged). toRangeFeedRow must map them
+  // to null, the feed's not-computed encoding.
+  const excluded = toRangeFeedRow(
+    EMP,
+    metricsFixture({
+      attendance_denominator_excluded: true,
+      scheduled_count: 0,
+      attended_count: 0,
+      attendance_pct: null,
+    })
+  );
+  assert.equal(excluded.scheduled_count, null);
+  assert.equal(excluded.attended_count, null);
+  // A judgeable employee's counts pass through as integers — including an
+  // honest 0 (a wholly-below-floor window has zero judgeable days).
+  const scored = toRangeFeedRow(
+    EMP,
+    metricsFixture({ scheduled_count: 5, attended_count: 4 })
+  );
+  assert.equal(scored.scheduled_count, 5);
+  assert.equal(scored.attended_count, 4);
+  const floored = toRangeFeedRow(EMP, metricsFixture({}));
+  assert.equal(floored.scheduled_count, 0);
+  assert.equal(floored.attended_count, 0);
+});
+
 // ---- (d) deterministic pagination order ----
 
 test("sort is (location_code, employee_code) ascending — pages never shuffle", () => {
@@ -375,4 +413,14 @@ test("route: carries the quotable DATA FLOORS block (ship-report + THQ UI depend
 
 test("route: reuses computeMetricsForRange at a call site (no parallel scoring math)", () => {
   assert.match(routeSrc, /await computeMetricsForRange\(/);
+});
+
+test("route: envelope carries location_floors (THQ wire item 3) — store-scoped, zero-row-survivable", () => {
+  // A floor is a property of a STORE; the envelope key survives a zero-row
+  // response (a window wholly below a store's floor answers with the
+  // floor, never a bare empty array). THQ DECLINED a correction-coverage
+  // envelope field — do not add one.
+  assert.match(routeSrc, /location_floors: locationFloors/);
+  assert.match(routeSrc, /await fetchLocationFloors\(/);
+  assert.doesNotMatch(routeSrc, /correction_coverage|corrections_applied/);
 });

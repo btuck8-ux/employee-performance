@@ -42,6 +42,7 @@ import {
   fetchLocationFlipMeta,
   fetchEffectiveEntries,
   latestEffectiveWorkedDate,
+  fetchRemovedShiftEvidence,
 } from "./flip-entries";
 
 export interface StoreAttendanceParts {
@@ -176,6 +177,15 @@ export async function computeStoreAttendance(
       ? latestWorkedDate
       : todayIso;
 
+  // Denominator spec rev 2 §3–§4: one batched evidence fetch for the whole
+  // store — the card and the employees inside it stay in lockstep.
+  const removedByEmployee = await fetchRemovedShiftEvidence(
+    supabase,
+    locationId,
+    employees.map((e) => e.id),
+    { start: periodStart, end: periodEnd }
+  );
+
   const rows = employees.map((e) => ({
     isGeneralManager: e.is_general_manager === true,
     // THE DEMARCATION FLOOR (mig 066): same clamp as the recompute entry
@@ -188,6 +198,7 @@ export async function computeStoreAttendance(
         periodEnd
       ),
       metricsStartFloor: meta.metricsStart,
+      removedShifts: removedByEmployee.get(e.id),
     }),
   }));
 

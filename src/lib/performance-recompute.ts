@@ -104,12 +104,46 @@ function timeToMinutes(t: string | null | undefined): number | null {
  * clock-ins; there is no trusted side below the floor). Null/absent =
  * no floor (NOLA — deliberate; never read as epoch or today).
  */
+export interface RemovedShiftEvidence {
+  /** min(entry_date) in seven_shifts_shifts at the location — the mirror's
+   * coverage boundary, derived per location, never hardcoded. null = the
+   * location has no mirror rows at all: correct NOTHING (absent must mean
+   * unknown, the mig-072 freshness rule). */
+  mirrorCoverageStart: string | null;
+  /** This EMPLOYEE's earliest live mirror date at the location, ALL-TIME
+   * (window-unbounded — the Kevin Montie rule applied at the evidence
+   * layer; Codex blocker 2026-08-26): a date before the employee ever
+   * appears in the mirror is absence of COVERAGE for them, not removal —
+   * their fallback time_entries scheduled rows there must stay in the
+   * denominator uncorrected. null = never appeared in the mirror: correct
+   * nothing for them. */
+  employeeCoverageStart: string | null;
+  /** Dates carrying a LIVE mirror shift for this employee (not deleted, not
+   * tombstoned). null = the employee cannot be judged (no 7shifts user id)
+   * — correct nothing for them. */
+  liveDates: Set<string> | null;
+}
+
 export function computeMetricsFromEntries(
   entries: TimeEntryRow[],
   opts?: {
     scheduledScoredThrough?: string;
     punchesTimeClock?: boolean;
     metricsStartFloor?: string | null;
+    /**
+     * VENDOR-REMOVED shifts leave the attendance denominator (denominator
+     * spec rev 2 §2–§4, Tucker 2026-08-26): 7shifts deletes a shift when it
+     * is swapped/covered/reassigned; time_entries keeps it forever, and the
+     * residual is 87% never-worked (8.5× enrichment) — those are not
+     * absences. A scheduled date is DROPPED from both sides of the ratio
+     * when (a) it is on/after the mirror's coverage start, (b) no live
+     * mirror shift exists for it, and (c) NO PUNCH matches it. ⛔ (c) is
+     * load-bearing: 36 of 279 residual days were worked — a punch outranks
+     * a schedule in both directions, so a removed-but-punched day counts
+     * ATTENDED, never dropped (the §2 trap). Dates before the mirror's
+     * coverage stay in the denominator uncorrected — "let's not infer."
+     */
+    removedShifts?: RemovedShiftEvidence;
   }
 ): PerformanceMetrics {
   const cap =
@@ -155,10 +189,31 @@ export function computeMetricsFromEntries(
   let onTime = 0;
   let onTimeGrace = 0;
 
+  const rs = opts?.removedShifts;
   for (const [date, sched] of scheduledByDate) {
     if (date > cap) continue; // future / not-yet-confirmed; don't score
     const worked = workedByDate.get(date);
     if (!worked) {
+      // §2–§4: removal is evidence about the SCHEDULE, never the person.
+      // Only an unpunched, mirror-judgeable, post-coverage date whose live
+      // shift is gone leaves the ratio. The punch-first structure above
+      // means a removed-but-punched day already counted ATTENDED.
+      if (
+        rs !== undefined &&
+        rs.mirrorCoverageStart !== null &&
+        rs.employeeCoverageStart !== null &&
+        rs.liveDates !== null &&
+        date >= rs.mirrorCoverageStart &&
+        // The Montie rule at the evidence layer (Codex blocker
+        // 2026-08-26): the boundary must be authoritative for THIS
+        // employee, not just for the store — a store-covered day before
+        // the employee's own mirror record begins cannot distinguish
+        // "removed" from "never observed".
+        date >= rs.employeeCoverageStart &&
+        !rs.liveDates.has(date)
+      ) {
+        continue; // vendor-removed and unpunched: not an absence — dropped
+      }
       missed += 1;
       continue;
     }
@@ -240,6 +295,13 @@ export interface RangeMetrics {
   on_time_grace_count: number;
   /** Cover-ratio guard flag — see PerformanceMetrics.cover_dominated. */
   cover_dominated: boolean;
+  /** Ruling 8 at the wire boundary (packet 5 §7.3): true when
+   * punches_time_clock excluded this person from the attendance
+   * denominator for the window. The count fields above then hold the
+   * compute path's internal ZEROS — placeholders, not facts (the person's
+   * scheduled days exist; they are deliberately not judged) — and every
+   * wire surface must serve the counts as NULL, never 0. */
+  attendance_denominator_excluded: boolean;
   // surveys
   surveys_assigned: number;
   surveys_completed: number;
@@ -519,9 +581,14 @@ export async function computeMetricsForRange(
   let entries: TimeEntryRow[];
   let latestWorkedDate: string | null;
   let metricsStart: string | null;
+  let removedEvidence: RemovedShiftEvidence | undefined;
   try {
-    const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
-      await import("./flip-entries");
+    const {
+      fetchLocationFlipMeta,
+      fetchEffectiveEntries,
+      latestEffectiveWorkedDate,
+      fetchRemovedShiftEvidence,
+    } = await import("./flip-entries");
     const meta = await fetchLocationFlipMeta(supabase, locationId);
     metricsStart = meta.metricsStart;
     const byEmployee = await fetchEffectiveEntries(
@@ -533,6 +600,15 @@ export async function computeMetricsForRange(
     );
     entries = byEmployee.get(employeeId) ?? [];
     latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
+    // Denominator spec rev 2 §3–§4: vendor-removed, unpunched scheduled
+    // days leave the ratio (judged against the live mirror, coverage-
+    // bounded per location).
+    removedEvidence = (
+      await fetchRemovedShiftEvidence(supabase, locationId, [employeeId], {
+        start: periodStart,
+        end: periodEnd,
+      })
+    ).get(employeeId);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -574,7 +650,12 @@ export async function computeMetricsForRange(
 
   const shift = computeMetricsFromEntries(
     entries,
-    { scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart }
+    {
+      scheduledScoredThrough,
+      punchesTimeClock,
+      metricsStartFloor: metricsStart,
+      removedShifts: removedEvidence,
+    }
   );
 
   // ---- Tattle metrics ----
@@ -808,6 +889,7 @@ export async function computeMetricsForRange(
       on_time_count: shift.on_time_count,
       on_time_grace_count: shift.on_time_grace_count,
       cover_dominated: shift.cover_dominated,
+      attendance_denominator_excluded: !punchesTimeClock,
       labor_window_start: laborWindowStart,
       labor_window_clamped: laborWindowClamped,
       surveys_assigned,
@@ -972,9 +1054,14 @@ export async function recomputePerformanceForQuarter(
   let entries: TimeEntryRow[];
   let latestWorkedDate: string | null;
   let metricsStart: string | null;
+  let removedEvidence: RemovedShiftEvidence | undefined;
   try {
-    const { fetchLocationFlipMeta, fetchEffectiveEntries, latestEffectiveWorkedDate } =
-      await import("./flip-entries");
+    const {
+      fetchLocationFlipMeta,
+      fetchEffectiveEntries,
+      latestEffectiveWorkedDate,
+      fetchRemovedShiftEvidence,
+    } = await import("./flip-entries");
     const meta = await fetchLocationFlipMeta(supabase, locationId);
     metricsStart = meta.metricsStart;
     const byEmployee = await fetchEffectiveEntries(
@@ -986,6 +1073,13 @@ export async function recomputePerformanceForQuarter(
     );
     entries = byEmployee.get(employeeId) ?? [];
     latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
+    // Denominator spec rev 2 §3–§4 (same evidence as computeMetricsForRange).
+    removedEvidence = (
+      await fetchRemovedShiftEvidence(supabase, locationId, [employeeId], {
+        start: periodStart,
+        end: periodEnd,
+      })
+    ).get(employeeId);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -1017,7 +1111,12 @@ export async function recomputePerformanceForQuarter(
   // themselves inside compute_employee_tip_metrics (SQL side, same floor).
   const metrics = computeMetricsFromEntries(
     entries,
-    { scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart }
+    {
+      scheduledScoredThrough,
+      punchesTimeClock,
+      metricsStartFloor: metricsStart,
+      removedShifts: removedEvidence,
+    }
   );
 
   // ---- Tattle metrics (attributed surveys whose date_experienced is in this quarter) ----
@@ -1286,6 +1385,12 @@ export async function recomputePerformanceForQuarter(
         on_time_pct: metrics.on_time_pct,
         on_time_grace_pct: metrics.on_time_grace_pct,
         covered_shifts: metrics.covered_shifts,
+        // THQ wire item 1 (mig 083): the counts substantiate the pct.
+        // Ruling 8 at the write boundary: an excluded non-puncher's counts
+        // are not-computed — null, never 0 (the compute path's zeros are
+        // internal placeholders, not facts).
+        scheduled_count: punchesTimeClock ? metrics.scheduled_count : null,
+        attended_count: punchesTimeClock ? metrics.attended_count : null,
         surveys_assigned: surveys_assigned > 0 ? surveys_assigned : null,
         surveys_completed: surveys_assigned > 0 ? surveys_completed : null,
         survey_engagement_pct,

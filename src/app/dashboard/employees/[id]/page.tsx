@@ -16,6 +16,7 @@ import {
 import {
   fetchLocationFlipMeta,
   fetchEffectiveEntries,
+  fetchRemovedShiftEvidence,
 } from "@/lib/flip-entries";
 import { utcToLocalWallClock } from "@/lib/ingest/sevenshifts/tz";
 import {
@@ -282,6 +283,9 @@ export default async function EmployeeDetailPage({
   // recent shifts must not freeze at flip day), time_entries at NOLA.
   const flipMeta = loc ? await fetchLocationFlipMeta(supabase, loc.id) : null;
   let allEntriesEff: TimeEntryRow[] = [];
+  let removedEvidence:
+    | import("@/lib/performance-recompute").RemovedShiftEvidence
+    | undefined;
   if (loc && flipMeta) {
     const byEmployee = await fetchEffectiveEntries(
       supabase,
@@ -291,6 +295,18 @@ export default async function EmployeeDetailPage({
       flipMeta
     );
     allEntriesEff = byEmployee.get(id) ?? [];
+    // Denominator spec rev 2 §3–§4 (Codex should-fix 2026-08-26): the
+    // profile summaries are a user-facing attendance surface and must
+    // carry the same removed-shift semantics as the recompute — a
+    // vendor-removed unpunched day must not read as a miss here while the
+    // stored quarter says otherwise. Store-level coverage rides the
+    // definer view inside, so this is safe under the session client.
+    removedEvidence = (
+      await fetchRemovedShiftEvidence(supabase, loc.id, [id], {
+        start: null,
+        end: todayIso,
+      })
+    ).get(id);
   }
   const recentEntriesEff = allEntriesEff.filter(
     (e) => e.entry_date >= fourteenDaysAgoIso && e.entry_date <= todayIso
@@ -405,9 +421,11 @@ export default async function EmployeeDetailPage({
   );
   const allTime = computeMetricsFromEntries(allEntriesEff, {
     punchesTimeClock,
+    removedShifts: removedEvidence,
   });
   const last14Days = computeMetricsFromEntries(recentEntriesEff, {
     punchesTimeClock,
+    removedShifts: removedEvidence,
   });
 
   // ---- Recent custom-range reports for this employee ----

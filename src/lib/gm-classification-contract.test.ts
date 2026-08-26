@@ -213,3 +213,50 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
   }
   assert.deepEqual(offenders, [], "unexpected files touching is_general_manager");
 });
+
+// ── mig 084: one GM per store — constraint + vacancy view (addendum §1–§2) ─
+
+const mig084 = read("supabase/migrations/084_one_gm_per_store.sql");
+
+test("084 §1: a CONSTRAINT, not a function — plain partial unique index, no deferral", () => {
+  // A rule enforced by a function is only enforced where the function is
+  // called; the count of call sites is not knowable by inspection. And the
+  // ruled shape: plain CREATE UNIQUE INDEX (CONCURRENTLY cannot run in the
+  // migration transaction; DEFERRABLE cannot ride a partial index and is
+  // not needed — end-of-statement checking makes demote-then-promote work).
+  assert.match(
+    mig084,
+    /create unique index employees_one_gm_per_store\s*\n\s*on public\.employees \(location_id\)\s*\n\s*where epd_role = 'manager' and active/
+  );
+  // Code only — the migration's comments legitimately explain WHY these
+  // keywords are absent.
+  const code084 = mig084
+    .replace(/--.*$/gm, "")
+    .replace(/comment on [\s\S]*?';/g, "");
+  assert.doesNotMatch(code084, /concurrently/i);
+  assert.doesNotMatch(code084, /deferrable/i);
+});
+
+test("084 §2: the vacancy view is LEFT JOINed FROM locations — a vacant store appears, never vanishes", () => {
+  // ⛔ THE TRAP: a GROUP BY over employees yields zero rows for a store
+  // with zero managers — the report vanishes exactly when it is the thing
+  // being reported. locations must be the FROM spine.
+  assert.match(
+    mig084,
+    /from public\.locations l\s*\n\s*left join public\.employees e/
+  );
+  // One row per store by construction: grouped on the locations spine.
+  assert.match(mig084, /group by l\.id, l\.location_code/);
+  // The GM filter must live in the JOIN condition, not a WHERE — a WHERE
+  // over the left side's nulls silently turns the LEFT JOIN back into an
+  // inner join and re-opens the trap.
+  assert.match(mig084, /and e\.epd_role = 'manager'\s*\n\s*and e\.active/);
+  const viewRegion = mig084.slice(mig084.indexOf("create or replace view"));
+  assert.doesNotMatch(viewRegion, /\nwhere /, "no WHERE clause in the view");
+});
+
+test("084 §2: conflict branch KEPT although the index makes it unreachable — an index can be dropped", () => {
+  assert.match(mig084, /when count\(e\.id\) = 0 then 'vacant'/);
+  assert.match(mig084, /when count\(e\.id\) = 1 then 'ok'/);
+  assert.match(mig084, /else 'conflict'/);
+});

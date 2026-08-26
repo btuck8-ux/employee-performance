@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isKnownLocationCode } from "@/lib/location-codes";
+import { fetchLocationFloors, isKnownLocationCode } from "@/lib/location-codes";
 import { hasMore } from "@/lib/scores-paging";
 
 /**
@@ -146,6 +146,22 @@ export async function GET(request: Request) {
     );
   }
 
+  // Envelope location_floors (THQ wire item 3, packet 5 §7.3 — additive):
+  // store-scoped, keyed by location_code, carrying data_start_date. Row
+  // fields are unchanged; the envelope key survives a zero-row response. A
+  // failed read degrades to the pre-083 envelope rather than failing the
+  // whole feed — the rows are the contract's load-bearing half.
+  let locationFloors: Record<string, string | null> | undefined;
+  try {
+    locationFloors = await fetchLocationFloors(
+      locationCode ? [locationCode] : undefined
+    );
+  } catch (err) {
+    console.error("[scores-feed] location floors read failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const total = count ?? 0;
   const rows = data ?? [];
   return NextResponse.json({
@@ -156,5 +172,6 @@ export async function GET(request: Request) {
       count: total,
       has_more: hasMore(offset, rows.length, total),
     },
+    ...(locationFloors !== undefined ? { location_floors: locationFloors } : {}),
   });
 }
