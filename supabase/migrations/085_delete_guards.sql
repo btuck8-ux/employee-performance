@@ -12,8 +12,15 @@
 -- deleter, including service_role and cascades. The revokes below are
 -- defence in depth for the non-service paths.
 --
--- ESCAPE HATCH (documented, deliberate): a session setting that must name
--- the guarded table(s) explicitly, inside the deleting transaction:
+-- ESCAPE HATCH (documented, deliberate — a FEATURE, not a formality):
+-- noncrew/admin-artifact cleanup is a legitimate, SANCTIONED operation
+-- that will recur (Tucker, packet 6 §3: the 2026-08-25 removal of seven
+-- owner/admin/test accounts — Mizono, Dale, Bascom, Shehadeh, Hat — was
+-- deliberate, their data ruled irrelevant, payloads preserved in the
+-- deleted_noncrew_*_20260825 tables). If you have hit this guard doing
+-- that class of cleanup, the hatch below is FOR YOU — the guard is not
+-- broken, do not drop it. A session setting that must name the guarded
+-- table(s) explicitly, inside the deleting transaction:
 --
 --   begin;
 --   set local epd.allow_hard_delete = 'employees';

@@ -17,6 +17,9 @@
 --      most need correct attribution (packet 4 §2 hypothesis, CONFIRMED).
 --   §3 Garrison punches_time_clock = false on BOTH rows (FCCSU + FCOL) —
 --      ruling 8: excluded from the attendance denominator, null never 0.
+--   §4 RLS + revoke over EVERY RLS-less public table (Tucker, packet 6 §2:
+--      "Keep and widen to all 22 — APPROVED"; already applied in prod,
+--      2026-08-26 night — this is parity, not a proposal).
 
 -- ── §1 toast_non_human_guids ───────────────────────────────────────────────
 
@@ -35,15 +38,6 @@ comment on table public.toast_non_human_guids is
   'that must choose among employees cannot report that the answer is not '
   'an employee; this table is where that answer lives.';
 
--- ⚠️ TUCKER DECISION — the ONE non-parity statement in this file: prod
--- currently has RLS DISABLED here with Supabase''s default full grants to
--- anon + authenticated (world-writable through PostgREST). Repo doctrine
--- (047) is RLS everywhere with client writes denied. Enabling deny-all RLS
--- (the app_settings pattern; service_role bypasses) matches doctrine but
--- CHANGES prod behaviour — strike this statement at review if the exposure
--- is accepted instead.
-alter table public.toast_non_human_guids enable row level security;
-
 insert into public.toast_non_human_guids
   (toast_employee_guid, toast_name, reason, kind, recorded_at)
 values
@@ -53,10 +47,16 @@ values
   ('75ca71ec-0c06-46f0-9c5e-0d241c9b6e43', 'Default, Login',
    'Toast default login account, not a person.',
    'device', '2026-08-26 19:58:01.804478+00'),
+  -- Wording corrected per Tucker's packet-6 §3 ruling (prod already
+  -- carries this exact row): Dale was a noncrew/admin artifact, NOT
+  -- "never on a roster" — the 2026-08-25 cleanup was deliberate and
+  -- sanctioned, and the earlier framing of it as evidence destruction
+  -- was wrong.
   ('81a3b568-a6e7-4b6b-b0e8-121f7293ba3f', 'Dale, Savanna',
-   'Confirmed by Tucker 2026-08-26: not an employee at any location and will never clock in again. Single COS punch 2026-07-08. Deliberately left unattributed — this row is the record of WHY, so the punch is never mistaken for one nobody has examined.',
-   'non_employee', '2026-08-26 20:03:10.994863+00')
-on conflict (toast_employee_guid) do nothing;
+   'Upper-management / admin artifact, not tracked crew. Held EMP-100015 (HOU) and EMP-100192 (NOLA) until the 2026-08-25 noncrew cleanup, which deliberately removed accounts of this class; payloads preserved in deleted_noncrew_employees_20260825. Tucker 2026-08-26: these accounts are irrelevant to the product''s goals and their data will never matter — ignore, do not track, do not re-create. Single COS punch 2026-07-08 stays unattributed by design.',
+   'noncrew_artifact', '2026-08-26 20:03:10.994863+00')
+on conflict (toast_employee_guid) do update
+  set reason = excluded.reason, kind = excluded.kind;
 
 -- ── §2 crosswalk attributions (employee_id/location_id resolved by code —
 --       durable across databases; UUIDs are not) ───────────────────────────
@@ -99,3 +99,36 @@ update public.employees
    set punches_time_clock = false
  where employee_code in ('EMP-100225', 'EMP-100100')
    and punches_time_clock is distinct from false;
+
+-- ── §4 RLS + revoke over every RLS-less public table (packet 6 §2) ─────────
+--
+-- What was found: 22 Cowork-created reference/snapshot tables (the
+-- %_20260825 / %_20260826 families + toast_non_human_guids) sat with
+-- rls_enabled = false AND Supabase's default full grants to anon +
+-- authenticated — world-writable through PostgREST with the anon key.
+-- Tucker: "Keep and widen to all 22 — APPROVED." Already applied in prod
+-- 2026-08-26 night (verified: zero public tables without RLS, zero
+-- granting anon); this loop is the parity record.
+--
+-- ⚠️ WHY THE REVOKE IS MANDATORY, NOT BELT-AND-BRACES: TRUNCATE and
+-- REFERENCES are NOT subject to row security. RLS alone would have left
+-- all 22 truncatable by anon — a guard that covers most verbs is not a
+-- guard on the verb it misses, and TRUNCATE is the one that empties the
+-- table.
+--
+-- Written as a loop over the CATALOG, not a 22-name list: the next
+-- `create table ... as select` inherits the same defaults, and a list is
+-- stale the day after it is written (that is how twenty-two accumulated
+-- across two sessions without either being noticed). The standing check
+-- lives in supabase/tests/rls_coverage_test.sql.
+
+do $$
+declare t record;
+begin
+  for t in select c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace
+           where n.nspname='public' and c.relkind='r' and c.relrowsecurity = false
+  loop
+    execute format('alter table public.%I enable row level security', t.relname);
+    execute format('revoke all on public.%I from anon, authenticated', t.relname);
+  end loop;
+end $$;
