@@ -43,14 +43,41 @@ export async function updateEmployeeAction(formData: FormData) {
   // Fetch the current location_id so we know whether this is a transfer
   // and can keep performance_records.location_id consistent — and the
   // current tier for the mig 071 lockstep below.
-  const { data: current } = await supabase
+  const { data: current, error: currentError } = await supabase
     .from("employees")
-    .select("location_id, epd_role")
+    .select("location_id, epd_role, active")
     .eq("id", id)
     .single();
+  if (currentError || !current) {
+    redirect(
+      `/dashboard/employees/${id}/edit?error=${encodeURIComponent(
+        `Employee lookup failed${currentError ? `: ${currentError.message}` : ""} — nothing written.`
+      )}`
+    );
+  }
 
   const old_location_id = current?.location_id;
   const isTransfer = old_location_id && old_location_id !== new_location_id;
+
+  // §7c tier gate (Codex blocker — this form's active checkbox is a
+  // deactivation path too): unchecking Active on an above-manager row is
+  // refused via role_is_sweepable, the SQL source of truth. Reactivation
+  // and already-inactive rows are never gated.
+  if (!active && current.active === true) {
+    const { data: sweepable, error: gateError } = await supabase.rpc(
+      "role_is_sweepable",
+      { r: current.epd_role }
+    );
+    if (gateError || sweepable !== true) {
+      redirect(
+        `/dashboard/employees/${id}/edit?error=${encodeURIComponent(
+          gateError
+            ? `Deactivation gate unavailable (${gateError.message}) — nothing written.`
+            : `${current.epd_role} tier is immune to deactivation — re-tier the person first if they have truly departed.`
+        )}`
+      );
+    }
+  }
 
   // Mig 071 lockstep (Codex should-fix, epd_role sprint): the wire derives
   // is_general_manager from epd_role, so a GM change writes BOTH — flag for

@@ -102,11 +102,11 @@ test("078: sweepability is table-driven over the LIVE enum — a seventh value f
       enumOrder = [...created[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
     }
     for (const add of src.matchAll(
-      /alter type public\.epd_role add value(?: if not exists)? '(\w+)'( before | after )?/g
+      /alter\s+type\s+public\.epd_role\s+add\s+value(?:\s+if\s+not\s+exists)?\s+'(\w+)'([^;]*)/gi
     )) {
-      assert.equal(
+      assert.doesNotMatch(
         add[2],
-        undefined,
+        /\b(before|after)\b/i,
         `${f} adds an epd_role value with BEFORE/AFTER — teach this parser the position before merging`
       );
       if (!enumOrder.includes(add[1])) enumOrder.push(add[1]);
@@ -155,6 +155,9 @@ test("078: every deactivation path calls the gate — a rule enforced by a funct
     "src/app/dashboard/employees/employee-status-actions.ts",
     "src/app/dashboard/admin/departure-candidates/actions.ts",
     "src/app/dashboard/admin/toast-crosswalk/actions.ts",
+    // The edit form's Active checkbox is a deactivation path too (Codex
+    // blocker on this branch).
+    "src/app/dashboard/employees/[id]/edit/actions.ts",
   ]) {
     assert.match(
       readFileSync(join(process.cwd(), p), "utf8"),

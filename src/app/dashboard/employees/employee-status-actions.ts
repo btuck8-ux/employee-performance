@@ -78,14 +78,23 @@ export async function setEmployeeActiveAction(formData: FormData) {
   // has truly departed, re-tier them first, then deactivate. Reactivation
   // is never gated.
   if (!nextActive) {
-    const { data: target } = await admin
+    const { data: target, error: targetError } = await admin
       .from("employees")
       .select("epd_role")
       .eq("id", employeeId)
       .single();
+    if (targetError || !target) {
+      // Fail CLOSED (Codex should-fix): a broken lookup must never coerce
+      // to a sweepable tier and slide past the gate.
+      redirect(
+        `${returnTo}${returnTo.includes("?") ? "&" : "?"}status_error=${encodeURIComponent(
+          `Tier lookup failed — nothing deactivated${targetError ? ` (${targetError.message})` : ""}.`
+        )}`
+      );
+    }
     const { data: sweepable, error: gateError } = await admin.rpc(
       "role_is_sweepable",
-      { r: target?.epd_role ?? "user" }
+      { r: target.epd_role }
     );
     if (gateError || sweepable !== true) {
       console.warn("[employees] deactivation refused (tier immune)", {

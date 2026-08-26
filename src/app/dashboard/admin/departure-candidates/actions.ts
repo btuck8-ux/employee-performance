@@ -79,17 +79,24 @@ export async function resolveDepartureCandidateAction(formData: FormData) {
 
     const immune: string[] = [];
     for (const targetId of [...targetIds]) {
-      const { data: row } = await admin
+      const { data: row, error: rowError } = await admin
         .from("employees")
         .select("employee_code, epd_role")
         .eq("id", targetId)
         .single();
+      if (rowError || !row) {
+        // Fail CLOSED (Codex should-fix): an unreadable row is excluded,
+        // never coerced to a sweepable tier.
+        immune.push(`${targetId} (lookup failed${rowError ? `: ${rowError.message}` : ""})`);
+        targetIds.delete(targetId);
+        continue;
+      }
       const { data: sweepable, error: gateError } = await admin.rpc(
         "role_is_sweepable",
-        { r: row?.epd_role ?? "user" }
+        { r: row.epd_role }
       );
       if (gateError || sweepable !== true) {
-        immune.push(`${row?.employee_code ?? targetId} (${row?.epd_role ?? "?"})`);
+        immune.push(`${row.employee_code} (${row.epd_role})`);
         targetIds.delete(targetId);
       }
     }
