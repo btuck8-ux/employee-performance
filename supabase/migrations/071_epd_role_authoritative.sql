@@ -21,6 +21,16 @@
 --   service/non-person accounts must not sit on the roster (the CAKE
 --   Support problem, ruled hours before this spec).
 --
+-- ⚠️ KNOWN CONSTRAINT, deliberate (Tucker's ruling on PR #42 deviation 3):
+--   because employees.epd_role WINS over user_roles.role, an employee-
+--   backed login can NEVER hold app access above its employment tier.
+--   Example: granting Taylor Garrison area_admin visibility across FCOL +
+--   FCCSU would require changing her EMPLOYMENT tier — which would make
+--   her sweep-immune and misdescribe her job. That is the consequence of
+--   unifying the axes, not a defect. If elevated app access for a working
+--   employee is ever needed, that is a Tucker decision about the model,
+--   not a workaround to build here.
+--
 -- ⚠️ NAMING HAZARD (say it or someone wires the wrong table): 'manager' on
 --   employees.epd_role means GENERAL MANAGER (employment tier). 'manager'
 --   also exists in users.role (admin|manager|viewer), where it is a legacy

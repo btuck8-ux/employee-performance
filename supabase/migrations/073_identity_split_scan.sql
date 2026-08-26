@@ -36,6 +36,12 @@ create or replace function public.scan_identity_splits(
 )
 returns table (
   location_code   text,
+  -- Same detector, two severities (Tucker's ruling on PR #42 deviation 1):
+  -- 'crosswalk' = a Toast store, where punches match by vendor GUID via the
+  -- crosswalk — a split there means the CROSSWALK FAILED, a worse finding.
+  -- 'name' = a name-matched store (NOLA/CAKE), where a split is the known
+  -- mechanism doing the expected thing.
+  punch_match     text,
   employee_code_a text,
   employee_name_a text,
   employee_code_b text,
@@ -54,6 +60,8 @@ as $$
       e.id,
       e.location_id,
       l.location_code,
+      case when l.actuals_source = 'toast' then 'crosswalk' else 'name' end
+        as punch_match,
       e.employee_code,
       e.employee_name,
       lower(split_part(trim(e.employee_name), ' ', 1))    as first_name,
@@ -75,6 +83,7 @@ as $$
   )
   select
     a.location_code,
+    a.punch_match,
     a.employee_code, a.employee_name,
     b.employee_code, b.employee_name,
     concat_ws('+',
@@ -99,7 +108,7 @@ as $$
   where a.last_name = b.last_name
      or a.first_name = b.first_name
      or left(a.last_name, 4) = left(b.last_name, 4)
-  order by 11 desc, 1, 2, 4;
+  order by 12 desc, 1, 3, 5;
 $$;
 
 comment on function public.scan_identity_splits(text) is
@@ -108,7 +117,8 @@ comment on function public.scan_identity_splits(text) is
   'by punch/schedule asymmetry — one side punch-only, the other schedule-'
   'only, is a probable identity split. NULL location = estate-wide (the '
   'agreed 19-pair baseline). Weekly cron reports hits only; pair count is '
-  'drift metadata.';
+  'drift metadata. punch_match: crosswalk (Toast store — a hit means the '
+  'crosswalk FAILED, worse) vs name (NOLA — the known mechanism).';
 
 revoke execute on function public.scan_identity_splits(text)
   from public, anon, authenticated;

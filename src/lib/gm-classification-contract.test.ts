@@ -95,6 +95,30 @@ test("the ONLY writer besides the migration seed is the SA employee-edit surface
     editActionsSrc,
     /epd_role: is_general_manager \? "manager" : "user"/
   );
+});
+
+test("TRAP GUARD (Tucker 2026-08-26): the lockstep DIES with the stored column", () => {
+  // The GM-toggle lockstep writes employees.is_general_manager. The column
+  // is scheduled to be DROPPED in a later migration once CP + THQ confirm
+  // the derived wire field. The day that drop migration lands in this
+  // repo, this test fails until the lockstep (and every other stored-flag
+  // write) is removed — the removal is FORCED, not remembered ("a
+  // commitment that exists only in a document protects nothing").
+  const migrationsDir = join(process.cwd(), "supabase/migrations");
+  const dropped = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .some((f) =>
+      /drop\s+column\s+(if\s+exists\s+)?is_general_manager/i.test(
+        read(`supabase/migrations/${f}`)
+      )
+    );
+  if (dropped) {
+    assert.doesNotMatch(
+      editActionsSrc,
+      /is_general_manager/,
+      "employees.is_general_manager was dropped — delete the GM-toggle lockstep and every stored-flag write from the edit surface (and retire this trap)"
+    );
+  }
   // Never derived from title/pay type.
   assert.doesNotMatch(
     editActionsSrc,

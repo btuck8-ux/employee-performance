@@ -71,6 +71,18 @@ test("§1g: recent scheduled mirror rows are freshness-tested — a ghost never 
   assert.match(migration, /te\.entry_date < current_date - 14\s*\n\s*or te\.updated_at >=/);
 });
 
+test("a location with ZERO successful cp_schedule runs never passes the freshness test silently", () => {
+  // Tucker's ruling (PR #42 item 6, the FCCSU case): absent means UNKNOWN,
+  // and unknown must never count as evidence. The bare `>=` against a NULL
+  // max() fails for every row; a coalesce to -infinity would silently
+  // accept them all — pinned out.
+  assert.doesNotMatch(migration, /-infinity/i);
+  assert.match(
+    migration,
+    /or te\.updated_at >= \(\s*\n\s*select max\(ir\.started_at\)/
+  );
+});
+
 test("a dismissal stands until new activity — dismissed people do not reinsert every run", () => {
   assert.match(migration, /dc\.status = 'dismissed'/);
   assert.match(migration, /dc\.resolved_at >= greatest\(/);
@@ -86,6 +98,24 @@ test("sweep lever: POST behind CRON_SECRET, GET report untouched", () => {
   assert.match(route, /export async function POST\(request: Request\)/);
   assert.match(route, /rpc\("sweep_departure_candidates"\)/);
   assert.match(route, /export async function GET\(request: Request\)/);
+});
+
+test("the sweep is SCHEDULED weekly — a notifier that waits to be remembered is the failure this killed", () => {
+  // Tucker's ruling overruling PR #42 deviation 4: 60 people sat dormant up
+  // to thirteen months because nothing surfaced them without a human
+  // initiating. Weekly cron + the manual lever, both.
+  const cronRoute = readFileSync(
+    join(process.cwd(), "src/app/api/cron/departure-sweep/route.ts"),
+    "utf8"
+  );
+  assert.match(cronRoute, /rpc\("sweep_departure_candidates"\)/);
+  assert.doesNotMatch(cronRoute, /from\("employees"\)/);
+  const vercel = JSON.parse(
+    readFileSync(join(process.cwd(), "vercel.json"), "utf8")
+  ) as { crons: { path: string; schedule: string }[] };
+  const cron = vercel.crons.find((c) => c.path === "/api/cron/departure-sweep");
+  assert.ok(cron, "weekly cron entry exists");
+  assert.equal(cron!.schedule, "10 12 * * 1");
 });
 
 test("sweep function is service-role only — never callable by browsers", () => {

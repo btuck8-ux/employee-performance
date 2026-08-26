@@ -20,6 +20,11 @@ export const SPLIT_PAIR_BASELINE = 19;
 
 export interface SplitScanRow {
   location_code: string;
+  /** Same detector, two severities (Tucker 2026-08-26): 'crosswalk' = a
+   * Toast store, where punches match by vendor GUID — a hit means the
+   * CROSSWALK FAILED, a worse finding. 'name' = NOLA's name-match, the
+   * known mechanism doing the expected thing. */
+  punch_match: "crosswalk" | "name";
   employee_code_a: string;
   employee_name_a: string;
   employee_code_b: string;
@@ -39,6 +44,8 @@ export interface SplitScanReport {
   pair_baseline: number;
   pair_drift: number;
   hit_count: number;
+  /** Hits at Toast stores — the crosswalk failed; worse than a NOLA hit. */
+  crosswalk_hit_count: number;
   hits: SplitScanRow[];
   note: string;
 }
@@ -53,9 +60,10 @@ export function buildSplitReport(rows: SplitScanRow[]): SplitScanReport {
     pair_baseline: SPLIT_PAIR_BASELINE,
     pair_drift: rows.length - SPLIT_PAIR_BASELINE,
     hit_count: hits.length,
+    crosswalk_hit_count: hits.filter((h) => h.punch_match === "crosswalk").length,
     hits,
     note:
-      "Hits are PROBABLE identity splits (one side punch-only, the other schedule-only) — candidates for human review, never auto-merged. Non-hit pairs are colleagues and are deliberately not reported.",
+      "Hits are PROBABLE identity splits (one side punch-only, the other schedule-only) — candidates for human review, never auto-merged. A CROSSWALK-labelled hit is the worse finding: that store matches punches by vendor GUID, so the crosswalk failed. Non-hit pairs are colleagues and are deliberately not reported.",
   };
 }
 
@@ -64,7 +72,8 @@ export function buildSplitReport(rows: SplitScanRow[]): SplitScanReport {
 export function formatHitLines(hits: SplitScanRow[]): string[] {
   return hits.map(
     (h) =>
-      `  ${h.location_code}: ${h.employee_name_a} (${h.employee_code_a}, ${h.punches_a}p/${h.scheduled_a}s) ↔ ` +
+      `  ${h.punch_match === "crosswalk" ? "⚠ CROSSWALK FAILURE" : "name-match"} at ${h.location_code}: ` +
+      `${h.employee_name_a} (${h.employee_code_a}, ${h.punches_a}p/${h.scheduled_a}s) ↔ ` +
       `${h.employee_name_b} (${h.employee_code_b}, ${h.punches_b}p/${h.scheduled_b}s) — matched on ${h.match_basis}`
   );
 }
@@ -82,12 +91,15 @@ export async function maybeSendSplitAlert(
   if (report.hit_count === 0) return { sent: false, reason: "no hits" };
 
   const body = [
-    `Weekly identity-split scan found ${report.hit_count} probable split(s):`,
+    `Weekly identity-split scan found ${report.hit_count} probable split(s)` +
+      (report.crosswalk_hit_count > 0
+        ? ` — ${report.crosswalk_hit_count} at Toast store(s), meaning the CROSSWALK FAILED there (the worse finding):`
+        : ":"),
     "",
     ...formatHitLines(report.hits),
     "",
     `Pair count ${report.pair_count} vs baseline ${report.pair_baseline} (drift ${report.pair_drift >= 0 ? "+" : ""}${report.pair_drift}).`,
-    "A split means one roster row holds the punches and a second row holds the schedule for the same person — resolve by hand (the Tolan/Tolson pattern); never auto-merge.",
+    "A split means one roster row holds the punches and a second row holds the schedule for the same person — resolve by hand (the Tolan/Tolson pattern); never auto-merge. A name-match hit at NOLA is the known mechanism; a crosswalk hit is a matcher defect.",
   ].join("\n");
 
   const apiKey = process.env.RESEND_API_KEY;
@@ -109,7 +121,10 @@ export async function maybeSendSplitAlert(
       body: JSON.stringify({
         from: ALERT_FROM,
         to: to.split(",").map((s) => s.trim()),
-        subject: `[EPD] Identity-split scan — ${report.hit_count} probable split(s)`,
+        subject:
+          report.crosswalk_hit_count > 0
+            ? `[EPD] Identity-split scan — CROSSWALK FAILURE: ${report.crosswalk_hit_count} split(s) at Toast store(s)`
+            : `[EPD] Identity-split scan — ${report.hit_count} probable split(s)`,
         text: body,
       }),
     });

@@ -36,6 +36,16 @@ test("punch evidence rides v_worked_intervals — the era-correct union, never r
   assert.match(migration, /from public\.v_worked_intervals/);
 });
 
+test("same detector, two severities: crosswalk stores are labelled — a hit there means the crosswalk FAILED", () => {
+  // Tucker's ruling on PR #42 deviation 1: Toast stores match punches by
+  // vendor GUID via the crosswalk, so a split there is a matcher defect —
+  // worse than NOLA's name-match mechanism doing the expected thing.
+  assert.match(
+    migration,
+    /case when l\.actuals_source = 'toast' then 'crosswalk' else 'name' end/
+  );
+});
+
 test("schedule evidence: scheduled mirror rows + the pruned direct feed", () => {
   assert.match(migration, /entry_type = 'scheduled'/);
   assert.match(migration, /missing_upstream_since is null/);
@@ -62,6 +72,7 @@ test("weekly cron scheduled clear of the ingest + GH-Action windows", () => {
 function row(overrides: Partial<SplitScanRow>): SplitScanRow {
   return {
     location_code: "NOLA",
+    punch_match: "name",
     employee_code_a: "EMP-100178",
     employee_name_a: "Nicholas Tolan",
     employee_code_b: "EMP-100179",
@@ -101,4 +112,17 @@ test("hit lines carry employee codes — a memo naming a person carries the code
   assert.match(lines[0], /EMP-100179/);
   assert.match(lines[0], /27p\/0s/);
   assert.match(lines[0], /0p\/22s/);
+});
+
+test("a crosswalk hit is labelled as the worse finding; a name hit as the known mechanism", () => {
+  const crosswalk = row({ punch_match: "crosswalk", location_code: "COS" });
+  const [cwLine] = formatHitLines([crosswalk]);
+  assert.match(cwLine, /CROSSWALK FAILURE/);
+  const [nameLine] = formatHitLines([row({})]);
+  assert.match(nameLine, /name-match/);
+  assert.doesNotMatch(nameLine, /CROSSWALK/);
+
+  const report = buildSplitReport([crosswalk, row({})]);
+  assert.equal(report.hit_count, 2);
+  assert.equal(report.crosswalk_hit_count, 1);
 });

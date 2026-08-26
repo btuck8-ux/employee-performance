@@ -154,16 +154,21 @@ as $$
               -- counts as evidence only if the location's last successful
               -- cp_schedule run refreshed it — time_entries has no tombstone,
               -- so a ghost row would suppress a real departure forever
-              -- (Josiah Ornelas's shape). Older rows are historical facts; a
-              -- location with no successful run has no reference and its
-              -- rows count (the departure-report GET's exact rule).
+              -- (Josiah Ornelas's shape: 14 post-08-10 rows, seven
+              -- consecutive runs skipping them). Older rows are historical
+              -- facts. A location with NO successful run has no freshness
+              -- reference: absent means UNKNOWN, and unknown must never
+              -- silently count as evidence (Tucker's ruling on PR #42 item
+              -- 6 — the FCCSU case; same rule handed CP about 7shifts'
+              -- active flag). The bare >= against a NULL max() makes such
+              -- rows fail the test, so they are skipped, not accepted.
               and (te.entry_date < current_date - 14
-                   or te.updated_at >= coalesce((
+                   or te.updated_at >= (
                         select max(ir.started_at)
                         from public.ingest_runs ir
                         where ir.location_id = sib.location_id
                           and ir.source = 'cp_schedule'
-                          and ir.status = 'success'), timestamptz '-infinity')))
+                          and ir.status = 'success')))
       and not exists (  -- a DISMISSAL STANDS until new activity starts a new
                         -- dormant stretch (Codex should-fix, this sprint):
                         -- without this, a dismissed person reinserts on every
