@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { LOCATION_CODES } from "@/lib/location-codes";
+import { isKnownLocationCode } from "@/lib/location-codes";
 
 /**
  * EPD -> Culture Pulse IDENTITY feed.
@@ -52,8 +52,24 @@ export async function GET(request: Request) {
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
   const offset = Number.isNaN(rawOffset) ? 0 : Math.max(Math.trunc(rawOffset), 0);
 
-  if (locationCode && !LOCATION_CODES.includes(locationCode)) {
-    return NextResponse.json({ error: "Unknown location_code" }, { status: 400 });
+  if (locationCode) {
+    // The code check reads public.locations; a failed read must return the
+    // route's JSON error shape, never an unhandled 500 (Codex should-fix).
+    let known: boolean;
+    try {
+      known = await isKnownLocationCode(locationCode);
+    } catch (err) {
+      console.error("[identity-feed] location codes read failed", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return NextResponse.json(
+        { error: "Internal error resolving locations" },
+        { status: 500 }
+      );
+    }
+    if (!known) {
+      return NextResponse.json({ error: "Unknown location_code" }, { status: 400 });
+    }
   }
   if (since && Number.isNaN(Date.parse(since))) {
     return NextResponse.json({ error: "Invalid since timestamp" }, { status: 400 });

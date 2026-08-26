@@ -17,7 +17,7 @@
  */
 
 import { runRecomputeJobs, distinctQuarters, type RecomputeJob } from "../sevenshifts/recompute";
-import { timezoneForLocationCode } from "../sevenshifts/tz";
+import { storeTimezone } from "../sevenshifts/tz";
 import type { AdminClient } from "../sevenshifts/crosswalk";
 import {
   buildScheduleRosterIndex,
@@ -50,11 +50,11 @@ export interface ScheduleIngestStats {
 
 export async function ingestCpSchedulesForLocation(
   supabase: AdminClient,
-  loc: { id: string; location_code: string },
+  loc: { id: string; location_code: string; timezone: string | null },
   rows: CpScheduleRow[],
   window: { sinceDate: string; untilDate: string }
 ): Promise<ScheduleIngestStats> {
-  const tz = timezoneForLocationCode(loc.location_code);
+  const tz = storeTimezone(loc);
 
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("employees")

@@ -12,7 +12,7 @@
  * failure) while store-level rows still accumulate.
  *
  * Timezone (§5.3): ticketFiredAt is UTC; fired_local_date/fired_local_time are
- * projected here with the same utcToLocalWallClock/timezoneForLocationCode the
+ * projected here with the same utcToLocalWallClock/storeTimezone the
  * labor feed uses, so kitchen rows land on exactly the clock time_entries use.
  *
  * The Step-0 probe (2026-07-28) showed Toast can emit byte-identical duplicate
@@ -28,7 +28,7 @@ import {
 } from "../sevenshifts/runs";
 import { maybeSendFailureAlert } from "../sevenshifts/alert";
 import { emptyStreakReasons } from "../sevenshifts/streak";
-import { utcToLocalWallClock, timezoneForLocationCode } from "../sevenshifts/tz";
+import { utcToLocalWallClock, storeTimezone } from "../sevenshifts/tz";
 import {
   runRecomputeJobs,
   quarterForDate,
@@ -47,6 +47,8 @@ export interface KitchenLocation {
   id: string;
   name: string;
   location_code: string;
+  /** locations.timezone — the DB owns the zone; storeTimezone() throws if unset. */
+  timezone: string | null;
   /** Null until 042 lands HOU's GUID — such stores are reported, not fetched. */
   toast_restaurant_guid: string | null;
   /** YYYY-MM-DD floor for backfills; kitchen history starts at the store's
@@ -62,7 +64,7 @@ export async function loadKitchenCrosswalk(
   const { data, error } = await supabase
     .from("locations")
     .select(
-      "id, name, location_code, toast_restaurant_guid, toast_sales_start_date, toast_kitchen_enabled"
+      "id, name, location_code, timezone, toast_restaurant_guid, toast_sales_start_date, toast_kitchen_enabled"
     )
     .eq("toast_kitchen_enabled", true)
     .order("location_code");
@@ -81,6 +83,7 @@ export async function loadKitchenCrosswalk(
       id: r.id as string,
       name: r.name as string,
       location_code: r.location_code as string,
+      timezone: (r.timezone as string | null) ?? null,
       toast_restaurant_guid: (r.toast_restaurant_guid as string | null) ?? null,
       kitchen_start_date: goLive,
     };
@@ -176,7 +179,7 @@ export async function ingestToastKitchen(
         `${loc.location_code} is kitchen-enabled but has no toast_restaurant_guid (apply migration 042 after the flag-guard deploy).`
       );
     }
-    const tz = timezoneForLocationCode(loc.location_code);
+    const tz = storeTimezone(loc);
 
     let skippedMissingKeys = 0;
     let duplicatesCollapsed = 0;
@@ -395,14 +398,46 @@ export async function runToastKitchenIngest(
 
   const outcomes: RunOutcome[] = [];
   for (const loc of runnable) {
-    const tz = timezoneForLocationCode(loc.location_code);
-    const dates = localDatesForPull(loc, tz, { from: options.from, to: options.to });
+    // Window derivation can now throw (a store with no locations.timezone
+    // refuses to guess). That failure must land as THIS store's error row
+    // in ingest_runs — never a loop-killing fatal that leaves no per-store
+    // evidence (Codex should-fix, LOCATION_CODES packet).
+    let dates: string[];
+    let windowStart = startedAt;
+    let windowEnd = startedAt;
+    try {
+      const tz = storeTimezone(loc);
+      dates = localDatesForPull(loc, tz, { from: options.from, to: options.to });
+      if (dates.length) {
+        windowStart = `${dates[0]}T00:00:00.000Z`;
+        windowEnd = `${dates[dates.length - 1]}T23:59:59.000Z`;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const runId = await startRun(supabase, "toast_kitchen", loc.id, startedAt, startedAt);
+      const outcome: RunOutcome = {
+        source: "toast_kitchen",
+        location_id: loc.id,
+        location_code: loc.location_code,
+        status: "error",
+        rows_in: 0,
+        rows_upserted: 0,
+        rows_skipped: 0,
+        detail: null,
+        error_text: message,
+        window_start: startedAt,
+        window_end: startedAt,
+      };
+      await finishRun(supabase, runId, outcome);
+      outcomes.push(outcome);
+      continue;
+    }
     const runId = await startRun(
       supabase,
       "toast_kitchen",
       loc.id,
-      dates.length ? `${dates[0]}T00:00:00.000Z` : startedAt,
-      dates.length ? `${dates[dates.length - 1]}T23:59:59.000Z` : startedAt
+      windowStart,
+      windowEnd
     );
     const outcome = await ingestToastKitchen(supabase, loc, dates);
     await finishRun(supabase, runId, outcome);

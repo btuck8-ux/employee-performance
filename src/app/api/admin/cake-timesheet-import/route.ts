@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { nolaLocationId } from "@/lib/ingest/cake/nola-location";
+import { cakeLocation } from "@/lib/ingest/cake/nola-location";
 import { startRun, finishRun } from "@/lib/ingest/sevenshifts/runs";
 import { ingestCakeTimesheetCsv } from "@/lib/ingest/cake/ingest";
 
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = createAdminClient();
-    const nolaId = await nolaLocationId(supabase);
+    const nolaId = (await cakeLocation(supabase)).id;
     const maxBefore = await nolaMaxDate(supabase, nolaId);
 
     const runId = await startRun(

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { nolaLocationId } from "@/lib/ingest/cake/nola-location";
+import { cakeLocation } from "@/lib/ingest/cake/nola-location";
 
 /**
  * Returns the CAKE profile ids the nightly harvester should pull, from
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
 
   try {
     const supabase = createAdminClient();
-    const nolaId = await nolaLocationId(supabase);
+    const nolaId = (await cakeLocation(supabase)).id;
     const { data, error } = await supabase
       .from("cake_profile_crosswalk")
       .select("cake_profile_id, location_id");

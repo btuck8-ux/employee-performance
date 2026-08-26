@@ -16,7 +16,7 @@
 
 import { getAllWithMeta } from "./client";
 import { rolesForCompany } from "./roles";
-import { utcToLocalWallClock, timezoneForLocationCode } from "./tz";
+import { utcToLocalWallClock, storeTimezone } from "./tz";
 import { distinctQuarters, runRecomputeJobs, type RecomputeJob } from "./recompute";
 import type { AdminClient, LocationCrosswalk } from "./crosswalk";
 import type { RunOutcome } from "./runs";
@@ -284,7 +284,7 @@ export async function ingestTimePunches(
   };
 
   try {
-    const tz = timezoneForLocationCode(loc.location_code);
+    const tz = storeTimezone(loc);
 
     const userToEmployee = await employeeMapForLocation(supabase, loc.id);
 

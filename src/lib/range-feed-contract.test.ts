@@ -76,6 +76,14 @@ const {
 } = await import("./range-feed.ts");
 type RangeMetricsT = import("./performance-recompute.ts").RangeMetrics;
 
+// Known location codes are INJECTED by the route from public.locations —
+// the DB owns the fact, the validator keeps no copy (LOCATION_CODES packet
+// 2026-08-26). Tests exercise the validator with a fixture set; the codes
+// here are arbitrary fixture strings, not a roster copy.
+const FIXTURE_CODES = ["CPD", "HOU"];
+const validateWith = (sp: URLSearchParams) =>
+  validateRangeParams(sp, FIXTURE_CODES);
+
 const ROUTE_FILE = join(
   process.cwd(),
   "src/app/api/scores/range/route.ts"
@@ -168,7 +176,7 @@ const EMP = {
 // ---- (b) param validation ----
 
 test("valid params: defaults page 1 / limit 25, empty location filter", () => {
-  const v = validateRangeParams(params(VALID));
+  const v = validateWith(params(VALID));
   assert.ok(v.ok);
   assert.deepEqual(v.params, {
     start: "2026-06-01",
@@ -183,27 +191,27 @@ test("valid params: defaults page 1 / limit 25, empty location filter", () => {
 });
 
 test("start and end are required", () => {
-  assert.ok(!validateRangeParams(params({ start: "2026-06-01" })).ok);
-  assert.ok(!validateRangeParams(params({ end: "2026-06-30" })).ok);
-  assert.ok(!validateRangeParams(params({})).ok);
+  assert.ok(!validateWith(params({ start: "2026-06-01" })).ok);
+  assert.ok(!validateWith(params({ end: "2026-06-30" })).ok);
+  assert.ok(!validateWith(params({})).ok);
 });
 
 test("calendar validity: pattern-passing junk like 2026-13-99 is rejected", () => {
   for (const bad of ["2026-13-01", "2026-02-30", "2026-00-10", "junk", "2026-6-1"]) {
-    const v = validateRangeParams(params({ start: bad, end: "2026-06-30" }));
+    const v = validateWith(params({ start: bad, end: "2026-06-30" }));
     assert.ok(!v.ok, `${bad} must be rejected`);
   }
 });
 
 test("start <= end, start >= 2026-01-01", () => {
   assert.ok(
-    !validateRangeParams(params({ start: "2026-07-01", end: "2026-06-30" })).ok
+    !validateWith(params({ start: "2026-07-01", end: "2026-06-30" })).ok
   );
   assert.ok(
-    !validateRangeParams(params({ start: "2025-12-31", end: "2026-01-31" })).ok
+    !validateWith(params({ start: "2025-12-31", end: "2026-01-31" })).ok
   );
   assert.ok(
-    validateRangeParams(params({ start: "2026-01-01", end: "2026-01-01" })).ok,
+    validateWith(params({ start: "2026-01-01", end: "2026-01-01" })).ok,
     "single-day window at the floor is valid"
   );
 });
@@ -211,46 +219,46 @@ test("start <= end, start >= 2026-01-01", () => {
 test("window cap: 366 inclusive days passes, 367 fails", () => {
   assert.equal(windowDays("2026-01-01", "2027-01-01"), 366);
   assert.ok(
-    validateRangeParams(params({ start: "2026-01-01", end: "2027-01-01" })).ok
+    validateWith(params({ start: "2026-01-01", end: "2027-01-01" })).ok
   );
   assert.ok(
-    !validateRangeParams(params({ start: "2026-01-01", end: "2027-01-02" })).ok
+    !validateWith(params({ start: "2026-01-01", end: "2027-01-02" })).ok
   );
 });
 
 test("location_code CSV: valid codes pass (deduped), unknown/malformed fail", () => {
-  const v = validateRangeParams(
+  const v = validateWith(
     params({ ...VALID, location_code: "CPD,HOU,CPD" })
   );
   assert.ok(v.ok);
   assert.deepEqual(v.params.locationCodes, ["CPD", "HOU"]);
   assert.ok(
-    !validateRangeParams(params({ ...VALID, location_code: "CPD,NOPE" })).ok
+    !validateWith(params({ ...VALID, location_code: "CPD,NOPE" })).ok
   );
   assert.ok(
-    !validateRangeParams(params({ ...VALID, location_code: "CPD,," })).ok
+    !validateWith(params({ ...VALID, location_code: "CPD,," })).ok
   );
   assert.ok(
-    !validateRangeParams(params({ ...VALID, location_code: "" })).ok
+    !validateWith(params({ ...VALID, location_code: "" })).ok
   );
 });
 
 test("employee_code: strict EMP-NNNNNN", () => {
-  const v = validateRangeParams(
+  const v = validateWith(
     params({ ...VALID, employee_code: "EMP-100001" })
   );
   assert.ok(v.ok);
   assert.equal(v.params.employeeCode, "EMP-100001");
   for (const bad of ["100001", "EMP-1", "emp-100001", "EMP-100001; drop"]) {
     assert.ok(
-      !validateRangeParams(params({ ...VALID, employee_code: bad })).ok,
+      !validateWith(params({ ...VALID, employee_code: bad })).ok,
       `${bad} must be rejected`
     );
   }
 });
 
 test("page/limit: strict integers, limit capped at 50, junk is a 400 not a silent default", () => {
-  const ok = validateRangeParams(params({ ...VALID, page: "3", limit: "50" }));
+  const ok = validateWith(params({ ...VALID, page: "3", limit: "50" }));
   assert.ok(ok.ok);
   assert.equal(ok.params.page, 3);
   assert.equal(ok.params.limit, 50);
@@ -268,7 +276,7 @@ test("page/limit: strict integers, limit capped at 50, junk is a 400 not a silen
   ];
   for (const bad of badCases) {
     assert.ok(
-      !validateRangeParams(params({ ...VALID, ...bad })).ok,
+      !validateWith(params({ ...VALID, ...bad })).ok,
       `${JSON.stringify(bad)} must be rejected`
     );
   }
