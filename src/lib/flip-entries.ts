@@ -458,3 +458,103 @@ export async function latestEffectiveWorkedDate(
   if (error) throw new Error(`flip worked cap: ${error.message}`);
   return (data?.entry_date as string | undefined)?.slice(0, 10) ?? null;
 }
+
+/**
+ * Removed-shift evidence for the attendance denominator (denominator spec
+ * rev 2 §3–§4, Tucker 2026-08-26). 7shifts deletes swapped/covered/
+ * reassigned shifts; time_entries keeps them forever. A scheduled date is
+ * judged REMOVED when no LIVE mirror shift (not deleted, not tombstoned via
+ * missing_upstream_since) exists for it in seven_shifts_shifts — matched on
+ * (location, seven_shifts_user_id), never attribution-dependent.
+ *
+ * HARD BOUNDARY (§3): the mirror's coverage start is derived PER LOCATION
+ * from min(entry_date) — never hardcoded. Dates before it cannot
+ * distinguish "removed" from "never observed" and stay uncorrected
+ * ("let's not infer"). A location with no mirror rows corrects nothing;
+ * an employee with no 7shifts user id corrects nothing (liveDates null).
+ * Absent means unknown, and unknown never drops a denominator day.
+ */
+export async function fetchRemovedShiftEvidence(
+  supabase: SupabaseClient,
+  locationId: string,
+  employeeIds: string[],
+  window: { start: string; end: string }
+): Promise<Map<string, import("./performance-recompute").RemovedShiftEvidence>> {
+  const out = new Map<
+    string,
+    import("./performance-recompute").RemovedShiftEvidence
+  >();
+
+  const { data: coverageRow, error: covError } = await supabase
+    .from("seven_shifts_shifts")
+    .select("entry_date")
+    .eq("location_id", locationId)
+    .order("entry_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (covError) throw new Error(`mirror coverage: ${covError.message}`);
+  const mirrorCoverageStart =
+    (coverageRow?.entry_date as string | undefined)?.slice(0, 10) ?? null;
+
+  if (mirrorCoverageStart === null) {
+    for (const id of employeeIds) {
+      out.set(id, { mirrorCoverageStart: null, liveDates: null });
+    }
+    return out;
+  }
+
+  const { data: empRows, error: empError } = await supabase
+    .from("employees")
+    .select("id, seven_shifts_user_id")
+    .in("id", employeeIds);
+  if (empError) throw new Error(`evidence employees: ${empError.message}`);
+  const userIdByEmployee = new Map<string, number | null>();
+  for (const r of empRows ?? []) {
+    const raw = r.seven_shifts_user_id;
+    const n = raw === null || raw === undefined ? null : Number(raw);
+    userIdByEmployee.set(
+      String(r.id),
+      n !== null && Number.isSafeInteger(n) ? n : null
+    );
+  }
+
+  const userIds = [
+    ...new Set(
+      [...userIdByEmployee.values()].filter((v): v is number => v !== null)
+    ),
+  ];
+  const liveByUser = new Map<number, Set<string>>();
+  if (userIds.length > 0) {
+    const rows = await pagedRows<{ seven_shifts_user_id: number; entry_date: string }>(
+      (from, to) =>
+        supabase
+          .from("seven_shifts_shifts")
+          .select("seven_shifts_user_id, entry_date")
+          .eq("location_id", locationId)
+          .in("seven_shifts_user_id", userIds)
+          .eq("deleted", false)
+          .is("missing_upstream_since", null)
+          .gte("entry_date", window.start)
+          .lte("entry_date", window.end)
+          .order("entry_date", { ascending: true })
+          .order("seven_shifts_shift_id", { ascending: true })
+          .range(from, to),
+      "removed-shift evidence"
+    );
+    for (const r of rows) {
+      const uid = Number(r.seven_shifts_user_id);
+      const set = liveByUser.get(uid) ?? new Set<string>();
+      set.add(String(r.entry_date).slice(0, 10));
+      liveByUser.set(uid, set);
+    }
+  }
+
+  for (const id of employeeIds) {
+    const uid = userIdByEmployee.get(id) ?? null;
+    out.set(id, {
+      mirrorCoverageStart,
+      liveDates: uid === null ? null : liveByUser.get(uid) ?? new Set<string>(),
+    });
+  }
+  return out;
+}

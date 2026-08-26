@@ -149,8 +149,10 @@ test("the attendance denominator EXCLUDES non-punchers — null, never 0", () =>
   assert.match(recomputeSrc, /opts\?\.punchesTimeClock === false/);
   // Since the demarcation floor (mig 066) the same opts object also
   // threads metricsStartFloor — the pin tracks the full call shape.
+  // Since the removed-shift correction (denominator spec rev 2) the opts
+  // object threads four members — the pin tracks the full call shape.
   const threaded = recomputeSrc.match(
-    /scheduledScoredThrough, punchesTimeClock, metricsStartFloor: metricsStart \}/g
+    /scheduledScoredThrough,\s*punchesTimeClock,\s*metricsStartFloor: metricsStart,\s*removedShifts: removedEvidence,/g
   ) ?? [];
   assert.equal(threaded.length, 2, "both computeMetricsForRange and recomputePerformanceForQuarter thread the marker");
   const fetches = recomputeSrc.match(/select\("punches_time_clock, punches_time_clock_since"\)/g) ?? [];
