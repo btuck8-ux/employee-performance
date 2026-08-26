@@ -235,6 +235,24 @@ test("departure report (§7b): read-only, 14-day rule, never-punched excluded", 
   assert.match(departureSrc, /CANDIDATES, NOT CONCLUSIONS/);
 });
 
+test("§1g (2026-08-26): ghost schedule rows are freshness-tested, counted, never silently dropped", () => {
+  // time_entries has no tombstone — a row 7shifts stopped serving lives
+  // forever (Josiah Ornelas' five). Recent/future evidence counts only if
+  // the last successful cp_schedule run refreshed it; stale rows are
+  // reported per candidate. The updated_at-vs-last-run equivalence is the
+  // documented substitute for a missing_upstream_since column on
+  // time_entries (per §1g's "or document why it is sufficient and pin it").
+  assert.match(departureSrc, /freshnessRef/);
+  assert.match(departureSrc, /cp_schedule/);
+  assert.match(departureSrc, /FRESHNESS_LOOKBACK_DAYS/);
+  assert.match(departureSrc, /stale_recent_scheduled_rows/);
+  assert.match(departureSrc, /stale_recent_scheduled_rows_total/);
+  // The freshness test never reaches historical rows (outside the
+  // nightly's refresh reach) and never applies without a reference run.
+  assert.match(departureSrc, /d >= freshnessFloorDate/);
+  assert.match(departureSrc, /ref !== null/);
+});
+
 test("probe (§4): read-only, all four candidate causes, no names or emails in the report", () => {
   assert.match(probeSrc, /CRON_SECRET/);
   for (const writer of ["upsert(", "insert(", "update(", "delete("]) {
