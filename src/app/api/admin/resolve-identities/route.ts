@@ -64,12 +64,26 @@ export async function GET(request: Request) {
     }
 
     const identities = await resolveIdentities(supabase, [loc]);
-    return NextResponse.json({
-      lever: "resolve-identities",
-      location_code: loc.location_code,
-      identities,
-      note: "IDENTITY ONLY — filled seven_shifts_user_id where NULL by exact email match; nothing else written. Attribution/backfills are separate levers.",
-    });
+    // resolveIdentities collects per-company/per-employee failures into its
+    // errors array instead of throwing — a 200 with silent zero updates
+    // would look like success (Codex should-fix). Non-empty errors → 502.
+    const failed = (identities.errors?.length ?? 0) > 0;
+    if (failed) {
+      console.error("[resolve-identities] completed with errors", {
+        location_code: loc.location_code,
+        errors: identities.errors,
+      });
+    }
+    return NextResponse.json(
+      {
+        lever: "resolve-identities",
+        location_code: loc.location_code,
+        ok: !failed,
+        identities,
+        note: "IDENTITY ONLY — filled seven_shifts_user_id where NULL by exact email match; nothing else written. Attribution/backfills are separate levers.",
+      },
+      { status: failed ? 502 : 200 }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[resolve-identities] fatal:", message);

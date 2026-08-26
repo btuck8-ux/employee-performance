@@ -56,11 +56,19 @@ export default async function AdminIndexPage() {
   // (CSU memo §6). Non-fatal: the index renders without it.
   let unclassifiedCount: number | null = null;
   try {
-    const { count } = await createAdminClient()
+    const { count, error } = await createAdminClient()
       .from("employees")
       .select("id", { count: "exact", head: true })
       .eq("epd_role", "unclassified");
-    unclassifiedCount = count ?? 0;
+    if (error) {
+      // supabase-js reports query failures in-band, not by throwing — an
+      // ignored error here would render a silent 0 (Codex nit).
+      console.warn("[admin-index] unclassified count query failed", {
+        message: error.message,
+      });
+    } else {
+      unclassifiedCount = count ?? 0;
+    }
   } catch (err) {
     console.warn("[admin-index] unclassified count unavailable", {
       message: err instanceof Error ? err.message : String(err),
