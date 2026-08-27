@@ -1391,6 +1391,11 @@ export async function recomputePerformanceForQuarter(
         // internal placeholders, not facts).
         scheduled_count: punchesTimeClock ? metrics.scheduled_count : null,
         attended_count: punchesTimeClock ? metrics.attended_count : null,
+        // Packet 8 §3 (mig 086): on_time_count is the GRACE count — attended
+        // days within grace, denominator attended_count. Identity pinned:
+        // on_time_grace_pct = on_time_count / attended_count. Same ruling-8
+        // gate; a cover-dominated row keeps its real count under a null pct.
+        on_time_count: punchesTimeClock ? metrics.on_time_grace_count : null,
         surveys_assigned: surveys_assigned > 0 ? surveys_assigned : null,
         surveys_completed: surveys_assigned > 0 ? surveys_completed : null,
         survey_engagement_pct,
