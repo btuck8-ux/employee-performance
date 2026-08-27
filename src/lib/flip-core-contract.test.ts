@@ -39,8 +39,17 @@ test("mig 061: exactly the seven Toast stores flip; NOLA is deliberately absent"
 });
 
 test("flip-entries: pruned schedule, day-conditional fallback, go-live worked split", () => {
-  // Scheduled: the pruned direct feed…
-  assert.match(flipSrc, /\.is\("missing_upstream_since", null\)/);
+  // Scheduled: the pruned direct feed. Since packet 10 §3 (rulings
+  // 2026-08-27) the tombstone side of the prune is the withdrawal-TIMING
+  // gate, not a blanket exclusion: rows are fetched with their
+  // missing_upstream_since and judged in TS by withdrawnRowStood
+  // (store-local strictly-after = stood, counts; on/before = cancelled).
+  // The old blanket `.is("missing_upstream_since", null)` filter must NOT
+  // reappear here — it would silently re-erase stood absences (the
+  // Chianna Taylor defect).
+  assert.doesNotMatch(flipSrc, /\.is\("missing_upstream_since", null\)/);
+  assert.match(flipSrc, /withdrawnRowStood\(/);
+  assert.match(flipSrc, /missing_upstream_since/);
   assert.match(flipSrc, /\.eq\("deleted", false\)/);
   assert.match(flipSrc, /\.eq\("draft", false\)/);
   // …day-conditional (the method rule: the cutover depends on the

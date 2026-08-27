@@ -166,7 +166,10 @@ test("store-wide reporting shows BOTH ways from summed parts, on the flip's sour
   assert.match(storeAttendanceSrc, /fetchEffectiveEntries\(/);
   const flipSrc = read("src/lib/flip-entries.ts");
   assert.match(flipSrc, /from\("seven_shifts_shifts"\)/);
-  assert.match(flipSrc, /\.is\("missing_upstream_since", null\)/);
+  // Packet 10 §3: the tombstone prune is the withdrawal-timing gate
+  // (withdrawnRowStood), not a blanket `.is("missing_upstream_since",
+  // null)` — see flip-core-contract.test.ts for the full pin.
+  assert.match(flipSrc, /withdrawnRowStood\(/);
   assert.match(flipSrc, /from\("toast_time_entries"\)/);
   // Non-punchers ride the same mig 056 effective-date gate as the recompute.
   assert.match(storeAttendanceSrc, /punchesTimeClockForPeriod\(/);

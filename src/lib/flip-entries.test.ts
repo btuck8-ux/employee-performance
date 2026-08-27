@@ -54,7 +54,7 @@ registerHooks({
   },
 });
 
-const { mergeEffectiveEntries } = await import("./flip-entries.ts");
+const { mergeEffectiveEntries, withdrawnRowStood } = await import("./flip-entries.ts");
 
 type Row = { entry_date: string; entry_type: "scheduled" | "worked"; in_time: string | null };
 
@@ -314,4 +314,52 @@ test("an employee with NO direct-feed presence keeps time_entries scheduled on c
     te("2026-07-11", "scheduled", "09:00:00"),
     te("2026-07-11", "worked", "09:00:00"),
   ]);
+});
+
+// ── withdrawal-timing gate (packet 10 §3; rulings 2026-08-27) ───────────────
+//
+// withdrawnRowStood is the single predicate behind all four gate sites (day
+// set, both coverage starts, removal evidence) and the TS twin of mig 087's
+// view clause. The load-bearing behaviours: strictly-after on the STORE
+// LOCAL calendar, same-day = cancelled (Call 2), and unknown never counts.
+
+test("timing gate: a live row (no tombstone) always counts", () => {
+  assert.equal(withdrawnRowStood(null, "2026-08-25", "America/Denver"), true);
+});
+
+test("timing gate: withdrawn the next local morning → the shift STOOD (the Chianna Taylor fixture)", () => {
+  // DTD 2026-08-25, withdrawn 2026-08-26T09:00:53Z = 03:00 next day in
+  // Denver. Under the pre-gate rule this deletion erased her absence.
+  assert.equal(
+    withdrawnRowStood("2026-08-26T09:00:53Z", "2026-08-25", "America/Denver"),
+    true
+  );
+});
+
+test("timing gate: withdrawn ON the shift date → cancelled, excused (Call 2 — the Rexroad fixture)", () => {
+  // DTD 2026-08-26, withdrawn 2026-08-26T09:00:00Z = 03:00 SAME day local.
+  assert.equal(
+    withdrawnRowStood("2026-08-26T09:00:00Z", "2026-08-26", "America/Denver"),
+    false
+  );
+});
+
+test("timing gate: the compare is store-local, never UTC — a UTC-next-day withdrawal can be a same-day local one", () => {
+  // 2026-08-26T03:00Z is 2026-08-25 21:00 in Denver: same local day as an
+  // 08-25 shift, so cancelled — a UTC-date compare would wrongly say stood.
+  assert.equal(
+    withdrawnRowStood("2026-08-26T03:00:00Z", "2026-08-25", "America/Denver"),
+    false
+  );
+});
+
+test("timing gate: withdrawn before a future-dated shift → cancelled", () => {
+  assert.equal(
+    withdrawnRowStood("2026-08-24T10:00:00Z", "2026-09-02", "America/Denver"),
+    false
+  );
+});
+
+test("timing gate: an unparseable withdrawal timestamp never counts — unknown is not stood", () => {
+  assert.equal(withdrawnRowStood("not-a-date", "2026-08-25", "America/Denver"), false);
 });
