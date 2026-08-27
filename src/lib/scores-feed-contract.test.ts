@@ -6,10 +6,11 @@
  * UTC, Training HQ 11:15 UTC) parse it in production. These tests pin the
  * contract at its source — the latest view-replacing migration (070):
  *
- *   (a) 30 columns in locked order: the original 11, the 9 metrics (mig 045),
+ *   (a) 32 columns in locked order: the original 11, the 9 metrics (mig 045),
  *       the 6 per-metric counts (mig 048), the 2 effective-window fields
  *       (mig 069, §2b — THQ contract), the 2 attendance counts (mig 083,
- *       THQ wire item 1, packet 5 §7.3) — always appended, never reordered;
+ *       THQ wire item 1, packet 5 §7.3), the identity key + on-time count
+ *       (mig 086, packet 8 §3) — always appended, never reordered;
  *   (b) every metric and count is a straight `pr.<col> as <col>` pass-through
  *       — no coalesce/nullif, so SQL null (not-computed) reaches the wire as
  *       JSON null, never 0 (317 real surveys_completed=0 rows depend on the
@@ -27,7 +28,7 @@ import { join } from "node:path";
 
 const MIGRATION_FILE = join(
   process.cwd(),
-  "supabase/migrations/083_scores_feed_scheduled_attended_counts.sql"
+  "supabase/migrations/086_scores_feed_uid_and_on_time_count.sql"
 );
 
 /** The 11 columns both live consumers already parse — order matters. */
@@ -78,6 +79,14 @@ const WINDOW_2 = ["data_start_date", "effective_period_start"];
  * = not-computed (pre-083 row, or ruling-8 excluded non-puncher — null,
  * never 0); integer 0 = computed, zero judgeable days. */
 const ATTENDANCE_2 = ["scheduled_count", "attended_count"];
+
+/** The identity key + on-time count (mig 086, packet 8 §3 — Tucker-approved
+ * 2026-08-27): 30 → 32, appended. seven_shifts_user_id is nullable and NEVER
+ * coalesced — a null must stay null so a consumer cannot join nulls to each
+ * other. on_time_count is the GRACE count (denominator attended_count, not
+ * scheduled_count); null = not-computed (frozen rows inherit the 083
+ * boundary), 0 = attended nothing on time. */
+const IDENTITY_2 = ["seven_shifts_user_id", "on_time_count"];
 
 const sql = readFileSync(MIGRATION_FILE, "utf8");
 
@@ -136,7 +145,7 @@ function outputColumns(stmt: string): string[] {
 }
 
 for (const view of ["v_employee_scores", "v_employee_scores_latest"]) {
-  test(`${view}: 30-column shape — 11 original + 9 metrics + 6 counts + 2 window fields + 2 attendance counts, in order`, () => {
+  test(`${view}: 32-column shape — 11 original + 9 metrics + 6 counts + 2 window fields + 2 attendance counts + uid/on-time pair, in order`, () => {
     const cols = outputColumns(viewStatement(view));
     assert.deepEqual(cols, [
       ...ORIGINAL_11,
@@ -144,14 +153,15 @@ for (const view of ["v_employee_scores", "v_employee_scores_latest"]) {
       ...COUNTS_6,
       ...WINDOW_2,
       ...ATTENDANCE_2,
+      ...IDENTITY_2,
     ]);
-    assert.equal(cols.length, 30, "key count rises by exactly two (mig 083)");
+    assert.equal(cols.length, 32, "key count rises by exactly two (mig 086)");
   });
 }
 
 test("v_employee_scores: each metric and count is a straight pass-through (null stays null)", () => {
   const stmt = viewStatement("v_employee_scores");
-  for (const col of [...NEW_9, ...COUNTS_6, ...ATTENDANCE_2]) {
+  for (const col of [...NEW_9, ...COUNTS_6, ...ATTENDANCE_2, "on_time_count"]) {
     const line = stmt
       .split("\n")
       .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/\s+/g, " "))
@@ -179,7 +189,7 @@ test("v_employee_scores_latest: each metric and count is a bare column pass-thro
     .map((l) =>
       l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/^s\./, "")
     );
-  for (const col of [...NEW_9, ...COUNTS_6, ...WINDOW_2, ...ATTENDANCE_2]) {
+  for (const col of [...NEW_9, ...COUNTS_6, ...WINDOW_2, ...ATTENDANCE_2, ...IDENTITY_2]) {
     assert.ok(
       lines.includes(col),
       `${col} must be selected as a bare identifier — no coalesce/nullif/expressions`
@@ -323,6 +333,38 @@ test("083: the recompute WRITES the pair, with ruling 8 at the write boundary", 
   );
   assert.match(src, /scheduled_count: punchesTimeClock \? metrics\.scheduled_count : null/);
   assert.match(src, /attended_count: punchesTimeClock \? metrics\.attended_count : null/);
+});
+
+// ── mig 086: seven_shifts_user_id + on_time_count (packet 8 §3) ────────────
+
+test("086: seven_shifts_user_id is the employees-row value, nullable, NEVER coalesced", () => {
+  // A null must stay null so a consumer cannot join nulls to each other.
+  // 0 of 238 rows are null today; the discipline is for the day one isn't.
+  const stmt = viewStatement("v_employee_scores");
+  const line = stmt
+    .split("\n")
+    .map((l) => l.replace(/--.*$/, "").trim().replace(/,$/, "").replace(/\s+/g, " "))
+    .find((l) => l.endsWith("as seven_shifts_user_id"));
+  assert.equal(
+    line,
+    "e.seven_shifts_user_id as seven_shifts_user_id",
+    "uid must be the bare employees-row value — no coalesce/nullif/casts"
+  );
+});
+
+test("086: the recompute WRITES on_time_count — the GRACE count, behind the 083 gate", () => {
+  // on_time_count = attended days within grace (denominator attended_count,
+  // never scheduled_count) — internal metrics.on_time_grace_count, NOT the
+  // strict on_time_count. Ruling 8 at the write boundary, same as the 083
+  // pair; a cover-dominated row keeps its real count under a null pct.
+  const src = readFileSync(
+    join(process.cwd(), "src/lib/performance-recompute.ts"),
+    "utf8"
+  );
+  assert.match(
+    src,
+    /on_time_count: punchesTimeClock \? metrics\.on_time_grace_count : null/
+  );
 });
 
 test("083: /api/scores envelope carries location_floors — store-scoped, zero-row-survivable (THQ wire item 3)", () => {

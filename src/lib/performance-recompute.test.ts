@@ -136,6 +136,52 @@ test("grace boundary: scheduled+3 min counts as on-time, +4 does not", () => {
   assertClose(m.on_time_grace_pct, 75, "on_time_grace_pct");
 });
 
+test("packet 8 §3: the two count identities hold wherever the pcts are computed", () => {
+  // Pinned wire identities (mig 086 — re-run live after the §7.7.3
+  // cross-store rule, which moves COUNTS, not just percentages, per §1d):
+  //   on_time_grace_pct = on_time_count / attended_count      attended > 0
+  //   attendance_pct    = attended_count / scheduled_count    scheduled > 0
+  // The wire's on_time_count IS the grace count. Cover-dominated rows null
+  // the pcts while keeping real counts — the identity is asserted where the
+  // pct is non-null.
+  const m = computeMetricsFromEntries(
+    [
+      entry("2026-06-01", "scheduled", "09:00:00"),
+      entry("2026-06-02", "scheduled", "09:00:00"),
+      entry("2026-06-03", "scheduled", "09:00:00"),
+      entry("2026-06-04", "scheduled", "09:00:00"), // missed
+      entry("2026-06-05", "scheduled", "09:00:00"), // missed
+      entry("2026-06-01", "worked", "09:02:00"), // grace
+      entry("2026-06-02", "worked", "09:30:00"), // late
+      entry("2026-06-03", "worked", "08:55:00"), // strict
+    ],
+    CAP
+  );
+  assertClose(
+    m.attendance_pct,
+    (m.attended_count / m.scheduled_count) * 100,
+    "attendance identity"
+  );
+  assertClose(
+    m.on_time_grace_pct,
+    (m.on_time_grace_count / m.attended_count) * 100,
+    "on-time-grace identity"
+  );
+});
+
+test("packet 8 §3: a zero denominator scores NULL, not 0% — counts stay real", () => {
+  // No scheduled days at all: both pcts must be null (485 stored rows
+  // depend on null-not-zero; THQ independently verified 0-of-4 on their
+  // side). The counts remain honest integers.
+  const m = computeMetricsFromEntries(
+    [entry("2026-06-01", "worked", "09:00:00")],
+    CAP
+  );
+  assert.equal(m.scheduled_count, 0);
+  assert.equal(m.attendance_pct, null);
+  assert.equal(m.on_time_grace_pct, null);
+});
+
 test("early punch is strictly on-time; HH:MM (no seconds) parses", () => {
   const m = computeMetricsFromEntries(
     [
