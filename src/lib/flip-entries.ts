@@ -10,7 +10,9 @@
  *    go-live (pre-Toast history exists only there). This is precisely
  *    v_worked_intervals' go-live split (mig 058).
  *  - SCHEDULED at a Toast store: seven_shifts_shifts, PRUNED
- *    (missing_upstream_since is null, deleted=false, draft=false), one row
+ *    (deleted=false, draft=false, and tombstoned rows only when they
+ *    STOOD — withdrawn strictly after their store-local shift date, the
+ *    packet 10 §3 timing gate; withdrawnRowStood), one row
  *    per (employee, date) taking the earliest start — the matcher's shape.
  *    STORE+DAY-CONDITIONAL fallback: a date where the direct feed has NO
  *    rows for the store at all (its history floor, or an ingest outage)
@@ -87,6 +89,31 @@ export async function fetchLocationFlipMeta(
     tz,
     metricsStart: (data?.metrics_start as string | null) ?? null,
   };
+}
+
+/**
+ * WITHDRAWAL-TIMING GATE (packet 10 §3; Tucker rulings 2026-08-27, packet 9
+ * §4b Call 1 + Call 2): a vendor-withdrawn shift STOOD — and stays a real
+ * schedule for the day set, coverage, and removal evidence — iff it was
+ * withdrawn STRICTLY AFTER its shift date, measured on the STORE-LOCAL
+ * calendar (a 09:00 UTC withdrawal is 3 AM in Denver — the wall clock is
+ * the store's, never UTC's). Withdrawn ON or BEFORE the shift date =
+ * cancelled = excused (Call 2: same-day counts as cancelled).
+ *
+ * A live row (no tombstone) always counts. deleted/draft rows carry no
+ * withdrawal timestamp and remain excluded — the gate can only judge what
+ * it can date. Under the pre-gate rule, deleting a no-show after the fact
+ * erased the absence (Chianna Taylor, DTD 2026-08-25); the timing IS the
+ * signal now.
+ */
+export function withdrawnRowStood(
+  missingUpstreamSince: string | null,
+  entryDate: string,
+  tz: string
+): boolean {
+  if (missingUpstreamSince === null) return true;
+  const local = utcToLocalWallClock(missingUpstreamSince, tz);
+  return local !== null && local.date > entryDate;
 }
 
 async function pagedRows<T>(
@@ -299,17 +326,24 @@ export async function fetchEffectiveEntries(
   }, "flip shift days");
   const directFeedDays = new Set(dayRows.map((r) => String(r.entry_date).slice(0, 10)));
 
-  type ShiftRow = { employee_id: string; entry_date: string; start_at: string };
+  type ShiftRow = {
+    employee_id: string;
+    entry_date: string;
+    start_at: string;
+    missing_upstream_since: string | null;
+  };
   const shiftRows: ShiftRow[] = [];
   for (const ids of chunk(employeeIds, IN_CHUNK)) {
     shiftRows.push(
       ...(await pagedRows<ShiftRow>((from, to) => {
+        // Timing gate: tombstoned rows are fetched and judged in TS —
+        // PostgREST cannot express the column-to-column local-date compare
+        // (withdrawnRowStood), and the zone is the store's.
         let q = supabase
           .from("seven_shifts_shifts")
-          .select("employee_id, entry_date, start_at")
+          .select("employee_id, entry_date, start_at, missing_upstream_since")
           .eq("location_id", locationId)
           .in("employee_id", ids)
-          .is("missing_upstream_since", null)
           .eq("deleted", false)
           .eq("draft", false)
           .lte("entry_date", window.end)
@@ -322,10 +356,12 @@ export async function fetchEffectiveEntries(
   }
   const directStarts = new Map<string, Map<string, string | null>>();
   for (const r of shiftRows) {
+    const date = String(r.entry_date).slice(0, 10);
+    if (!withdrawnRowStood(r.missing_upstream_since, date, meta.tz)) continue;
     setEarliest(
       directStarts,
       String(r.employee_id),
-      String(r.entry_date).slice(0, 10),
+      date,
       utcToLocalWallClock(r.start_at, meta.tz)?.time ?? null
     );
   }
@@ -387,14 +423,17 @@ export async function fetchEffectiveEntries(
   // viewer — no definer view needed (unlike the STORE-level day set).
   const firstDates = new Map<string, string>();
   for (const ids of chunk(employeeIds, IN_CHUNK)) {
-    const rows = await pagedRows<{ employee_id: string; entry_date: string }>(
+    const rows = await pagedRows<{
+      employee_id: string;
+      entry_date: string;
+      missing_upstream_since: string | null;
+    }>(
       (from, to) =>
         supabase
           .from("seven_shifts_shifts")
-          .select("employee_id, entry_date")
+          .select("employee_id, entry_date, missing_upstream_since")
           .eq("location_id", locationId)
           .in("employee_id", ids)
-          .is("missing_upstream_since", null)
           .eq("deleted", false)
           .eq("draft", false)
           .order("entry_date", { ascending: true })
@@ -405,6 +444,9 @@ export async function fetchEffectiveEntries(
     for (const r of rows) {
       const id = String(r.employee_id);
       const d = String(r.entry_date).slice(0, 10);
+      // Timing gate: a stood withdrawn shift is a real schedule — it
+      // anchors the employee's feed-coverage start like any live row.
+      if (!withdrawnRowStood(r.missing_upstream_since, d, meta.tz)) continue;
       const prev = firstDates.get(id);
       if (prev === undefined || d < prev) firstDates.set(id, d);
     }
@@ -463,9 +505,10 @@ export async function latestEffectiveWorkedDate(
  * Removed-shift evidence for the attendance denominator (denominator spec
  * rev 2 §3–§4, Tucker 2026-08-26). 7shifts deletes swapped/covered/
  * reassigned shifts; time_entries keeps them forever. A scheduled date is
- * judged REMOVED when no LIVE mirror shift (not deleted, not tombstoned via
- * missing_upstream_since) exists for it in seven_shifts_shifts — matched on
- * (location, seven_shifts_user_id), never attribution-dependent.
+ * judged REMOVED when no COUNTING mirror shift exists for it in
+ * seven_shifts_shifts — not deleted, and (timing gate, packet 10 §3)
+ * either live or tombstoned-after-the-fact via withdrawnRowStood —
+ * matched on (location, seven_shifts_user_id), never attribution-dependent.
  *
  * HARD BOUNDARY (§3): the mirror's coverage start is derived PER LOCATION
  * from min(entry_date) — never hardcoded. Dates before it cannot
@@ -478,12 +521,16 @@ export async function fetchRemovedShiftEvidence(
   supabase: SupabaseClient,
   locationId: string,
   employeeIds: string[],
-  window: { start: string | null; end: string }
+  window: { start: string | null; end: string },
+  metaIn?: FlipLocationMeta
 ): Promise<Map<string, import("./performance-recompute").RemovedShiftEvidence>> {
   const out = new Map<
     string,
     import("./performance-recompute").RemovedShiftEvidence
   >();
+  // Timing gate needs the store zone; resolve via the definer config view
+  // (RLS-safe under a session client) when the caller has no meta in hand.
+  const meta = metaIn ?? (await fetchLocationFlipMeta(supabase, locationId));
 
   // STORE-level coverage start reads the DEFINER view (mig 061), not the
   // base table: the profile page calls this under the SESSION client, and
@@ -542,15 +589,22 @@ export async function fetchRemovedShiftEvidence(
   // has no standing to judge any of their days.
   const firstByUser = new Map<number, string>();
   if (userIds.length > 0) {
-    const rows = await pagedRows<{ seven_shifts_user_id: number; entry_date: string }>(
+    type EvRow = {
+      seven_shifts_user_id: number;
+      entry_date: string;
+      missing_upstream_since: string | null;
+    };
+    const rows = await pagedRows<EvRow>(
       (from, to) => {
         let q = supabase
           .from("seven_shifts_shifts")
-          .select("seven_shifts_user_id, entry_date")
+          .select("seven_shifts_user_id, entry_date, missing_upstream_since")
           .eq("location_id", locationId)
           .in("seven_shifts_user_id", userIds)
           .eq("deleted", false)
-          .is("missing_upstream_since", null)
+          // Draft rows are not schedules anywhere else (day set, coverage,
+          // 087 view) — they are not evidence either (Codex F4, PR #49).
+          .eq("draft", false)
           .lte("entry_date", window.end)
           .order("entry_date", { ascending: true })
           .order("seven_shifts_shift_id", { ascending: true })
@@ -562,28 +616,33 @@ export async function fetchRemovedShiftEvidence(
       "removed-shift evidence"
     );
     for (const r of rows) {
+      const date = String(r.entry_date).slice(0, 10);
+      // Timing gate: a stood withdrawn shift is live evidence — its day is
+      // a real schedule and must not read as a removal.
+      if (!withdrawnRowStood(r.missing_upstream_since, date, meta.tz)) continue;
       const uid = Number(r.seven_shifts_user_id);
       const set = liveByUser.get(uid) ?? new Set<string>();
-      set.add(String(r.entry_date).slice(0, 10));
+      set.add(date);
       liveByUser.set(uid, set);
     }
-    const firstRows = await pagedRows<{ seven_shifts_user_id: number; entry_date: string }>(
+    const firstRows = await pagedRows<EvRow>(
       (from, to) =>
         supabase
           .from("seven_shifts_shifts")
-          .select("seven_shifts_user_id, entry_date")
+          .select("seven_shifts_user_id, entry_date, missing_upstream_since")
           .eq("location_id", locationId)
           .in("seven_shifts_user_id", userIds)
           .eq("deleted", false)
-          .is("missing_upstream_since", null)
+          .eq("draft", false)
           .order("entry_date", { ascending: true })
           .order("seven_shifts_shift_id", { ascending: true })
           .range(from, to),
       "removed-shift employee coverage"
     );
     for (const r of firstRows) {
-      const uid = Number(r.seven_shifts_user_id);
       const d = String(r.entry_date).slice(0, 10);
+      if (!withdrawnRowStood(r.missing_upstream_since, d, meta.tz)) continue;
+      const uid = Number(r.seven_shifts_user_id);
       const prev = firstByUser.get(uid);
       if (prev === undefined || d < prev) firstByUser.set(uid, d);
     }

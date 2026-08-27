@@ -604,10 +604,13 @@ export async function computeMetricsForRange(
     // days leave the ratio (judged against the live mirror, coverage-
     // bounded per location).
     removedEvidence = (
-      await fetchRemovedShiftEvidence(supabase, locationId, [employeeId], {
-        start: periodStart,
-        end: periodEnd,
-      })
+      await fetchRemovedShiftEvidence(
+        supabase,
+        locationId,
+        [employeeId],
+        { start: periodStart, end: periodEnd },
+        meta
+      )
     ).get(employeeId);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -1075,10 +1078,13 @@ export async function recomputePerformanceForQuarter(
     latestWorkedDate = await latestEffectiveWorkedDate(supabase, locationId, meta);
     // Denominator spec rev 2 §3–§4 (same evidence as computeMetricsForRange).
     removedEvidence = (
-      await fetchRemovedShiftEvidence(supabase, locationId, [employeeId], {
-        start: periodStart,
-        end: periodEnd,
-      })
+      await fetchRemovedShiftEvidence(
+        supabase,
+        locationId,
+        [employeeId],
+        { start: periodStart, end: periodEnd },
+        meta
+      )
     ).get(employeeId);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
