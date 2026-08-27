@@ -602,6 +602,9 @@ export async function fetchRemovedShiftEvidence(
           .eq("location_id", locationId)
           .in("seven_shifts_user_id", userIds)
           .eq("deleted", false)
+          // Draft rows are not schedules anywhere else (day set, coverage,
+          // 087 view) — they are not evidence either (Codex F4, PR #49).
+          .eq("draft", false)
           .lte("entry_date", window.end)
           .order("entry_date", { ascending: true })
           .order("seven_shifts_shift_id", { ascending: true })
@@ -630,6 +633,7 @@ export async function fetchRemovedShiftEvidence(
           .eq("location_id", locationId)
           .in("seven_shifts_user_id", userIds)
           .eq("deleted", false)
+          .eq("draft", false)
           .order("entry_date", { ascending: true })
           .order("seven_shifts_shift_id", { ascending: true })
           .range(from, to),

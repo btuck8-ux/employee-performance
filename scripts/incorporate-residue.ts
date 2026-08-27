@@ -101,6 +101,15 @@ if (days.length === 0) {
   console.log("nothing to do");
   process.exit(0);
 }
+// Codex F6 (PR #49): the artifact is an input, not an authority — refuse a
+// stale one, and re-verify each member's load-bearing preconditions LIVE
+// below before any insert.
+const artifactAgeH = (Date.now() - new Date(artifact.ranAt).getTime()) / 3.6e6;
+if (!(artifactAgeH >= 0 && artifactAgeH < 24)) {
+  throw new Error(
+    `artifact is ${artifactAgeH.toFixed(1)}h old — rerun residue-incorporation-dry-run.ts first`
+  );
+}
 
 // v2 authoritative rows for start/end timestamps
 const csvLines = readFileSync(CSV, "utf8").trim().split("\n").slice(1);
@@ -132,18 +141,71 @@ for (const d of days) {
     .single();
   if (empErr || !emp) throw new Error(`${d.employee_code}: ${empErr?.message}`);
 
+  // Codex F6: re-verify the residue preconditions LIVE — the artifact's
+  // claims must still hold at write time. (a) at/above floor, (b) no punch
+  // that day at this store, (c) no mirror shift for (uid, date) anywhere.
+  {
+    const { data: locRow } = await supabase
+      .from("locations")
+      .select("metrics_start_date")
+      .eq("id", locationId)
+      .single();
+    const floor = locRow?.metrics_start_date as string | null;
+    if (floor && d.date < floor)
+      throw new Error(`${d.employee_code} ${d.date}: below ${d.store} floor ${floor}`);
+    const { count: teP } = await supabase
+      .from("time_entries")
+      .select("*", { count: "exact", head: true })
+      .eq("employee_id", emp.id)
+      .eq("location_id", locationId)
+      .eq("entry_date", d.date)
+      .neq("entry_type", "scheduled");
+    const { count: toastP } = await supabase
+      .from("toast_time_entries")
+      .select("*", { count: "exact", head: true })
+      .eq("employee_id", emp.id)
+      .eq("location_id", locationId)
+      .eq("entry_date", d.date)
+      .eq("deleted", false);
+    if ((teP ?? 0) + (toastP ?? 0) > 0)
+      throw new Error(`${d.employee_code} ${d.date}: a punch now exists — not a residue day anymore, stop`);
+    const { data: others } = await supabase
+      .from("seven_shifts_shifts")
+      .select("seven_shifts_shift_id")
+      .eq("seven_shifts_user_id", d.uid)
+      .eq("entry_date", d.date);
+    const foreign = (others ?? []).filter(
+      (o) => !d.shift_ids.includes(String(o.seven_shifts_shift_id))
+    );
+    if (foreign.length > 0)
+      throw new Error(`${d.employee_code} ${d.date}: mirror now holds another shift for (uid, date) — stop`);
+  }
+
   for (const shiftId of d.shift_ids) {
     const auth = authByShiftId.get(shiftId);
     if (!auth) throw new Error(`${shiftId}: no AUTHORITATIVE v2 row`);
     if (auth.band.toLowerCase() !== "stood")
       throw new Error(`${shiftId}: band is ${auth.band}, refusing to incorporate`);
 
-    const { count } = await supabase
+    // Codex F5: resumable, not merely guarded — a row this importer already
+    // wrote (provenance in raw) is skipped and flows on to recompute +
+    // assert; a row from any OTHER writer is a hard stop.
+    const { data: existing } = await supabase
       .from("seven_shifts_shifts")
-      .select("*", { count: "exact", head: true })
-      .eq("seven_shifts_shift_id", Number(shiftId));
-    if ((count ?? 0) > 0)
-      throw new Error(`${shiftId}: already present in the mirror — dry-run is stale, stop`);
+      .select("raw")
+      .eq("seven_shifts_shift_id", Number(shiftId))
+      .maybeSingle();
+    if (existing) {
+      const src = (existing.raw as { source?: string } | null)?.source;
+      if (src === "cp_residue_incorporation") {
+        console.log(`resume: ${shiftId} already imported by this importer — skipping insert`);
+        writtenIds.push(shiftId);
+        continue;
+      }
+      throw new Error(
+        `${shiftId}: present in the mirror with foreign provenance (${src ?? "no raw.source"}) — stop`
+      );
+    }
 
     const { error: insErr } = await supabase.from("seven_shifts_shifts").insert({
       seven_shifts_shift_id: Number(shiftId),
@@ -196,7 +258,10 @@ for (const d of days) {
     .eq("report_period_id", period!.id)
     .single();
   const sim = artifact.simRows.find(
-    (s) => s.employee_code === d.employee_code && s.period === `Q${q}-${y}`
+    (s) =>
+      s.employee_code === d.employee_code &&
+      s.store === d.store && // Codex F7: employee codes are location-scoped
+      s.period === `Q${q}-${y}`
   );
   if (!sim) throw new Error(`${d.employee_code}: no simRow in artifact`);
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
