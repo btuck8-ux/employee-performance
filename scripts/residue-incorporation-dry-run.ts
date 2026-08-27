@@ -469,7 +469,7 @@ for (const [, j] of jobs) {
   // days join the evidence liveDates (the imported mirror row is live).
   const synthetic = j.days
     .filter((d) => d.date <= cap) // beyond-cap days would not score — flagged below
-    .map((d) => ({ entry_date: d.date, entry_type: "scheduled", in_time: d.in_time }));
+    .map((d) => ({ entry_date: d.date, entry_type: "scheduled" as const, in_time: d.in_time }));
   const afterEntries = [...entries, ...synthetic];
   const afterRs = rs
     ? { ...rs, liveDates: rs.liveDates ? new Set([...rs.liveDates, ...j.days.map((d) => d.date)]) : rs.liveDates }
