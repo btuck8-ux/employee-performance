@@ -1,9 +1,16 @@
 name: CI
 
-# Lint + unit tests on every push to main and every PR targeting main.
-# Tests run on Node's built-in runner with native TypeScript type-stripping
-# (node --test, see package.json "test"), which requires Node >= 22.18; we pin
-# 24 to match the existing workflows and keep type-stripping unflagged.
+# Lint + typecheck + unit tests on every push to main and every PR targeting
+# main. Tests run on Node's built-in runner with native TypeScript
+# type-stripping (node --test, see package.json "test"), which requires Node
+# >= 22.18; we pin 24 to match the existing workflows and keep type-stripping
+# unflagged.
+#
+# Typecheck exists because type-stripping does not type-CHECK: on 2026-08-27
+# a literal-widening error in a scripts/ file passed lint and 601 tests and
+# then killed three consecutive Vercel production builds (d5f0b9c), leaving
+# prod on pre-gate code with the 09:00 nightly ninety minutes out. Green
+# here must mean "it builds" — tsc --noEmit is the gate CI did not have.
 on:
   push:
     branches: [main]
@@ -31,6 +38,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
       - name: Test
         run: npm test
