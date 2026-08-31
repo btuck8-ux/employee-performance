@@ -200,6 +200,12 @@ test("structural sweep: every src file touching the flag is on the allowlist", (
     // CSU memo §6: the tier surface is the second sanctioned writer —
     // classifying a tier writes the flag in lockstep (pinned above).
     "src/app/dashboard/admin/unclassified-tiers/actions.ts",
+    // Auto-mint (2026-08-31 identity packet §3) touches the NAME only, and
+    // only to assert the ABSENCE of the flag: the nightly job never sets
+    // is_general_manager — GM designation stays human, always. The contract
+    // test pins that the insert cannot carry it.
+    "src/lib/identity/auto-mint-orchestrator.ts",
+    "src/lib/identity/auto-mint-contract.test.ts",
   ]);
   const root = process.cwd();
   const offenders: string[] = [];
