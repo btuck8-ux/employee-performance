@@ -8,8 +8,11 @@ import { runAutoMint } from "@/lib/identity/auto-mint-orchestrator";
  *
  * Gives an EPD employee_code to people CP is already scheduling, with no human
  * in the loop, capped at BLAST_RADIUS_CAP candidates per run. Everything else
- * — archived matches, cap trips, uncrosswalked locations, epd_role, GM
- * designation — is reported, never resolved.
+ * — cross-store holds, archived matches, cap trips, uncrosswalked locations,
+ * epd_role, GM designation — is reported, never resolved.
+ *
+ * ONE CODE PER HUMAN (Tucker, 2026-08-31): only a 7shifts id that exists at NO
+ * store is minted. Someone already coded elsewhere is held and reported.
  *
  * ⚠️ SCHEDULE: this ships on the CURRENT ordering and must run clean for TWO
  * consecutive nights before Phase 4 touches any cron. Do not land the cron
@@ -34,6 +37,7 @@ export async function GET(request: Request) {
       `[auto-mint] done: ${summary.minted.length} minted of ${summary.candidates_seen} candidate(s)` +
         (summary.blast_radius_tripped ? " — BLAST RADIUS TRIPPED, minted nothing" : ""),
       {
+        cross_store_held: summary.cross_store_held.length,
         archived_new: summary.archived_new.length,
         unmappable: summary.unmappable.length,
         guard_rejected: summary.guard_rejected,

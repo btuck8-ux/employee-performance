@@ -8,6 +8,13 @@
  * BLAST_RADIUS_CAP the job mints NOTHING and reports. Do not "just mint the
  * first ten" — a run that large means the input changed shape, and a partial
  * mint would leave the estate in a state nobody chose.
+ *
+ * ONE CODE PER HUMAN (Tucker, 2026-08-31). Anyone already holding a code at
+ * another store is HELD, not minted — see auto-mint.ts. On the live estate
+ * today that makes ZERO mint candidates and one held row (Taggart Dickson,
+ * 9867936, scheduled at LONGM, already EMP-coded at FCOL). A quiet night is
+ * the SUCCESS case here, not a regression: the job's remaining value is the
+ * genuinely-new hire, and it is now incapable of issuing anyone a second code.
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -47,6 +54,7 @@ export async function runAutoMint(
     minted: [],
     blast_radius_tripped: false,
     candidates_seen: 0,
+    cross_store_held: [],
     archived_new: [],
     archived_acknowledged: 0,
     unmappable: [],
@@ -57,6 +65,7 @@ export async function runAutoMint(
   try {
     const pool = await loadAutoMintPool(cp, epd);
     result.candidates_seen = pool.candidates.length;
+    result.cross_store_held = pool.crossStore;
     result.guard_rejected = pool.guardRejected;
     result.unmappable = pool.unmappable;
     result.archived_new = pool.archived.filter((a) => !a.acknowledged);
@@ -97,11 +106,15 @@ export async function runAutoMint(
       rows_in: pool.candidates.length,
       rows_upserted: result.minted.length,
       rows_skipped:
-        pool.unmappable.length + pool.guardRejected + pool.archived.length,
+        pool.unmappable.length +
+        pool.guardRejected +
+        pool.archived.length +
+        pool.crossStore.length,
       detail: {
         minted: result.minted,
         blast_radius_tripped: result.blast_radius_tripped,
         cap,
+        cross_store_held: result.cross_store_held,
         archived_new: result.archived_new,
         archived_acknowledged: result.archived_acknowledged,
         unmappable: result.unmappable,

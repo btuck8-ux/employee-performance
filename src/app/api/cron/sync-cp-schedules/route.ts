@@ -63,6 +63,7 @@ export async function GET(request: Request) {
         minted: mint.minted,
         candidates_seen: mint.candidates_seen,
         blast_radius_tripped: mint.blast_radius_tripped,
+        cross_store_held: mint.cross_store_held.length,
         archived_new: mint.archived_new.length,
         unmappable: mint.unmappable.length,
       };

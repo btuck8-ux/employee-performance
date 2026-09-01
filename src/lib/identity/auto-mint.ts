@@ -3,15 +3,27 @@
  * scheduling, without a human in the loop (2026-08-31 identity packet §3).
  *
  * ─────────────────────────────────────────────────────────────────────────
- * THE ONE RULE: the identity key is (seven_shifts_user_id, location_id).
- * NEVER seven_shifts_user_id alone.
+ * THE MINT RULE (Tucker's ruling, 2026-08-31 — this OVERTURNED the earlier
+ * per-store identity model):
+ *
+ *   ONE master employee_code per HUMAN, identical across CP and EPD, plus a
+ *   LIST of location codes per employee. A person working two stores may
+ *   receive two surveys — one per location — but holds ONE code.
+ *
+ *   no match on seven_shifts_user_id ANYWHERE -> MINT (the new-hire case,
+ *                                                and the whole value of this job)
+ *   the id already exists at ANOTHER store    -> DO NOT MINT. Hold and report.
  * ─────────────────────────────────────────────────────────────────────────
- * EPD runs an INTENTIONAL per-store identity model: one person holds one code
- * PER STORE. Twelve people live hold 2–3 codes each (Milena Trevino has three
- * — FCOL/HRANCH/FCCSU; Taylor Garrison holds EMP-100100 at FCOL and EMP-100225
- * at FCCSU, where she is GM). A guard keyed on the 7shifts id alone would
- * block every multi-store employee and break the CSU scale-out. A person
- * appearing at a NEW store SHOULD get a NEW code — that is not a duplicate.
+ * EPD's database is still per-store TODAY: 12 people hold 25 rows (13 redundant
+ * codes), employees.location_id is scalar, and
+ * employees_location_seven_shifts_user_id_key still enforces one row per
+ * (location, 7shifts id). The location list and the code retirement are a
+ * separate, later migration — NOT started before 2026-09-07 clears.
+ *
+ * Until that lands this job's job is to STOP MAKING THE PROBLEM BIGGER: it
+ * mints genuinely new humans and refuses to add a second code to anyone who
+ * already has one. The earlier evidence that the model WAS per-store was
+ * correct and is not in dispute; Tucker ruled it should not be.
  *
  * WHY THIS REUSES THE TRIAGE POOL RATHER THAN RE-DERIVING THE CANDIDATE SET.
  * The packet specced the candidate scan from scratch, but the manual
@@ -64,7 +76,11 @@ export interface AutoMintCandidate {
   locationName: string;
   /** CP's own location uuid for this store — the audit log records BOTH sides. */
   cpLocationId: string;
-  /** Other stores already holding this 7shifts id — expected, not a warning. */
+  /**
+   * Other stores already holding this 7shifts id. Under the 2026-08-31 ruling a
+   * non-empty list DISQUALIFIES the candidate, so on a real candidate this is
+   * always empty — it is carried only so the audit row can prove that.
+   */
   alsoAtCodes: string[];
   triggerRow: Record<string, unknown>;
 }
@@ -79,6 +95,23 @@ export interface ArchivedMatch {
   acknowledged: boolean;
 }
 
+/**
+ * A person CP is scheduling at a store where they hold no code, who already
+ * holds a code somewhere else. Under the per-store model this was a mint; under
+ * the ruling it is a HOLD — the location belongs on their existing code's
+ * location list, which does not exist yet. Never minted, always reported.
+ */
+export interface CrossStoreHold {
+  cpId: string;
+  sevenShiftsUserId: number;
+  name: string;
+  /** The store CP is scheduling them at, where they have no code. */
+  locationCode: string;
+  locationName: string;
+  /** The code(s) they already hold elsewhere — the reason this is not a mint. */
+  existingCodes: string[];
+}
+
 export interface UnmappableRow {
   cpId: string;
   sevenShiftsUserId: number | null;
@@ -88,6 +121,8 @@ export interface UnmappableRow {
 
 export interface AutoMintPool {
   candidates: AutoMintCandidate[];
+  /** Suppressed by the one-code-per-human rule. Reported, never minted. */
+  crossStore: CrossStoreHold[];
   archived: ArchivedMatch[];
   unmappable: UnmappableRow[];
   /** Rows rejected by the id guard (null/0 — CP's open-shift convention). */
@@ -101,6 +136,7 @@ export interface AutoMintResult {
   /** Set when the cap tripped: nothing was minted. */
   blast_radius_tripped: boolean;
   candidates_seen: number;
+  cross_store_held: CrossStoreHold[];
   archived_new: ArchivedMatch[];
   archived_acknowledged: number;
   unmappable: UnmappableRow[];
@@ -127,6 +163,7 @@ export async function loadAutoMintPool(
   const cpIdByEpdId = new Map(cpLocations.map((l) => [l.id, l.cp_location_id]));
 
   const candidates: AutoMintCandidate[] = [];
+  const crossStore: CrossStoreHold[] = [];
   const archived: ArchivedMatch[] = [];
   const unmappable: UnmappableRow[] = [];
   let guardRejected = 0;
@@ -156,6 +193,29 @@ export async function loadAutoMintPool(
       });
       continue;
     }
+    // Guard 3 (the 2026-08-31 ruling): ONE code per human. If this 7shifts id
+    // already exists at ANY other store, minting here would issue a second
+    // code to one person — exactly what the ruling forbids. Hold and report;
+    // the store belongs on their location list, which does not exist yet.
+    //
+    // mintedElsewhere comes from the triage pool and is already scoped to
+    // OTHER sites (it filters out the candidate's own location), and it is
+    // built from every employees row with a 7shifts id, ARCHIVED ONES
+    // INCLUDED — so a person whose only other code is archived is still held,
+    // not minted. That is deliberate: reviving them is a human decision.
+    if (d.mintedElsewhere.length > 0) {
+      crossStore.push({
+        cpId: d.cpId,
+        sevenShiftsUserId: d.sevenShiftsUserId,
+        name: d.name,
+        locationCode: d.location.locationCode,
+        locationName: d.location.name,
+        existingCodes: d.mintedElsewhere
+          .map((m) => m.employeeCode)
+          .filter((c): c is string => c !== null),
+      });
+      continue;
+    }
     candidates.push({
       cpId: d.cpId,
       sevenShiftsUserId: d.sevenShiftsUserId,
@@ -179,7 +239,7 @@ export async function loadAutoMintPool(
     });
   }
 
-  return { candidates, archived, unmappable, guardRejected };
+  return { candidates, crossStore, archived, unmappable, guardRejected };
 }
 
 /**
@@ -204,19 +264,35 @@ async function loadArchivedScheduledPairs(
   // window. A person off the schedule entirely is not a live discrepancy.
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - ARCHIVED_LOOKBACK_DAYS);
-  const { data: sched, error: schedError } = await cp
-    .from("weekly_schedule_entries")
-    .select("sevenshifts_user_id, location_id")
-    .gte("target_monday", since.toISOString().slice(0, 10))
-    .not("sevenshifts_user_id", "is", null);
-  if (schedError)
-    throw new Error(`CP weekly_schedule_entries: ${schedError.message}`);
+
+  // ⚠️ PAGED ON PURPOSE. PostgREST caps a select() at 1,000 rows and returns
+  // the truncation SILENTLY — no error, no flag. This window holds ~2,100 rows
+  // today (verified live 2026-08-31), so a single unpaged read would drop more
+  // than half of it and quietly UNDER-REPORT archived-but-scheduled people.
+  // An archived match that never surfaces is the exact silent-drop failure this
+  // report exists to prevent, so page until a short page proves the end.
+  const sched: Array<{ sevenshifts_user_id: string | null; location_id: string }> = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await cp
+      .from("weekly_schedule_entries")
+      .select("sevenshifts_user_id, location_id")
+      .gte("target_monday", since.toISOString().slice(0, 10))
+      .not("sevenshifts_user_id", "is", null)
+      // A stable total order — without one, paging can repeat or skip rows.
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`CP weekly_schedule_entries: ${error.message}`);
+    const page = (data ?? []) as Array<{
+      sevenshifts_user_id: string | null;
+      location_id: string;
+    }>;
+    sched.push(...page);
+    if (page.length < PAGE) break;
+  }
 
   const scheduledPairs = new Set<string>();
-  for (const r of (sched ?? []) as Array<{
-    sevenshifts_user_id: string | null;
-    location_id: string;
-  }>) {
+  for (const r of sched) {
     const n = normalizeSevenShiftsUserId(r.sevenshifts_user_id);
     if (n === null || n <= 0) continue;
     const epdId = epdIdByCpId.get(r.location_id);
