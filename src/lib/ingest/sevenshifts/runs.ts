@@ -12,7 +12,8 @@ export type IngestSource =
   | "toast_kitchen"
   | "cp_schedule"
   | "7shifts_shifts"
-  | "toast_labor";
+  | "toast_labor"
+  | "auto_mint";
 export type IngestStatus = "running" | "success" | "empty" | "error";
 
 export interface FinishRunInput {
@@ -53,7 +54,11 @@ export interface RunOutcome {
 export async function startRun(
   supabase: AdminClient,
   source: IngestSource,
-  locationId: string,
+  // Nullable since 2026-08-31: ingest_runs.location_id has always been
+  // nullable in the DB, and the auto-mint job is a single estate-wide scan
+  // rather than a per-store fan-out, so it logs ONE run row with no location.
+  // Every pre-existing caller still passes a real id.
+  locationId: string | null,
   windowStart: string | null,
   windowEnd: string | null
 ): Promise<string | null> {

@@ -28,8 +28,15 @@ test("both server actions re-check system_admin", () => {
 
 test("the mint idempotency guard is keyed on the (7s id, location) pair", () => {
   // Pair-keyed pre-check BEFORE the insert (§4-A2, 2026-08-23 sprint): a row
-  // at ANOTHER store must not read as already-minted — second-site mints are
-  // legitimate (six live two-site people).
+  // at ANOTHER store must not read as already-minted at THIS one — the two
+  // cases get different answers and different banners.
+  //
+  // ⚠️ UPDATED 2026-08-31 (one-master-code ruling): a cross-store row is no
+  // longer a legitimate second-site mint — it is now a hard REFUSAL, served by
+  // a separate `.neq("location_id", locationId)` query. So the invariant below
+  // is no longer "always .eq the location"; it is "never location-BLIND". Both
+  // .eq (same-store idempotency) and .neq (the cross-store refusal) satisfy it;
+  // a bare id-only guard still does not.
   const idGuard = '.eq("seven_shifts_user_id", ssid)';
   const guardIdx = actionsSrc.indexOf(idGuard);
   const insertIdx = actionsSrc.indexOf(".insert(insertRow)");
@@ -45,15 +52,26 @@ test("the mint idempotency guard is keyed on the (7s id, location) pair", () => 
     actionsSrc.indexOf(idGuard, insertIdx) !== -1,
     "the 23505 race re-read guards on the id too"
   );
-  // No location-blind id-only guard may remain anywhere in the actions:
-  // every .eq on the 7s id must be immediately followed by the location key.
+  // No location-blind id-only guard may remain anywhere in the actions: every
+  // .eq on the 7s id must be immediately followed by a location predicate —
+  // .eq for the same-store idempotency check, .neq for the cross-store refusal.
   const segments = actionsSrc.split('.eq("seven_shifts_user_id", ssid)');
   for (let i = 1; i < segments.length; i++) {
+    const next = segments[i].trimStart();
     assert.ok(
-      segments[i].trimStart().startsWith('.eq("location_id", locationId)'),
+      next.startsWith('.eq("location_id", locationId)') ||
+        next.startsWith('.neq("location_id", locationId)'),
       `employees guard #${i} on the 7s id must also key on location_id`
     );
   }
+
+  // And the cross-store refusal must actually exist — the ruling's teeth on
+  // the human surface, not just on auto-mint.
+  assert.match(
+    actionsSrc,
+    /\.neq\("location_id", locationId\)/,
+    "the one-master-code cross-store refusal must be present"
+  );
 });
 
 test("employee_code is never set explicitly — the sequence default owns it", () => {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/api-auth";
 import { sendFatalAlert } from "@/lib/ingest/sevenshifts/alert";
 import { runCpScheduleSync } from "@/lib/ingest/culture-pulse/schedule-orchestrator";
+import { runAutoMint } from "@/lib/identity/auto-mint-orchestrator";
 
 /**
  * Nightly CP→EPD scheduled-shifts sync (kickoff-ui-rbac-c-brand-2026-08-14.md §3).
@@ -19,6 +20,22 @@ import { runCpScheduleSync } from "@/lib/ingest/culture-pulse/schedule-orchestra
  *
  * A store's FIRST run backfills from 2026-06-01 (the scheduled-shifts gap),
  * so no separate backfill step exists — the first nightly is the backfill.
+ *
+ * AUTO-MINT RIDES THIS JOB (identity packet §3, mechanism (a), Tucker
+ * 2026-08-31). Hanging it here rather than giving it its own cron entry is
+ * what makes Phase 4 a pure TIMING change: moving this cron 09:40 → 10:30
+ * moves auto-mint with it, and no new schedule is introduced in Phase 3.
+ *
+ * On the CURRENT 09:40 slot auto-mint runs BEFORE CP's ~10:00 ingest, so it
+ * mints from the PREVIOUS day's discoveries — the ~23h floor Phase 4 exists to
+ * remove. That is a latency property, not a correctness one: the job is
+ * idempotent on (7shifts id, location), so the delay costs a day, never a
+ * duplicate.
+ *
+ * It is deliberately NON-FATAL to the schedule sync: scheduled-shift rows feed
+ * attendance and TIS, auto-mint only adds roster rows, so a minting failure
+ * must never turn a good schedule night into a failed one. Its own errors
+ * surface through its own ingest_runs row and its own fatal alert.
  */
 
 export const dynamic = "force-dynamic";
@@ -37,7 +54,30 @@ export async function GET(request: Request) {
       `[sync-cp-schedules] done: ${summary.runs} runs across ${summary.locations} locations`,
       summary.by_status
     );
-    return NextResponse.json(summary);
+
+    // Non-fatal by design — see the header note.
+    let autoMint: unknown = null;
+    try {
+      const mint = await runAutoMint();
+      autoMint = {
+        minted: mint.minted,
+        candidates_seen: mint.candidates_seen,
+        blast_radius_tripped: mint.blast_radius_tripped,
+        cross_store_held: mint.cross_store_held.length,
+        archived_new: mint.archived_new.length,
+        unmappable: mint.unmappable.length,
+      };
+      console.log(
+        `[sync-cp-schedules] auto-mint: ${mint.minted.length} minted of ${mint.candidates_seen} candidate(s)` +
+          (mint.blast_radius_tripped ? " — BLAST RADIUS TRIPPED, minted nothing" : "")
+      );
+    } catch (mintErr) {
+      const message = mintErr instanceof Error ? mintErr.message : String(mintErr);
+      console.error("[sync-cp-schedules] auto-mint failed (non-fatal):", message);
+      autoMint = { error: message };
+    }
+
+    return NextResponse.json({ ...summary, auto_mint: autoMint });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[sync-cp-schedules] fatal:", message);

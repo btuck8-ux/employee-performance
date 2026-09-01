@@ -23,10 +23,20 @@ import {
  * pair, and mig 030's partial unique index on exactly that pair catches the
  * same-store double-submit race; both paths land on the calm "already minted
  * at this site" banner, never a duplicate person. A person already rostered
- * at ANOTHER store is a genuine second-site mint, not a duplicate — the six
- * live two-site people are two rows each by design. employee_code is NEVER
- * set here — the employee_code_seq default owns it (mig 004). hire_date
- * stays null — the §6-B nightly backfill owns it.
+ * ⚠️ SUPERSEDED 2026-08-31 — ONE MASTER CODE PER HUMAN (Tucker's ruling).
+ * This file used to say a person already rostered at ANOTHER store was "a
+ * genuine second-site mint, not a duplicate". That is no longer the rule. A
+ * human holds ONE code plus a LIST of locations; a second code for the same
+ * person is now the thing the code-retirement migration has to undo. So this
+ * action REFUSES a cross-store mint, matching auto-mint's guard exactly — if
+ * only the automated path enforced it, this page would keep manufacturing the
+ * very rows that migration must retire.
+ *
+ * The per-store pair check below STAYS as the same-store idempotency guard
+ * (mig 030's partial unique index still backs it, and the DB is still
+ * per-store until the migration lands). employee_code is NEVER set here — the
+ * employee_code_seq default owns it (mig 004). hire_date stays null — the
+ * §6-B nightly backfill owns it.
  */
 
 const BACK = "/dashboard/admin/employee-triage";
@@ -127,6 +137,34 @@ export async function confirmDetectionAction(formData: FormData) {
         name: existing.employee_name ?? name,
         code: existing.employee_code ?? "",
         site: location.name,
+      })
+    );
+  }
+
+  // ONE CODE PER HUMAN (2026-08-31). A code for this person at ANY other store
+  // blocks the mint — the location belongs on their existing code's location
+  // list, which the code-retirement migration will introduce. Deliberately a
+  // hard refusal, not a confirm-through: an override here is indistinguishable
+  // from the mistake it would be.
+  const { data: elsewhere, error: elsewhereError } = await supabase
+    .from("employees")
+    .select("employee_code, location_id, locations(name)")
+    .eq("seven_shifts_user_id", ssid)
+    .neq("location_id", locationId);
+  if (elsewhereError) {
+    redirect(backWith({ error: `Mint pre-check failed: ${elsewhereError.message}` }));
+  }
+  if (elsewhere && elsewhere.length > 0) {
+    const held = elsewhere
+      .map((r) => r.employee_code)
+      .filter(Boolean)
+      .join(", ");
+    redirect(
+      backWith({
+        error:
+          `${name} already holds ${held} at another store. One master employee_code per person ` +
+          `(ruling 2026-08-31), so this site belongs on their location list rather than on a new code. ` +
+          `Nothing was minted.`,
       })
     );
   }

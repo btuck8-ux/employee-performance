@@ -9,9 +9,24 @@
  *
  * NULL cp columns = not CP-synced: the loader SKIPS such stores (the
  * loadCrosswalk precedent — a location not yet wired is skipped, not
- * errored). FCCSU is deliberately unwired: CP carries an inactive
- * `fort_collins_csu` location, and enabling CSU's survey/schedule sync is a
- * CP-side product decision made by a human setting the two columns.
+ * errored). FCCSU is still unwired, but NOT for the reason this comment
+ * used to give. Verified live 2026-08-31: CP's `fort_collins_csu`
+ * (id 90cd4cd4-4476-40e4-abab-5af79ef98312) is ACTIVE, with 11
+ * employee_directory rows and 102 weekly_schedule_entries rows — the store
+ * opened 2026-08-24 and every row is from then on. So the old premise
+ * ("CP carries an INACTIVE fort_collins_csu") is false and must not be
+ * relied on again.
+ *
+ * FCCSU stays unwired purely as a SCOPE decision: setting these two columns
+ * is not a mapping edit, it onboards the store to every consumer of this
+ * loader at once — the 09:45 survey ingest, the 09:40 schedule sync (whose
+ * first run for a store backfills from SCHEDULE_BACKFILL_FLOOR into
+ * time_entries rows (entry_type = 'scheduled') and recomputes those quarters),
+ * triage detections, and the 7shifts probe. Onboarding FCCSU is its own PR
+ * with its own verification (Tucker, 2026-08-31). For the record, the
+ * backfill it implies is small and touches nothing frozen: 102 rows, all
+ * 2026-08-24 or later, landing in Q3 2026 — the only frozen periods are
+ * Q3 2025 and Q4 2025.
  */
 
 import type { AdminClient } from "../sevenshifts/crosswalk";
