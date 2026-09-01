@@ -58,19 +58,32 @@ export async function GET(request: Request) {
     // Non-fatal by design — see the header note.
     let autoMint: unknown = null;
     try {
-      const mint = await runAutoMint();
-      autoMint = {
-        minted: mint.minted,
-        candidates_seen: mint.candidates_seen,
-        blast_radius_tripped: mint.blast_radius_tripped,
-        cross_store_held: mint.cross_store_held.length,
-        archived_new: mint.archived_new.length,
-        unmappable: mint.unmappable.length,
-      };
-      console.log(
-        `[sync-cp-schedules] auto-mint: ${mint.minted.length} minted of ${mint.candidates_seen} candidate(s)` +
-          (mint.blast_radius_tripped ? " — BLAST RADIUS TRIPPED, minted nothing" : "")
-      );
+      // Env gate (2026-09-01): held until the cross-store guard is proven in
+      // the Prompt 2 sprint. Unset means ON — only the literal "false" holds,
+      // so a missing var can never silently disable minting. The manual
+      // /api/cron/auto-mint route is deliberately NOT gated (observation
+      // stays possible). The log line makes a held night distinguishable
+      // from a night with no candidates.
+      if (process.env.AUTO_MINT_ENABLED === "false") {
+        console.log(
+          "[sync-cp-schedules] auto-mint held: AUTO_MINT_ENABLED=false"
+        );
+        autoMint = { held: "AUTO_MINT_ENABLED=false" };
+      } else {
+        const mint = await runAutoMint();
+        autoMint = {
+          minted: mint.minted,
+          candidates_seen: mint.candidates_seen,
+          blast_radius_tripped: mint.blast_radius_tripped,
+          cross_store_held: mint.cross_store_held.length,
+          archived_new: mint.archived_new.length,
+          unmappable: mint.unmappable.length,
+        };
+        console.log(
+          `[sync-cp-schedules] auto-mint: ${mint.minted.length} minted of ${mint.candidates_seen} candidate(s)` +
+            (mint.blast_radius_tripped ? " — BLAST RADIUS TRIPPED, minted nothing" : "")
+        );
+      }
     } catch (mintErr) {
       const message = mintErr instanceof Error ? mintErr.message : String(mintErr);
       console.error("[sync-cp-schedules] auto-mint failed (non-fatal):", message);
