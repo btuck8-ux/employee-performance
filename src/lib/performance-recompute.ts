@@ -1352,6 +1352,7 @@ export async function recomputePerformanceForQuarter(
     .select("id")
     .eq("employee_id", employeeId)
     .eq("report_period_id", reportPeriodId)
+    .eq("location_id", locationId)
     .maybeSingle();
   if (existingError) {
     return { ok: false, error: `performance_records existence read: ${existingError.message}` };
@@ -1441,7 +1442,7 @@ export async function recomputePerformanceForQuarter(
         total_impact_score: tisBreakdown.composite_score,
         total_impact_score_components_count: tisBreakdown.components_count,
       },
-      { onConflict: "employee_id,report_period_id" }
+      { onConflict: "employee_id,report_period_id,location_id" }
     );
 
   if (upsertError) return { ok: false, error: upsertError.message };
