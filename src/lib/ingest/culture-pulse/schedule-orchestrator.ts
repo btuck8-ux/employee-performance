@@ -141,9 +141,37 @@ export async function runCpScheduleSync(
         recompute_failures: stats.failures.slice(0, 20),
       };
       outcome.status = stats.entries_upserted > 0 ? "success" : "empty";
+
+      // ⚠️ A GREEN RUN MUST NOT CONCEAL LOSS.
+      // Until 2026-08-31 a run reported status='success' while silently
+      // skipping rows: LONGM ran two consecutive nights at
+      // `success · upserted 98 · skipped 2 · unmatched ["Taggart Dickson"]`
+      // and nobody saw it, because the only trace was a count inside the
+      // detail JSON. `status` cannot express "worked, but lost rows" —
+      // ingest_runs_status_chk permits only running/success/empty/error, and
+      // 'error' would be a lie for a run that upserted 98 good rows.
+      // So error_text carries it: it is the field the run-outcome surfaces
+      // actually show, and a non-null error_text on a successful run reads as
+      // exactly what it is — attention needed, not failure.
+      const lossNotes: string[] = [];
       if (stats.failures.length > 0) {
-        outcome.error_text = `${stats.failures.length} recompute failure(s); see detail`;
+        lossNotes.push(`${stats.failures.length} recompute failure(s); see detail`);
       }
+      if (stats.unmatched_rows > 0) {
+        // Name them. The COUNT alone is what made this invisible for two
+        // nights — 22 of one night's 24 were newly-minted hires that
+        // self-heal once CP stamps them, and 2 were a permanent identity
+        // mismatch. Only the names tell those apart.
+        lossNotes.push(
+          `${stats.unmatched_rows} row(s) skipped unmatched: ${stats.unmatched
+            .slice(0, 10)
+            .join(", ")}${stats.unmatched.length > 10 ? ", …" : ""}`
+        );
+      }
+      if (stats.inactive_rows > 0) {
+        lossNotes.push(`${stats.inactive_rows} row(s) skipped inactive`);
+      }
+      if (lossNotes.length > 0) outcome.error_text = lossNotes.join(" | ");
     } catch (err) {
       outcome.status = "error";
       outcome.error_text = err instanceof Error ? err.message : String(err);
