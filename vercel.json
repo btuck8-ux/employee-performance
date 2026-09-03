@@ -38,6 +38,10 @@
       "schedule": "0 12 * * 1"
     },
     {
+      "path": "/api/cron/recompute-failure-sweep",
+      "schedule": "15 14 * * *"
+    },
+    {
       "path": "/api/cron/departure-sweep",
       "schedule": "10 12 * * 1"
     }
