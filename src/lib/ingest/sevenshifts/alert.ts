@@ -26,12 +26,36 @@ export interface AlertDecision {
   reasons: string[];
 }
 
+/**
+ * Recompute failures for one run, off `detail` — NEVER `error_text` (three
+ * sources collapse failures to a summary string there; detail is the ledger).
+ * Prefers the exact `recompute_failure_count` integer; falls back to the
+ * sampled array, which every ingest writer caps at 20 (so the fallback is a
+ * lower bound, not a count).
+ */
+function recomputeFailureCount(r: RunOutcome): number {
+  const exact = r.detail?.recompute_failure_count;
+  if (typeof exact === "number") return exact;
+  const sample = r.detail?.recompute_failures;
+  return Array.isArray(sample) ? sample.length : 0;
+}
+
 /** Decide whether tonight's run warrants an alert. */
 export function decideAlert(runs: RunOutcome[]): AlertDecision {
   const reasons: string[] = [];
   const errors = runs.filter((r) => r.status === "error");
   if (errors.length > 0) {
     reasons.push(`${errors.length} run(s) errored`);
+  }
+  // Status-blind: a run can upsert every ingest row, fail every downstream
+  // score recompute, and still log `success` — proven 2026-09-01, when 329 of
+  // 416 recompute failures rode `success` runs and the alert saw none of them.
+  const failed = runs.filter((r) => recomputeFailureCount(r) > 0);
+  if (failed.length > 0) {
+    const n = failed.reduce((acc, r) => acc + recomputeFailureCount(r), 0);
+    reasons.push(
+      `${n} recompute failure(s) across ${failed.length} run(s) — see ingest_runs.detail`
+    );
   }
   // A source that ran everywhere but came back uniformly empty is suspicious
   // (e.g. an auth failure that returns 200 + empty, or a broken filter).
