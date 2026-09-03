@@ -21,19 +21,22 @@ export interface AlertResult {
 
 /**
  * Send an alert email; never throws. `logLabel` prefixes the console fallback
- * (e.g. "ingest/alert", "recompute-sweep").
+ * (e.g. "ingest/alert", "recompute-sweep"); `noticeWord` is the shouted
+ * marker in the unconfigured-env degrade path — the fatal path passes
+ * "FATAL ALERT" so operator triage on console output keeps its severity cue.
  */
 export async function sendAlertEmail(
   subject: string,
   body: string,
-  logLabel: string
+  logLabel: string,
+  noticeWord = "ALERT"
 ): Promise<AlertResult> {
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.INGEST_ALERT_EMAIL;
 
   if (!apiKey || !to) {
     console.error(
-      `[${logLabel}] ALERT (email not configured — set RESEND_API_KEY + INGEST_ALERT_EMAIL):\n${body}`
+      `[${logLabel}] ${noticeWord} (email not configured — set RESEND_API_KEY + INGEST_ALERT_EMAIL):\n${body}`
     );
     return { sent: false, reason: "RESEND_API_KEY/INGEST_ALERT_EMAIL not set; logged instead" };
   }

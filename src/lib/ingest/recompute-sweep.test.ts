@@ -190,3 +190,21 @@ test("below-floor skips (Workstream A) are not failures — a backfill touching 
   assert.equal(summary.shouldAlert, false);
   assert.equal(summary.totalFailures, 0);
 });
+
+test("at-cap read parks the mark just before the LAST fetched row — the unfetched remainder is never skipped", () => {
+  const rows: SweptRun[] = [
+    failing(1, { started_at: "2026-09-02T09:00:00.000Z" }),
+    failing(1, { started_at: "2026-09-02T09:30:00.000Z" }),
+  ];
+  const hw = nextHighWater("2026-09-02T14:15:00.000Z", rows, true);
+  assert.equal(hw, "2026-09-02T09:29:59.999Z");
+});
+
+test("at-cap + running rows: the earlier holdback wins", () => {
+  const rows: SweptRun[] = [
+    row({ status: "running", started_at: "2026-09-02T09:10:00.000Z" }),
+    failing(1, { started_at: "2026-09-02T09:30:00.000Z" }),
+  ];
+  const hw = nextHighWater("2026-09-02T14:15:00.000Z", rows, true);
+  assert.equal(hw, "2026-09-02T09:09:59.999Z", "running-row holdback precedes the cap park");
+});

@@ -131,5 +131,5 @@ export async function sendFatalAlert(
     "",
     "No (or partial) ingest_runs rows exist for this invocation. Check Vercel runtime logs for the stack. Incremental windows self-heal on the next nightly cycle, or re-trigger the route manually with the CRON_SECRET bearer.",
   ].join("\n");
-  return sendAlertEmail(`[EPD] Cron fatal — ${route}`, body, "ingest/alert");
+  return sendAlertEmail(`[EPD] Cron fatal — ${route}`, body, "ingest/alert", "FATAL ALERT");
 }
