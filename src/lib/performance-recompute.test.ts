@@ -62,6 +62,7 @@ registerHooks({
 const {
   computeMetricsFromEntries,
   punchesTimeClockForPeriod,
+  wholePeriodBelowFloor,
   ON_TIME_GRACE_MINUTES,
 } = await import("./performance-recompute.ts");
 
@@ -590,4 +591,36 @@ test("floor and cap compose: the measured window is [floor, cap]", () => {
   );
   assert.equal(m.scheduled_count, 1);
   assert.equal(m.attendance_pct, 100);
+});
+
+// ---------------------------------------------------------------------------
+// The below-floor recompute refusal (R2, 2026-09-02) — wholePeriodBelowFloor.
+//
+// The gate this guards is one level UP from computeMetricsFromEntries:
+// whether recomputePerformanceForQuarter writes a row AT ALL when the whole
+// window is below the line — even when a row already exists (the 2026-08-27
+// regression: all 409 Q1/Q2 rows pre-dated the floor, so every one existed,
+// and no-conjuring — which only gates creation — let them all be updated to
+// null). Order-of-operations is pinned structurally in metrics-floor.test.ts;
+// the condition itself is pinned here on the packet's fixtures.
+// ---------------------------------------------------------------------------
+
+test("below-floor refusal: CO store Q1 2026 (floor Jul 2026) — whole period below the line, skip", () => {
+  assert.equal(wholePeriodBelowFloor("2026-07-01", "2026-03-31"), true);
+});
+
+test("below-floor refusal: HOU Q2 2026 straddles its 2026-04-30 line — NOT skipped, recomputes the remainder", () => {
+  assert.equal(wholePeriodBelowFloor("2026-04-30", "2026-06-30"), false);
+});
+
+test("below-floor refusal: NOLA Q2 2026 sits fully above its 2025-07-01 line — untouched behaviour", () => {
+  assert.equal(wholePeriodBelowFloor("2025-07-01", "2026-06-30"), false);
+});
+
+test("below-floor refusal: a floor ON the period's last day is a straddle, not a skip", () => {
+  assert.equal(wholePeriodBelowFloor("2026-06-30", "2026-06-30"), false);
+});
+
+test("below-floor refusal: null floor = NO floor, score everything (defensive — mig 080 made the column NOT NULL)", () => {
+  assert.equal(wholePeriodBelowFloor(null, "2026-03-31"), false);
 });

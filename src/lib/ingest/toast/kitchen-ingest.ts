@@ -334,6 +334,7 @@ export async function ingestToastKitchen(
       recompute_jobs: jobs.length,
       records_recomputed: rc.recomputed,
       recompute_failures: rc.failures.slice(0, 20),
+      recompute_failure_count: rc.failures.length,
     };
     base.status = upserted > 0 ? "success" : "empty";
     if (rc.failures.length > 0) {

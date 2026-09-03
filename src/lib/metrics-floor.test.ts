@@ -161,3 +161,57 @@ test("080: the floor NEVER filters a read path — the frozen quarters live belo
     );
   }
 });
+
+// ── R2 (2026-09-02): the below-floor recompute refusal ──────────────────────
+//
+// The 2026-08-27 incident in one sentence: no-conjuring only gates CREATION,
+// so every below-floor period whose row already existed was UPDATED — 409
+// rows overwritten with floored nulls. These pins are the test that would
+// have caught it: the refusal must fire before the existence read and the
+// upsert, unconditional on whether a row exists, and must be a skip
+// (ok: true), never a failure the detector alerts on.
+
+test("R2: the below-floor gate fires BEFORE the existence read and the upsert — the existing-row branch is covered", () => {
+  const src = read("src/lib/performance-recompute.ts");
+  const gate = src.indexOf("wholePeriodBelowFloor(metricsStart, periodEnd)");
+  const existenceRead = src.indexOf("performance_records existence read");
+  const upsert = src.indexOf('.upsert(');
+  assert.ok(gate > 0, "the gate exists in recomputePerformanceForQuarter");
+  assert.ok(existenceRead > 0, "the no-conjuring existence read still exists");
+  assert.ok(
+    gate < existenceRead,
+    "gate must precede the existence read — a below-floor skip cannot depend on whether a row exists"
+  );
+  assert.ok(gate < upsert, "gate must precede the upsert");
+});
+
+test("R2: a below-floor period SKIPS (ok: true, skipped_below_floor) — never ok:false, or every pre-line backfill cries wolf", () => {
+  const src = read("src/lib/performance-recompute.ts");
+  const gateBlock = src.slice(
+    src.indexOf("wholePeriodBelowFloor(metricsStart, periodEnd)"),
+    src.indexOf("wholePeriodBelowFloor(metricsStart, periodEnd)") + 200
+  );
+  assert.match(gateBlock, /ok: true/);
+  assert.match(gateBlock, /skipped_below_floor/);
+  assert.doesNotMatch(gateBlock, /ok: false/);
+});
+
+test("R2: the refusal is its OWN gate — periodHasActivity is untouched (surveys/tattle below the line are still activity)", () => {
+  const src = read("src/lib/performance-recompute.ts");
+  const activityFn = src.slice(
+    src.indexOf("export function periodHasActivity"),
+    src.indexOf("export function periodHasActivity") + 900
+  );
+  assert.doesNotMatch(
+    activityFn,
+    /wholePeriodBelowFloor|metricsStart/,
+    "the labor floor must not be folded into the activity test"
+  );
+});
+
+test("R2: runRecomputeJobs routes skipped_below_floor beside skipped_no_activity, never into failures", () => {
+  const src = read("src/lib/ingest/sevenshifts/recompute.ts");
+  assert.match(src, /skipped_below_floor: number/);
+  assert.match(src, /r\.action === "skipped_below_floor"/);
+  assert.match(src, /result\.skipped_below_floor \+= 1/);
+});

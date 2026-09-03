@@ -155,6 +155,7 @@ export async function runCpSurveySync(
         sends_missing_weeks: stats.sends_missing_weeks,
         recomputed: stats.recomputed,
         recompute_failures: stats.failures.slice(0, 20),
+        recompute_failure_count: stats.failures.length,
       };
       outcome.status = stats.assignments_upserted > 0 ? "success" : "empty";
       if (stats.failures.length > 0) {

@@ -1,0 +1,241 @@
+/**
+ * Layer 2 of the recompute-failure detector (spec 2026-09-02): a ledger sweep
+ * that reads ingest_runs directly and is blind to BOTH the run's status and
+ * which code path wrote the row.
+ *
+ * Why Layer 1 (decideAlert's status-blind clause) is not enough: only the
+ * orchestrators that call maybeSendFailureAlert are covered. cake/ingest.ts —
+ * NOLA's sole worked-actuals source — has no alert wiring at all, the two
+ * admin recompute routes deliberately write no ingest_runs row, and any
+ * FUTURE writer is invisible until someone remembers to wire it. The sweep
+ * catches every writer that lands in the ledger without the writer knowing
+ * the alert exists — the actual failure mode: 093 was invisible because
+ * nothing watched a dimension nobody had thought to watch.
+ *
+ * Windowing: to the run cycle, NOT a wall-clock lookback (spec §4). The sweep
+ * persists its own high-water mark in app_settings and each pass covers
+ * (high_water, now], so every ledger row is judged exactly once and a stale
+ * pre-fix failure can never re-alert on a later, healthy day. Rows still
+ * `running` at sweep time hold the mark back so they are re-read once
+ * finished. First run bootstraps to a 26-hour lookback.
+ *
+ * Counting is off detail.recompute_failure_count / recompute_failures —
+ * NEVER error_text (5× undercount) — via the shared countRecomputeFailures.
+ */
+
+import type { AdminClient } from "./sevenshifts/crosswalk";
+import { countRecomputeFailures } from "./recompute-failure-count.ts";
+import { sendAlertEmail, type AlertResult } from "./alert-email.ts";
+
+export const SWEEP_HIGH_WATER_KEY = "recompute_sweep_high_water";
+const BOOTSTRAP_LOOKBACK_MS = 26 * 60 * 60 * 1000;
+const FETCH_CAP = 2000;
+
+/** The slice of an ingest_runs row the sweep judges. */
+export interface SweptRun {
+  source: string;
+  status: string;
+  started_at: string;
+  detail: Record<string, unknown> | null;
+}
+
+export interface SweepGroup {
+  source: string;
+  status: string;
+  runs: number;
+  failures: number;
+  /** False when any run in the group fell back to a capped sample. */
+  exact: boolean;
+}
+
+export interface SweepSummary {
+  shouldAlert: boolean;
+  sweptRuns: number;
+  failingRuns: number;
+  totalFailures: number;
+  /** False when totalFailures may undercount (some run sat at the 20 cap). */
+  exact: boolean;
+  groups: SweepGroup[];
+}
+
+/**
+ * Pure core: judge a window of ledger rows. Any run carrying recompute
+ * failures alerts, whatever its status or source. Runs that errored for
+ * OTHER reasons (e.g. the 7tasks pkey escalation) are not this sweep's
+ * business — Layer 1 and the run-outcome path already own those.
+ */
+export function summarizeSweep(rows: SweptRun[]): SweepSummary {
+  const groups = new Map<string, SweepGroup>();
+  let failingRuns = 0;
+  let totalFailures = 0;
+  let exact = true;
+
+  for (const row of rows) {
+    if (row.status === "running") continue; // not finished; re-swept next pass
+    const { count, exact: rowExact } = countRecomputeFailures(row.detail);
+    if (count === 0) continue;
+    failingRuns += 1;
+    totalFailures += count;
+    if (!rowExact) exact = false;
+    const key = `${row.source} ${row.status}`;
+    const group = groups.get(key) ?? {
+      source: row.source,
+      status: row.status,
+      runs: 0,
+      failures: 0,
+      exact: true,
+    };
+    group.runs += 1;
+    group.failures += count;
+    if (!rowExact) group.exact = false;
+    groups.set(key, group);
+  }
+
+  return {
+    shouldAlert: failingRuns > 0,
+    sweptRuns: rows.filter((r) => r.status !== "running").length,
+    failingRuns,
+    totalFailures,
+    exact,
+    groups: Array.from(groups.values()).sort((a, b) =>
+      a.source === b.source
+        ? a.status.localeCompare(b.status)
+        : a.source.localeCompare(b.source)
+    ),
+  };
+}
+
+/**
+ * Where the NEXT sweep should start. Normally `now`, with two holdbacks
+ * (whichever is earlier wins):
+ * - rows still `running` park the mark just before the earliest of them so
+ *   their detail is judged once they finish;
+ * - a read that hit the fetch cap (`atCap`) parks it just before the LAST
+ *   fetched row, so the unfetched remainder — boundary ties included —
+ *   re-sweeps next pass instead of being skipped permanently (Codex
+ *   blocker 2026-09-02). The tail row may be judged twice; a duplicate
+ *   alert beats a silently missed one.
+ */
+export function nextHighWater(
+  nowIso: string,
+  rows: SweptRun[],
+  atCap = false
+): string {
+  let candidate = nowIso;
+  if (atCap && rows.length > 0) {
+    const lastFetched = new Date(rows[rows.length - 1].started_at).getTime();
+    candidate = new Date(lastFetched - 1).toISOString();
+  }
+  const runningStarts = rows
+    .filter((r) => r.status === "running")
+    .map((r) => r.started_at)
+    .sort();
+  if (runningStarts.length === 0) return candidate;
+  const holdback = new Date(new Date(runningStarts[0]).getTime() - 1).toISOString();
+  return holdback < candidate ? holdback : candidate;
+}
+
+export function buildSweepBody(
+  summary: SweepSummary,
+  windowFrom: string,
+  windowTo: string
+): string {
+  const approx = summary.exact ? "" : "≥ ";
+  const lines: string[] = [];
+  lines.push(
+    `Ledger sweep found ${approx}${summary.totalFailures} recompute failure(s) across ` +
+      `${summary.failingRuns} run(s) in (${windowFrom} … ${windowTo}] — status-blind, source-blind.`
+  );
+  if (!summary.exact) {
+    lines.push(
+      "Some run(s) predate recompute_failure_count and sit at the 20-per-run sample cap: the total is a lower bound."
+    );
+  }
+  lines.push("");
+  lines.push("Per source · status · runs · failures:");
+  for (const g of summary.groups) {
+    lines.push(
+      `  ${g.source} · ${g.status} · ${g.runs} · ${g.exact ? "" : "≥ "}${g.failures}`
+    );
+  }
+  lines.push("");
+  lines.push(
+    "Full detail: select source, status, started_at, detail from ingest_runs " +
+      `where started_at > '${windowFrom}' and coalesce((detail->>'recompute_failure_count')::int, jsonb_array_length(detail->'recompute_failures'), 0) > 0 order by started_at;`
+  );
+  return lines.join("\n");
+}
+
+export interface SweepRunResult {
+  summary: SweepSummary;
+  windowFrom: string;
+  windowTo: string;
+  highWaterAdvancedTo: string;
+  alert: AlertResult | null;
+}
+
+/** Read the window start; absent key → bootstrap lookback. */
+async function readHighWater(supabase: AdminClient, nowMs: number): Promise<string> {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", SWEEP_HIGH_WATER_KEY)
+    .maybeSingle();
+  if (error) throw new Error(`app_settings read (${SWEEP_HIGH_WATER_KEY}): ${error.message}`);
+  const stored = (data?.value as string | undefined) ?? null;
+  return stored ?? new Date(nowMs - BOOTSTRAP_LOOKBACK_MS).toISOString();
+}
+
+/**
+ * Run one sweep pass: read the window, judge it, alert if warranted, advance
+ * the high-water mark. The mark advances even when the email send degrades —
+ * the finding is already durably in the ledger and in the (loud) console
+ * path; re-alerting every pass on the same rows would train alarm-deafness.
+ */
+export async function runRecomputeFailureSweep(
+  supabase: AdminClient
+): Promise<SweepRunResult> {
+  const nowIso = new Date().toISOString();
+  const windowFrom = await readHighWater(supabase, Date.parse(nowIso));
+
+  const { data, error } = await supabase
+    .from("ingest_runs")
+    .select("source, status, started_at, detail")
+    .gt("started_at", windowFrom)
+    .lte("started_at", nowIso)
+    .order("started_at", { ascending: true })
+    .limit(FETCH_CAP);
+  if (error) throw new Error(`ingest_runs sweep read: ${error.message}`);
+  const rows = (data ?? []) as SweptRun[];
+  const atCap = rows.length === FETCH_CAP;
+  if (atCap) {
+    // No silent caps: the mark parks at the last fetched row (see
+    // nextHighWater) so the remainder drains next pass — but a window this
+    // size means something is very wrong anyway.
+    console.error(
+      `[recompute-sweep] window returned ${FETCH_CAP} rows (fetch cap) — this pass is partial; the mark holds so the remainder re-sweeps next pass`
+    );
+  }
+
+  const summary = summarizeSweep(rows);
+  let alert: AlertResult | null = null;
+  if (summary.shouldAlert) {
+    const body = buildSweepBody(summary, windowFrom, nowIso);
+    alert = await sendAlertEmail(
+      `[EPD] Recompute-failure sweep — ${summary.exact ? "" : "≥ "}${summary.totalFailures} failure(s) across ${summary.failingRuns} run(s)`,
+      body,
+      "recompute-sweep"
+    );
+  }
+
+  const highWaterAdvancedTo = nextHighWater(nowIso, rows, atCap);
+  const { error: hwError } = await supabase
+    .from("app_settings")
+    .upsert(
+      { key: SWEEP_HIGH_WATER_KEY, value: highWaterAdvancedTo, updated_at: nowIso },
+      { onConflict: "key" }
+    );
+  if (hwError) throw new Error(`app_settings upsert (${SWEEP_HIGH_WATER_KEY}): ${hwError.message}`);
+
+  return { summary, windowFrom, windowTo: nowIso, highWaterAdvancedTo, alert };
+}

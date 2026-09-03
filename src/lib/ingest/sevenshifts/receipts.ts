@@ -156,6 +156,7 @@ export async function ingestReceipts(
       teams_recomputed: rc.teams_recomputed,
       skipped_no_date: skippedNoDate,
       recompute_failures: rc.failures.slice(0, 20),
+      recompute_failure_count: rc.failures.length,
     };
     base.status = upserted > 0 ? "success" : "empty";
     if (rc.failures.length > 0) {

@@ -420,6 +420,7 @@ export async function ingestTimePunches(
       records_created: rc.created,
       records_updated: rc.updated,
       records_skipped_no_activity: rc.skipped_no_activity,
+      records_skipped_below_floor: rc.skipped_below_floor,
       ...(entryWindow
         ? {
             entry_window: { from: entryWindow.from ?? null, to: entryWindow.to ?? null },
@@ -437,6 +438,7 @@ export async function ingestTimePunches(
       unmapped_role_ids: Array.from(unmappedRoleIds),
       ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
+      recompute_failure_count: rc.failures.length,
     };
     // A truncated pull must land as ERROR, not success/empty: the
     // incremental window math takes the max window_end over

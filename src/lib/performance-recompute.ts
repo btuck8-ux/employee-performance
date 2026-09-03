@@ -957,7 +957,42 @@ export function frozenQuarterRefusal(
 /** What a recompute write actually did — "employees touched" concealed two
  * row-conjuring incidents (frozen-quarter spec 2026-08-25 §3); created vs
  * updated vs skipped must never collapse into one count again. */
-export type RecomputeWriteAction = "created" | "updated" | "skipped_no_activity";
+export type RecomputeWriteAction =
+  | "created"
+  | "updated"
+  | "skipped_no_activity"
+  | "skipped_below_floor";
+
+/**
+ * The below-floor guard (R2, 2026-09-02 ruling). Pure decision: true when
+ * the WHOLE period sits below the location's demarcation floor
+ * (locations.metrics_start_date) — the same condition that sets
+ * laborWindowStart null ("whole window below the floor — not answerable").
+ *
+ * Why this exists: no-conjuring (periodHasActivity + scorableEntryCount)
+ * only gates CREATION. When a row already existed, the recompute would
+ * proceed and update it — writing floored nulls over whatever was there.
+ * That is exactly the 2026-08-27 incident: every Q1/Q2 2026 row pre-dated
+ * the floor, so all 409 existed, and all were overwritten. A wholly-below-
+ * floor period is now SKIPPED outright (ok: true, skipped_below_floor,
+ * no write, regardless of row existence) — which is what mig 066's text
+ * always claimed. Not a failure: routing it into `failures` would make the
+ * recompute-failure detector cry wolf on every backfill touching a
+ * pre-line quarter.
+ *
+ * NULL floor = NO floor (score everything). Mig 080 made the column NOT
+ * NULL so the DB can no longer produce a null; the branch is defensive.
+ *
+ * NOT folded into periodHasActivity: that function also counts tattle,
+ * reviews, surveys, tasks and kitchen signals, none of which the labor
+ * floor gates.
+ */
+export function wholePeriodBelowFloor(
+  metricsStart: string | null,
+  periodEnd: string
+): boolean {
+  return metricsStart !== null && metricsStart > periodEnd;
+}
 
 /**
  * The no-conjuring rule (frozen-quarter spec 2026-08-25 §3): a recompute
@@ -997,8 +1032,11 @@ export function periodHasActivity(signals: {
  * Refuses (ok:false, no write) when the target period is frozen
  * (report_periods.frozen) and opts.allowFrozenQuarter does not name it
  * exactly — see frozenQuarterRefusal. Skips (ok:true,
- * action:"skipped_no_activity", no write) when no row exists and the
- * employee has no activity in the period — see periodHasActivity.
+ * action:"skipped_below_floor", no write, EVEN when a row exists) when the
+ * whole period sits below the location's demarcation floor — see
+ * wholePeriodBelowFloor. Skips (ok:true, action:"skipped_no_activity",
+ * no write) when no row exists and the employee has no activity in the
+ * period — see periodHasActivity.
  */
 export async function recomputePerformanceForQuarter(
   supabase: SupabaseClient,
@@ -1124,6 +1162,16 @@ export async function recomputePerformanceForQuarter(
       removedShifts: removedEvidence,
     }
   );
+
+  // Below-floor refusal (R2, 2026-09-02) — BEFORE the existence read and the
+  // upsert, deliberately unconditional on whether a row exists: the existing-
+  // row branch is the one no-conjuring never covered (the 2026-08-27
+  // overwrite). Sits beside frozenQuarterRefusal as its own gate, not inside
+  // periodHasActivity. A straddling quarter (HOU Q2 2026) does NOT trip this
+  // and recomputes on the above-line remainder.
+  if (wholePeriodBelowFloor(metricsStart, periodEnd)) {
+    return { ok: true, metrics, action: "skipped_below_floor" };
+  }
 
   // ---- Tattle metrics (attributed surveys whose date_experienced is in this quarter) ----
   const { data: attributedSurveys } = await supabase

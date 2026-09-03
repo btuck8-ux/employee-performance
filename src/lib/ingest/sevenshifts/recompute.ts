@@ -25,6 +25,11 @@ export interface RecomputeResult {
   updated: number;
   /** No-conjuring skips (§3): no existing row + no activity = no write. */
   skipped_no_activity: number;
+  /** Below-floor refusals (R2, 2026-09-02): the whole period sits below the
+   * location's demarcation floor — routine, NOT a failure. A backfill
+   * touching a pre-line quarter must not make the failure detector cry
+   * wolf. */
+  skipped_below_floor: number;
   failures: string[];
 }
 
@@ -48,6 +53,7 @@ export async function runRecomputeJobs(
     created: 0,
     updated: 0,
     skipped_no_activity: 0,
+    skipped_below_floor: 0,
     failures: [],
   };
   if (jobs.length === 0) return result;
@@ -74,6 +80,8 @@ export async function runRecomputeJobs(
         result.failures.push(`recompute ${job.employee_id} Q${job.quarter}-${job.year}: ${r.error}`);
       } else if (r.action === "skipped_no_activity") {
         result.skipped_no_activity += 1;
+      } else if (r.action === "skipped_below_floor") {
+        result.skipped_below_floor += 1;
       } else {
         result.recomputed += 1;
         if (r.action === "created") result.created += 1;
@@ -134,6 +142,7 @@ export interface SalesRecomputeSummary {
   created: number;
   updated: number;
   skipped_no_activity: number;
+  skipped_below_floor: number;
   teams_recomputed: number;
   failures: string[];
 }
@@ -164,6 +173,7 @@ export async function recomputeAfterSalesUpsert(
     created: 0,
     updated: 0,
     skipped_no_activity: 0,
+    skipped_below_floor: 0,
     teams_recomputed: 0,
     failures: [],
   };
@@ -188,6 +198,7 @@ export async function recomputeAfterSalesUpsert(
   summary.created = rc.created;
   summary.updated = rc.updated;
   summary.skipped_no_activity = rc.skipped_no_activity;
+  summary.skipped_below_floor = rc.skipped_below_floor;
   summary.failures.push(...rc.failures);
   summary.teams_recomputed = await recomputeTeamTipImpact(
     supabase,
