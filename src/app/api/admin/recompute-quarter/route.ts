@@ -457,6 +457,7 @@ export async function GET(request: Request) {
       records_created: rc.created,
       records_updated: rc.updated,
       records_skipped_no_activity: rc.skipped_no_activity,
+      records_skipped_below_floor: rc.skipped_below_floor,
       recompute_failures: rc.failures,
       recompute_failure_count: rc.failures.length,
     });

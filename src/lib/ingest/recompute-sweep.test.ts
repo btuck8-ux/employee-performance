@@ -174,3 +174,19 @@ test("groups aggregate per (source, status) for the alert body", () => {
     { source: "toast_sales", status: "success", runs: 2, failures: 5, exact: true },
   ]);
 });
+
+test("below-floor skips (Workstream A) are not failures — a backfill touching a pre-line quarter stays silent", () => {
+  const summary = summarizeSweep([
+    row({
+      source: "cp_schedule",
+      detail: {
+        records_recomputed: 0,
+        records_skipped_below_floor: 130,
+        recompute_failures: [],
+        recompute_failure_count: 0,
+      },
+    }),
+  ]);
+  assert.equal(summary.shouldAlert, false);
+  assert.equal(summary.totalFailures, 0);
+});

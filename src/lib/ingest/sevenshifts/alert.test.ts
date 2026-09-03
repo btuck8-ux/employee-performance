@@ -137,3 +137,16 @@ test("counts come off detail, never error_text (the 5× undercount trap)", () =>
     `reasons: ${decision.reasons.join("; ")}`
   );
 });
+
+test("below-floor skips (Workstream A) are not failures — decideAlert stays quiet on a pre-line backfill", () => {
+  const decision = decideAlert([
+    run({
+      detail: {
+        records_skipped_below_floor: 130,
+        recompute_failures: [],
+        recompute_failure_count: 0,
+      },
+    }),
+  ]);
+  assert.equal(decision.shouldAlert, false);
+});
