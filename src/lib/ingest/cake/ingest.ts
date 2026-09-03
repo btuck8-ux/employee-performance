@@ -146,6 +146,7 @@ export async function ingestCakeTimesheetCsv(
       unmapped_profile_ids: parsed.unmapped_profile_ids,
       parse_warnings: parsed.warnings,
       recompute_failures: failures.slice(0, 20),
+      recompute_failure_count: failures.length,
     };
     base.status = upserted > 0 ? "success" : "empty";
     if (failures.length > 0) base.error_text = `${failures.length} recompute failure(s); see detail`;

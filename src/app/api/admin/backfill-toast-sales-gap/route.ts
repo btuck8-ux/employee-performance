@@ -344,6 +344,7 @@ export async function GET(request: Request) {
       quarters_recomputed: rc.quarters.length,
       records_recomputed: rc.recomputed,
       recompute_failures: rc.failures.slice(0, 20),
+      recompute_failure_count: rc.failures.length,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

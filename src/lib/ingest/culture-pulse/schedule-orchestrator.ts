@@ -139,6 +139,7 @@ export async function runCpScheduleSync(
         skipped_no_start: stats.skipped_no_start,
         multi_shift_days: stats.multi_shift_days,
         recompute_failures: stats.failures.slice(0, 20),
+        recompute_failure_count: stats.failures.length,
       };
       outcome.status = stats.entries_upserted > 0 ? "success" : "empty";
       if (stats.failures.length > 0) {

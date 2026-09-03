@@ -458,6 +458,7 @@ export async function GET(request: Request) {
       records_updated: rc.updated,
       records_skipped_no_activity: rc.skipped_no_activity,
       recompute_failures: rc.failures,
+      recompute_failure_count: rc.failures.length,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

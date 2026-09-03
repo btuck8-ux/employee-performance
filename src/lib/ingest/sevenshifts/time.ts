@@ -437,6 +437,7 @@ export async function ingestTimePunches(
       unmapped_role_ids: Array.from(unmappedRoleIds),
       ...(rolesLookupError ? { roles_lookup_error: rolesLookupError } : {}),
       recompute_failures: rc.failures.slice(0, 20),
+      recompute_failure_count: rc.failures.length,
     };
     // A truncated pull must land as ERROR, not success/empty: the
     // incremental window math takes the max window_end over
