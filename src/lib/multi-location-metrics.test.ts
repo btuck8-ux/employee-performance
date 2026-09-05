@@ -23,6 +23,10 @@ function locationQuarter(
 ): LocationQuarterMetrics {
   return {
     employeeId: "emp",
+    // W6 composite identity: required by the type, ignored by the combine
+    // math — the 10 combine assertions below are unchanged.
+    locationId: "loc",
+    belowFloor: false,
     quarterId: "q",
     attendance: { num: 0, den: 0 },
     onTime: { num: 0, den: 0 },

@@ -42,6 +42,16 @@ export function decideAlert(runs: RunOutcome[]): AlertDecision {
   if (errors.length > 0) {
     reasons.push(`${errors.length} run(s) errored`);
   }
+  // W7 RULED invariant, both-or-neither: `partial` ALERTS and does not
+  // advance the watermark. This clause is structural — it holds for any
+  // future partial condition even though today's only producer condition
+  // (recompute failures) also trips the status-blind clause below.
+  const partials = runs.filter((r) => r.status === "partial");
+  if (partials.length > 0) {
+    reasons.push(
+      `${partials.length} run(s) PARTIAL — rows landed but part of the run's own work plan failed; the incremental window did not advance`
+    );
+  }
   // Status-blind: a run can upsert every ingest row, fail every downstream
   // score recompute, and still log `success` — proven 2026-09-01, when 329 of
   // 416 recompute failures rode `success` runs and the alert saw none of them.
