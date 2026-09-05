@@ -253,6 +253,23 @@ test("writer scan: Codex CP2 hardening cases", () => {
   assert.equal(sqlWritesFrozen(`update only public.report_periods set frozen = true;`), true);
 });
 
+test("writer scan: Codex final-round cases (case, SET-list bounds, DDL scope)", () => {
+  // uppercase assignment caught
+  assert.equal(sqlWritesFrozen(`UPDATE report_periods SET FROZEN = false;`), true);
+  // frozen in the WHERE predicate is a READ, not a write
+  assert.equal(sqlWritesFrozen(`UPDATE report_periods SET label = label WHERE frozen = true;`), false);
+  // another table's frozen column default is not this contract's business
+  assert.equal(
+    sqlWritesFrozen(`ALTER TABLE other_table ADD COLUMN frozen boolean DEFAULT false;`),
+    false
+  );
+  // report_periods' own DDL default IS a writer (063's actual form)
+  assert.equal(
+    sqlWritesFrozen(`alter table public.report_periods add column frozen boolean not null default false;`),
+    true
+  );
+});
+
 test("across ALL migrations, only 063 writes frozen (secondary heuristic; prod check stays authoritative)", () => {
   const dir = join(process.cwd(), "supabase", "migrations");
   const writers: string[] = [];

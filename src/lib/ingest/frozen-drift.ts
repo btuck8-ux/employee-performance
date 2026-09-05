@@ -187,14 +187,21 @@ export function sqlWritesFrozen(sql: string): boolean {
   const noComments = sql
     .replace(/--[^\n]*/g, "")
     .replace(/\/\*[\s\S]*?\*\//g, " ");
-  // update … report_periods … set <list>: frozen assigned anywhere in the
-  // list (statement-bounded by ';' or end-of-file).
+  // update … report_periods … set <list>: frozen ASSIGNED in the SET list
+  // itself — the list ends at WHERE/FROM/RETURNING/';', so a frozen in the
+  // predicate is a read, not a write. Case-insensitive throughout.
   for (const m of noComments.matchAll(
-    /\bupdate\s+(?:only\s+)?(?:public\s*\.\s*)?report_periods\b[\s\S]*?\bset\b([\s\S]*?)(?:;|$)/gi
+    /\bupdate\s+(?:only\s+)?(?:public\s*\.\s*)?report_periods\b[\s\S]*?\bset\b([\s\S]*?)(?:\bwhere\b|\bfrom\b|\breturning\b|;|$)/gi
   )) {
-    if (/\bfrozen\s*=/.test(m[1])) return true;
+    if (/\bfrozen\s*=/i.test(m[1])) return true;
   }
-  if (/\bfrozen\s+boolean[^,;)]*default/i.test(noComments)) return true;
+  // A frozen column default counts only on report_periods' own DDL —
+  // another table adding a `frozen` column is not this contract's business.
+  for (const m of noComments.matchAll(
+    /\b(?:create\s+table|alter\s+table)\s+(?:if\s+not\s+exists\s+)?(?:only\s+)?(?:public\s*\.\s*)?report_periods\b([\s\S]*?)(?:;|$)/gi
+  )) {
+    if (/\bfrozen\s+boolean[^,;)]*default/i.test(m[1])) return true;
+  }
   if (
     /\binsert\s+into\s+(?:public\s*\.\s*)?report_periods\s*\([^)]*\bfrozen\b[^)]*\)/i.test(noComments)
   ) {
