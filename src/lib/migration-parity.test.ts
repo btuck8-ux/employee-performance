@@ -16,6 +16,7 @@ import {
   LIVE_EXIT,
   UNPREFIXED_LEDGER_MAPPINGS,
   JUSTIFIED_EXCEPTIONS,
+  GATE_PENDING_MIGRATIONS,
   type LedgerRow,
 } from "./migration-parity.ts";
 
@@ -158,6 +159,75 @@ test("the exception does NOT excuse a missing file — absent 065 is applied_no_
   assert.equal(report.counts.appliedNoFile, 1);
   assert.match(report.findings[0].detail, /not a missing file/);
   assert.equal(liveExitFor(report), LIVE_EXIT.FINDINGS);
+});
+
+// ---- gate-pending declarations (CP3 review §4) ----
+
+test("gate-pending is a DECLARED LIST with a written reason per entry, and every entry exists on disk unapplied", () => {
+  assert.ok(GATE_PENDING_MIGRATIONS.length >= 1);
+  for (const g of GATE_PENDING_MIGRATIONS) {
+    assert.ok(g.reason.length > 40, `${g.fileStem}: reason must be written, not a stub`);
+    assert.ok(diskStems.includes(g.fileStem), `${g.fileStem}.sql must exist on disk`);
+  }
+  // Exactly the two current gate-pending migrations — adding one means
+  // writing its reason here, not matching a pattern.
+  assert.deepEqual(
+    GATE_PENDING_MIGRATIONS.map((g) => g.fileStem),
+    ["094_team_tip_impact_baseline_once", "095_ingest_runs_partial_status"]
+  );
+});
+
+test("a declared gate-pending file reports in its OWN class — never as file_not_applied drift", () => {
+  const report = checkMigrationParity(
+    ["001_init_schema", "094_team_tip_impact_baseline_once", "058_worked_intervals_flip"],
+    [{ version: "20260429040539", name: "001_init_schema" }]
+  );
+  assert.equal(report.counts.gatePending, 1);
+  assert.equal(report.counts.fileNotApplied, 1, "the HISTORICAL no-ledger-row file still reports as drift");
+  const gate = report.findings.find((f) => f.class === "gate_pending");
+  assert.equal(gate?.fileStem, "094_team_tip_impact_baseline_once");
+  assert.match(gate?.detail ?? "", /DECLARED gate-pending \(not drift\)/);
+  assert.match(gate?.detail ?? "", /G4/);
+});
+
+test("declared gate-pending alone does not fail the run; real drift still does", () => {
+  const declaredOnly = checkMigrationParity(
+    ["001_init_schema", "095_ingest_runs_partial_status"],
+    [{ version: "20260429040539", name: "001_init_schema" }]
+  );
+  assert.equal(liveExitFor(declaredOnly), LIVE_EXIT.CLEAN);
+  const withDrift = checkMigrationParity(
+    ["001_init_schema", "095_ingest_runs_partial_status", "058_worked_intervals_flip"],
+    [{ version: "20260429040539", name: "001_init_schema" }]
+  );
+  assert.equal(liveExitFor(withDrift), LIVE_EXIT.FINDINGS);
+});
+
+test("a STALE declaration (file now in the ledger) is a hard finding, never silent", () => {
+  const report = checkMigrationParity(
+    ["094_team_tip_impact_baseline_once"],
+    [{ version: "20991231000000", name: "094_team_tip_impact_baseline_once" }]
+  );
+  assert.equal(report.counts.gatePending, 0);
+  const stale = report.findings.find((f) => /declaration is STALE/.test(f.detail));
+  assert.ok(stale, "stale declaration must surface");
+  assert.equal(stale?.class, "ambiguous_collision");
+  assert.equal(liveExitFor(report), LIVE_EXIT.FINDINGS);
+});
+
+// (A declaration naming a file absent from disk is caught by the
+// declared-list test above, which asserts every entry against the REAL
+// migrations directory — the pure core only sees the file list it is
+// handed, so that staleness direction lives here, not in fixtures.)
+
+test("the report prints the gate-pending class", () => {
+  const text = formatParityReport(
+    checkMigrationParity(
+      ["094_team_tip_impact_baseline_once", "095_ingest_runs_partial_status"],
+      []
+    )
+  );
+  assert.match(text, /GATE-PENDING \(DECLARED, AWAITING APPROVAL\) \(2\)/);
 });
 
 test("exit states are distinct — a credential skip can never read as a clean pass", () => {

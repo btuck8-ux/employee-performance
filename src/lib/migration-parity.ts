@@ -27,8 +27,9 @@ export type LedgerRow = { version: string; name: string };
 export type ParityClass =
   | "applied_no_file" // ledger row with no matching repo file
   | "file_not_applied" // repo file with no ledger row (NOTE: "no ledger row" — whether its DDL is live in the schema is a different question this check cannot answer)
-  | "ambiguous_collision" // two files resolving to one ledger row, or duplicate ledger names
-  | "justified_exception"; // enumerated below, with exact identity — reported, never silent
+  | "ambiguous_collision" // two files resolving to one ledger row, duplicate ledger names, or an inconsistent declaration
+  | "justified_exception" // enumerated below, with exact identity — reported, never silent
+  | "gate_pending"; // DECLARED written-and-unapplied migrations awaiting their approval gate — distinct from historical drift
 
 export type ParityFinding = {
   class: ParityClass;
@@ -51,6 +52,7 @@ export type ParityReport = {
     fileNotApplied: number;
     ambiguousCollision: number;
     justifiedException: number;
+    gatePending: number;
   };
 };
 
@@ -97,6 +99,35 @@ export const JUSTIFIED_EXCEPTIONS: ReadonlyArray<{
     version: "20260826002003",
     rationale:
       "target table q2_gap_ledger dropped by 081_drop_q2_gap_ledger; applied body is a superseded branch iteration of 065",
+  },
+];
+
+/**
+ * Migrations that exist in the repo DELIBERATELY unapplied because their
+ * application sits behind an approval gate (CP3 review §4). A DECLARED
+ * list with a written reason per entry — the transfer-allowlist
+ * discipline — never a pattern rule or filename-range heuristic: without
+ * this, a gate-pending file reports identically to the five historical
+ * file-no-ledger-row findings (058/060/061/062/063), and those are the
+ * ones that cost an outage.
+ *
+ * A declaration is checked for staleness both ways: a declared stem that
+ * appears in the ledger (the gate was passed — remove the entry) and a
+ * declared stem with no file on disk are HARD findings, never silent.
+ */
+export const GATE_PENDING_MIGRATIONS: ReadonlyArray<{
+  fileStem: string;
+  reason: string;
+}> = [
+  {
+    fileStem: "094_team_tip_impact_baseline_once",
+    reason:
+      "W3 FCCSU timeout fix — staged evidence complete (branch w3-fccsu-staging); application is G4, brought to Tucker with the CP1 §7 artifact package",
+  },
+  {
+    fileStem: "095_ingest_runs_partial_status",
+    reason:
+      "W7 partial-status constraint widening — FIRST in the ruled deployment order; application is gate 5a (Tucker), before deploy of the inert producers and separate from activation (5b)",
   },
 ];
 
@@ -226,14 +257,44 @@ export function checkMigrationParity(
     });
   }
 
-  for (const stem of fileStems) {
-    if (!claimedFiles.has(stem)) {
+  const gatePendingByStem = new Map(
+    GATE_PENDING_MIGRATIONS.map((g) => [g.fileStem, g])
+  );
+  // Declaration staleness: a declared stem that now has a ledger row means
+  // the gate was PASSED — the declaration must be removed, loudly. (The
+  // other direction — a declaration naming a file absent from disk — is
+  // asserted by the offline suite against the real migrations directory,
+  // since this core only sees whatever file list it is handed.)
+  for (const g of GATE_PENDING_MIGRATIONS) {
+    if (seenLedgerNames.has(g.fileStem)) {
       findings.push({
-        class: "file_not_applied",
-        fileStem: stem,
-        detail: `repo file ${stem}.sql has no ledger row — the ledger does not record it as applied (whether its DDL is live in the schema is a separate question this check cannot answer)`,
+        class: "ambiguous_collision",
+        fileStem: g.fileStem,
+        ledgerName: g.fileStem,
+        ledgerVersion: seenLedgerNames.get(g.fileStem),
+        detail: `gate-pending declaration is STALE: ${g.fileStem}.sql now has a ledger row — the gate was passed; remove its GATE_PENDING_MIGRATIONS entry`,
       });
     }
+  }
+
+  for (const stem of fileStems) {
+    if (claimedFiles.has(stem)) continue;
+    const gate = gatePendingByStem.get(stem);
+    if (gate && !seenLedgerNames.has(stem)) {
+      // Deliberately written-and-unapplied, awaiting its approval gate —
+      // its OWN class so it can never read as historical drift.
+      findings.push({
+        class: "gate_pending",
+        fileStem: stem,
+        detail: `DECLARED gate-pending (not drift): ${gate.reason}`,
+      });
+      continue;
+    }
+    findings.push({
+      class: "file_not_applied",
+      fileStem: stem,
+      detail: `repo file ${stem}.sql has no ledger row — the ledger does not record it as applied (whether its DDL is live in the schema is a separate question this check cannot answer)`,
+    });
   }
 
   const byClass = (c: ParityClass) =>
@@ -252,6 +313,7 @@ export function checkMigrationParity(
       fileNotApplied: byClass("file_not_applied"),
       ambiguousCollision: byClass("ambiguous_collision"),
       justifiedException: byClass("justified_exception"),
+      gatePending: byClass("gate_pending"),
     },
   };
 }
@@ -268,8 +330,11 @@ export const LIVE_EXIT = {
 } as const;
 
 export function liveExitFor(report: ParityReport): number {
+  // justified_exception and DECLARED gate_pending are explained states,
+  // not drift — they do not fail the run. A stale or inconsistent
+  // declaration lands in ambiguous_collision and fails like any finding.
   const nonException = report.findings.filter(
-    (f) => f.class !== "justified_exception"
+    (f) => f.class !== "justified_exception" && f.class !== "gate_pending"
   );
   return nonException.length > 0 ? LIVE_EXIT.FINDINGS : LIVE_EXIT.CLEAN;
 }
@@ -287,6 +352,7 @@ export function formatParityReport(report: ParityReport): string {
     ["file_not_applied", "FILE, NO LEDGER ROW"],
     ["ambiguous_collision", "AMBIGUOUS / COLLISION"],
     ["justified_exception", "JUSTIFIED EXCEPTION"],
+    ["gate_pending", "GATE-PENDING (DECLARED, AWAITING APPROVAL)"],
   ];
   for (const [cls, label] of classes) {
     const rows = report.findings.filter((f) => f.class === cls);
