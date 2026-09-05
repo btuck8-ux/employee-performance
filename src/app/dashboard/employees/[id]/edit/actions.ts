@@ -41,8 +41,12 @@ export async function updateEmployeeAction(formData: FormData) {
   const supabase = await createClient();
 
   // Fetch the current location_id so we know whether this is a transfer
-  // and can keep performance_records.location_id consistent — and the
-  // current tier for the mig 071 lockstep below.
+  // (the old store's pages need revalidating too) — and the current tier
+  // for the mig 071 lockstep below. A transfer updates the employee row
+  // ONLY: historical performance rows stay attributed to the store where
+  // the work happened (post-093, location_id is row identity there, and
+  // transfer-history-contract.test.ts pins that this file never touches
+  // that table).
   const { data: current, error: currentError } = await supabase
     .from("employees")
     .select("location_id, epd_role, active")
@@ -143,14 +147,6 @@ export async function updateEmployeeAction(formData: FormData) {
     redirect(
       `/dashboard/employees/${id}/edit?error=${encodeURIComponent(error.message)}`
     );
-  }
-
-  // If transferring, sync performance_records.location_id so denormalized data stays consistent.
-  if (isTransfer) {
-    await supabase
-      .from("performance_records")
-      .update({ location_id: new_location_id })
-      .eq("employee_id", id);
   }
 
   revalidatePath(`/dashboard/employees/${id}`);
