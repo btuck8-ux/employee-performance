@@ -10,10 +10,16 @@
 -- plans the final `from teams t, loc_baseline lb` join as a nested loop
 -- with the single-reference (hence inlined) loc_baseline aggregate on the
 -- INNER side — re-executing the whole baseline aggregate once per team row.
--- FCCSU Q3: 179 teams x ~72ms/execution ≈ 13s of work against the 8s
--- deadline. The deadline that actually binds is the `authenticator` role's
--- statement_timeout=8s (PostgREST's login role); service_role carries no
--- override; the Vercel route's maxDuration=300 never gets a say.
+-- Two timing figures, deliberately different instruments: under EXPLAIN
+-- ANALYZE the re-execution measures 179 teams x ~72ms/loop ≈ 13s
+-- (instrumentation overhead included); UNINSTRUMENTED wall time for the
+-- real function call is 7,546 / 8,383 ms across two staging runs — i.e.
+-- the baseline STRADDLES the 8s deadline, which is exactly why production
+-- fails intermittently (succeeded 09-02 with 167 teams, failed 09-03/04/05
+-- as the live quarter grew). The deadline that actually binds is the
+-- `authenticator` role's statement_timeout=8s (PostgREST's login role);
+-- service_role carries no override; the Vercel route's maxDuration=300
+-- never gets a say.
 --
 -- WHY NOT A TIMEOUT BUMP: proven empirically on staging — a
 -- `set local statement_timeout` executed INSIDE a running function does NOT
@@ -38,9 +44,12 @@
 -- semantics; the $175 cap; delete-then-insert idempotency; every output
 -- column and its arithmetic.
 --
--- STAGED EVIDENCE (branch w3-fccsu-staging, object graph digest-identical
--- to prod, real copied fixture data at exact prod row counts):
---   FCCSU Q3  7,546ms → 176ms   (179 rows, byte-identical output)
+-- STAGED EVIDENCE (branch w3-fccsu-staging; the recompute function, its
+-- two views, the flip-config view and the auto-close fn proved
+-- digest-identical to prod plus an index comparison — a reconstruction
+-- matching prod on this query path, not a whole-database replay; real
+-- copied fixture data at exact prod row counts, uninstrumented wall times):
+--   FCCSU Q3  7,546/8,383ms → 176/191ms  (179 rows, byte-identical output)
 --   DTD   Q3    636ms → 805ms   (422 rows, byte-identical; temp-table
 --   COS   Q3    311ms → 428ms   (138 rows, byte-identical;  overhead)
 --   under `set role service_role` + armed 8s timer: 066 body reproduces

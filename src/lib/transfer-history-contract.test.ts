@@ -22,7 +22,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
@@ -70,4 +70,50 @@ test("W1 evidence 2b: BOTH stores' pages revalidate — new location uncondition
 test("W1: employee pages still revalidate", () => {
   assert.match(editActionsSrc, /revalidatePath\(`\/dashboard\/employees\/\$\{id\}`\)/);
   assert.match(editActionsSrc, /revalidatePath\("\/dashboard\/employees"\)/);
+});
+
+test("W1 REPO-WIDE (G2 2a): no file outside the recompute path updates performance_records carrying location_id", () => {
+  // The single-file pins above stop the write coming back in the edit
+  // action; this pin stops it appearing ANYWHERE else. Post-093,
+  // location_id is row identity — only the recompute asset (which carries
+  // frozenQuarterRefusal and the metrics floor) may stamp it, and it does
+  // so via upsert-as-row-identity, never re-attribution of existing rows.
+  const RECOMPUTE_PATH = ["src/lib/performance-recompute.ts"];
+
+  const files: string[] = [];
+  for (const entry of readdirSync(join(process.cwd(), "src"), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile()) continue;
+    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    files.push(join(entry.parentPath, entry.name));
+  }
+  assert.ok(files.length > 100, "repo walk must actually find the tree");
+
+  const offenders: string[] = [];
+  for (const abs of files) {
+    if (abs.endsWith(".test.ts")) continue; // tests may quote the pattern
+    const src = readFileSync(abs, "utf8");
+    if (!src.includes('from("performance_records")')) continue;
+    const isRecompute = RECOMPUTE_PATH.some((p) => abs.endsWith(p));
+    // Every .update( chained after a performance_records from(): the
+    // literal payload must not carry location_id, and a non-literal
+    // payload (which this pin cannot inspect) is itself an offence
+    // outside the recompute path — widen the allowlist deliberately if
+    // one ever becomes legitimate.
+    const chains = src.matchAll(
+      /\.from\(\s*"performance_records"\s*\)[\s\S]{0,400}?\.update\(\s*(\{[\s\S]*?\}|\S{0,60})\s*\)/g
+    );
+    for (const m of chains) {
+      if (isRecompute) continue;
+      const payload = m[1];
+      if (!payload.startsWith("{")) {
+        offenders.push(`${abs}: non-literal update payload after from("performance_records") — uninspectable, not allowed`);
+      } else if (/location_id/.test(payload)) {
+        offenders.push(`${abs}: update payload carries location_id — a transfer must never re-attribute history`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], offenders.join("\n"));
 });
