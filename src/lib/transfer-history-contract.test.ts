@@ -25,6 +25,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { findTransferRewriteOffences } from "./transfer-history-scan.ts";
+
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
 const editActionsSrc = read("src/app/dashboard/employees/[id]/edit/actions.ts");
@@ -72,48 +74,105 @@ test("W1: employee pages still revalidate", () => {
   assert.match(editActionsSrc, /revalidatePath\("\/dashboard\/employees"\)/);
 });
 
-test("W1 REPO-WIDE (G2 2a): no file outside the recompute path updates performance_records carrying location_id", () => {
+test("W1 REPO-WIDE (G2 2a): no file outside the recompute path updates performance_records via an unsafe payload", () => {
   // The single-file pins above stop the write coming back in the edit
-  // action; this pin stops it appearing ANYWHERE else. Post-093,
-  // location_id is row identity — only the recompute asset (which carries
-  // frozenQuarterRefusal and the metrics floor) may stamp it, and it does
-  // so via upsert-as-row-identity, never re-attribution of existing rows.
-  const RECOMPUTE_PATH = ["src/lib/performance-recompute.ts"];
+  // action; this sweep stops it appearing ANYWHERE else — src AND scripts,
+  // ts/tsx/js/mjs. Post-093, location_id is row identity — only the
+  // recompute asset (which carries frozenQuarterRefusal and the metrics
+  // floor) may stamp it, via upsert-as-row-identity. The scanner walks the
+  // actual fluent chain (transfer-history-scan.ts), so another table's
+  // .update() nearby can NOT false-positive, and gaps/whitespace/generics
+  // can NOT dodge it; its bypass fixtures are tested below.
+  const ALLOWLIST = new Set(["src/lib/performance-recompute.ts"]);
+  // The pin's own machinery quotes the pattern and is excluded, as are
+  // colocated tests (they may quote it too).
+  const SELF = new Set(["src/lib/transfer-history-scan.ts"]);
 
   const files: string[] = [];
-  for (const entry of readdirSync(join(process.cwd(), "src"), {
-    recursive: true,
-    withFileTypes: true,
-  })) {
-    if (!entry.isFile()) continue;
-    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-    files.push(join(entry.parentPath, entry.name));
+  for (const root of ["src", "scripts"]) {
+    for (const entry of readdirSync(join(process.cwd(), root), {
+      recursive: true,
+      withFileTypes: true,
+    })) {
+      if (!entry.isFile()) continue;
+      if (!/\.(ts|tsx|js|mjs)$/.test(entry.name)) continue;
+      files.push(join(entry.parentPath, entry.name));
+    }
   }
   assert.ok(files.length > 100, "repo walk must actually find the tree");
 
   const offenders: string[] = [];
+  let scanned = 0;
   for (const abs of files) {
-    if (abs.endsWith(".test.ts")) continue; // tests may quote the pattern
+    const rel = abs.slice(abs.indexOf(`${process.cwd()}/`) === 0 ? process.cwd().length + 1 : 0);
+    if (rel.endsWith(".test.ts") || SELF.has(rel) || ALLOWLIST.has(rel)) continue;
     const src = readFileSync(abs, "utf8");
-    if (!src.includes('from("performance_records")')) continue;
-    const isRecompute = RECOMPUTE_PATH.some((p) => abs.endsWith(p));
-    // Every .update( chained after a performance_records from(): the
-    // literal payload must not carry location_id, and a non-literal
-    // payload (which this pin cannot inspect) is itself an offence
-    // outside the recompute path — widen the allowlist deliberately if
-    // one ever becomes legitimate.
-    const chains = src.matchAll(
-      /\.from\(\s*"performance_records"\s*\)[\s\S]{0,400}?\.update\(\s*(\{[\s\S]*?\}|\S{0,60})\s*\)/g
-    );
-    for (const m of chains) {
-      if (isRecompute) continue;
-      const payload = m[1];
-      if (!payload.startsWith("{")) {
-        offenders.push(`${abs}: non-literal update payload after from("performance_records") — uninspectable, not allowed`);
-      } else if (/location_id/.test(payload)) {
-        offenders.push(`${abs}: update payload carries location_id — a transfer must never re-attribute history`);
-      }
+    if (!src.includes("performance_records")) continue;
+    scanned++;
+    for (const offence of findTransferRewriteOffences(src)) {
+      offenders.push(`${rel}: ${offence}`);
     }
   }
+  assert.ok(scanned >= 10, `sweep must reach the known performance_records readers (scanned ${scanned})`);
   assert.deepEqual(offenders, [], offenders.join("\n"));
+});
+
+// ---- bypass fixtures for the scanner (Codex should-fix 2026-09-05) ----
+
+test("scanner catches the original deleted write", () => {
+  assert.equal(
+    findTransferRewriteOffences(
+      `await supabase.from("performance_records").update({ location_id: new_location_id }).eq("employee_id", id);`
+    ).length,
+    1
+  );
+});
+
+test("scanner catches whitespace/quote variants and generics", () => {
+  for (const form of [
+    `db.from( 'performance_records' ) . update( { location_id: x } )`,
+    `db.from(\`performance_records\`)\n  .update<{ location_id: string }>({ location_id: x })`,
+    `db.from("performance_records")\n  // sneak\n  .update({\n    location_id: x,\n  })`,
+  ]) {
+    assert.ok(findTransferRewriteOffences(form).length >= 1, form);
+  }
+});
+
+test("scanner catches uninspectable payloads: variables, calls, spreads", () => {
+  for (const form of [
+    `db.from("performance_records").update(payload)`,
+    `db.from("performance_records").update(makePayload(id, loc))`,
+    `db.from("performance_records").update({ ...payload })`,
+    `db.from("performance_records").eq("employee_id", id).update(buildIt())`,
+  ]) {
+    assert.equal(findTransferRewriteOffences(form).length, 1, form);
+  }
+});
+
+test("scanner survives long chains and string parens without losing the chain", () => {
+  const long = `db.from("performance_records")
+    .select("${"x,".repeat(300)}id")
+    .eq("note", "has (parens) and 'quotes' inside")
+    .update({ location_id: loc })`;
+  assert.equal(findTransferRewriteOffences(long).length, 1);
+});
+
+test("scanner does NOT cross into another table's chain (no false positive)", () => {
+  for (const form of [
+    `db.from("performance_records").select("id"); db.from("employees").update({ location_id: id })`,
+    `const a = db.from("performance_records").select("id");\nconst b = db.from("locations").update({ location_id: z });`,
+  ]) {
+    assert.equal(findTransferRewriteOffences(form).length, 0, form);
+  }
+});
+
+test("scanner allows today's legitimate writers' shapes (no false positive)", () => {
+  for (const form of [
+    `db.from("performance_records").update({ manager_feedback: text }).eq("id", performanceRecordId)`,
+    `db.from("performance_records").update({ tattle_summary: "No tattles (none).", tattle_summary_generated_at: new Date().toISOString() }).eq("id", id)`,
+    `db.from("performance_records").upsert({ employee_id: e, location_id: l, report_period_id: p }, { onConflict: "employee_id,report_period_id,location_id" })`,
+    `db.from("performance_records").select("location_id, customer_service_score")`,
+  ]) {
+    assert.equal(findTransferRewriteOffences(form).length, 0, form);
+  }
 });
