@@ -117,6 +117,81 @@ test("W1 REPO-WIDE (G2 2a): no file outside the recompute path updates performan
   assert.deepEqual(offenders, [], offenders.join("\n"));
 });
 
+test("SUPPLEMENTARY HEURISTIC (G2 3.1): any file mixing performance_records with .update( is consciously allowlisted", () => {
+  // ⚠️ This is a SUPPLEMENTARY HEURISTIC, not unbypassable protection
+  // (Tucker 2026-09-05): a plain substring test can miss alternate syntax
+  // and flags unrelated reads and updates that merely share a file. Its
+  // job is to reduce reliance on the tokenizer above being perfect — a new
+  // file that both touches performance_records and updates ANYTHING trips
+  // this and forces a human look — not to prove the invariant.
+  //
+  // The allowlist is NEVER blanket approval; every entry carries its own
+  // written rationale, and adding one means reviewing what the file
+  // actually updates.
+  // (performance-recompute.ts, the one legitimate writer, upserts rather
+  // than updates — it never matches this predicate and so needs no entry;
+  // the tokenizer sweep above allowlists it explicitly.)
+  const ALLOW = new Map<string, string>([
+    [
+      "src/lib/manager-feedback.ts",
+      "updates performance_records.manager_feedback only, addressed by row id — per-field writer, no location_id (tokenizer-verified)",
+    ],
+    [
+      "src/app/dashboard/employees/[id]/tattle-summary-actions.ts",
+      "updates performance_records.tattle_summary(+timestamp) only, by row id — per-field writer, no location_id (tokenizer-verified)",
+    ],
+    [
+      "src/app/dashboard/admin/scoring/actions.ts",
+      "reads performance_records; its updates target customer_service_score_config / total_impact_score_config, never performance_records",
+    ],
+    [
+      "src/app/dashboard/employees/[id]/generate-custom-range-actions.ts",
+      "reads performance_records for the PDF; its update targets locations (report branding), never performance_records",
+    ],
+    [
+      "src/app/dashboard/employees/[id]/generate-report-actions.ts",
+      "reads performance_records for the PDF; updates generated_reports/locations, never performance_records",
+    ],
+    [
+      "src/app/dashboard/employees/[id]/generate-task-detail-actions.ts",
+      "reads performance_records for the PDF; updates generated_reports, never performance_records",
+    ],
+  ]);
+  const SELF = new Set(["src/lib/transfer-history-scan.ts"]); // the pin's own machinery quotes both tokens
+
+  const offenders: string[] = [];
+  for (const root of ["src", "scripts"]) {
+    for (const entry of readdirSync(join(process.cwd(), root), {
+      recursive: true,
+      withFileTypes: true,
+    })) {
+      if (!entry.isFile() || !/\.(ts|tsx|js|mjs)$/.test(entry.name)) continue;
+      const abs = join(entry.parentPath, entry.name);
+      const rel = abs.startsWith(`${process.cwd()}/`)
+        ? abs.slice(process.cwd().length + 1)
+        : abs;
+      if (rel.endsWith(".test.ts") || SELF.has(rel) || ALLOW.has(rel)) continue;
+      const src = readFileSync(abs, "utf8");
+      if (src.includes('"performance_records"') && src.includes(".update(")) {
+        offenders.push(
+          `${rel}: touches performance_records AND calls .update( — review it, then allowlist WITH a written rationale`
+        );
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], offenders.join("\n"));
+  // The allowlist itself must not rot: every entry still exists and still
+  // contains both tokens (otherwise the rationale is stale — remove it).
+  for (const [rel, rationale] of ALLOW) {
+    assert.ok(rationale.length > 30, `${rel}: rationale must be written, not a stub`);
+    const src = readFileSync(join(process.cwd(), rel), "utf8");
+    assert.ok(
+      src.includes('"performance_records"') && src.includes(".update("),
+      `${rel}: no longer matches the heuristic — remove its allowlist entry`
+    );
+  }
+});
+
 // ---- bypass fixtures for the scanner (Codex should-fix 2026-09-05) ----
 
 test("scanner catches the original deleted write", () => {
