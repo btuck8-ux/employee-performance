@@ -149,6 +149,17 @@ test("the justified exception requires EXACT identity: name + version 2026082600
   assert.match(wrong.findings[0].detail, /NOT the recorded exception/);
 });
 
+test("the exception does NOT excuse a missing file — absent 065 is applied_no_file (Codex 2026-09-05)", () => {
+  const report = checkMigrationParity(
+    [], // mapped file absent
+    [{ version: "20260826002003", name: "q2_gap_ledger_fifth_verdict" }]
+  );
+  assert.equal(report.counts.justifiedException, 0);
+  assert.equal(report.counts.appliedNoFile, 1);
+  assert.match(report.findings[0].detail, /not a missing file/);
+  assert.equal(liveExitFor(report), LIVE_EXIT.FINDINGS);
+});
+
 test("exit states are distinct — a credential skip can never read as a clean pass", () => {
   const states = Object.values(LIVE_EXIT);
   assert.equal(new Set(states).size, states.length);

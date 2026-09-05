@@ -123,8 +123,19 @@ async function loadLedger(): Promise<{ rows: LedgerRow[]; source: string }> {
     );
     process.exit(LIVE_EXIT.CONNECTION_OR_SHAPE_ERROR);
   }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // A malformed body is a connection/shape problem (exit 3) — it must
+    // never surface as exit 1, which is reserved for parity findings.
+    console.error(
+      `[migration-parity-live] ${url} returned an unparseable body: ${e instanceof Error ? e.message : e}`
+    );
+    process.exit(LIVE_EXIT.CONNECTION_OR_SHAPE_ERROR);
+  }
   return {
-    rows: parseLedger(await res.json(), "management API"),
+    rows: parseLedger(body, "management API"),
     source: `management API (read-only GET, project ${ref})`,
   };
 }

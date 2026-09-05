@@ -152,17 +152,30 @@ export function checkMigrationParity(
     const exception = exceptionByName.get(row.name);
     if (exception) {
       if (exception.version === row.version) {
+        // The exception documents BODY divergence on an existing pair — it
+        // does not excuse a missing file. If the mapped file is absent,
+        // that is applied_no_file like any other row (Codex blocker-pass,
+        // 2026-09-05).
+        const stem = mappingByLedgerName.get(row.name);
+        if (stem === undefined || !stems.has(stem)) {
+          findings.push({
+            class: "applied_no_file",
+            ledgerName: row.name,
+            ledgerVersion: row.version,
+            detail: `exception row '${row.name}' has no mapped file on disk (expected ${stem ?? "<no mapping>"}.sql) — the exception covers body divergence, not a missing file`,
+          });
+          continue;
+        }
         findings.push({
           class: "justified_exception",
           ledgerName: row.name,
           ledgerVersion: row.version,
-          fileStem: mappingByLedgerName.get(row.name),
+          fileStem: stem,
           detail: exception.rationale,
         });
-        // Still claim its mapped file so the file does not double-land in
+        // Claim its mapped file so the file does not double-land in
         // file_not_applied — the pair is fully accounted for by this class.
-        const stem = mappingByLedgerName.get(row.name);
-        if (stem !== undefined && stems.has(stem)) claim(stem, row);
+        claim(stem, row);
         continue;
       }
       findings.push({
