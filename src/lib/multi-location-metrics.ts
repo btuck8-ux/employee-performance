@@ -36,10 +36,22 @@ export interface MeanParts {
   n: number;
 }
 
-/** One location's combinable inputs for one quarter. */
+/** One location's combinable inputs for one quarter.
+ *
+ * W6 (MASTER sprint): identity is the COMPOSITE (employeeId, locationId) —
+ * post-093 one employee row can hold several rows per quarter, one per
+ * location, and a transferred single row has history at two stores under
+ * one employeeId. employeeId alone stopped being a slice identity; it
+ * remains here for navigation (employee URLs are built from it, never from
+ * a composite) and source attribution. */
 export interface LocationQuarterMetrics {
   employeeId: string;
+  locationId: string;
   quarterId: string;
+  /** True when this store's quarter ends before the store's demarcation
+   * floor — the labor metrics are not-computable (never 0) and the card
+   * must say why. */
+  belowFloor: boolean;
   /** attended / scheduled (counts already capped per-location). */
   attendance: RatioParts;
   /** on-time / attended (strict). */

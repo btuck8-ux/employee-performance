@@ -5,22 +5,41 @@ import {
   combineQuarterMetrics,
   type LocationQuarterMetrics,
 } from "@/lib/multi-location-metrics";
+import {
+  sliceKey,
+  initialChecked,
+  toggleChecked,
+  selectedSlices,
+  quarterSubset,
+  belowFloorSlices,
+} from "@/lib/multi-location-selection";
 
 /**
- * Multi-location performance card (2026-08-23 sprint §4-B). Rendered ONLY on
- * profiles of people holding roster rows at 2+ sites — single-location
- * profiles never see it (§4-B1). Client component: the location checkboxes
- * recombine the server-assembled per-location parts locally via the same
- * pure combineQuarterMetrics the tests pin — no averaging path exists here.
- * Props are plain serializable values; all queries stayed server-side.
+ * Multi-location performance card (2026-08-23 sprint §4-B; W6 composite
+ * identity, MASTER sprint 2026-09-05). Rendered ONLY on profiles of people
+ * holding ≥ 2 store slices — single-location profiles never see it (§4-B1).
+ *
+ * IDENTITY (defect 5): every stateful surface here — the checked map, the
+ * React keys, the selected-data filter — keys on the COMPOSITE
+ * (employeeId, locationId) via sliceKey. One employee row transferred
+ * between stores yields two independently selectable slices.
+ *
+ * ⚠️ NAVIGATION IS THE EXCEPTION: employee links are built from the bare
+ * employeeId, NEVER from a slice key — /dashboard/employees/{id} must keep
+ * receiving a valid employee id, and two slices may legitimately link to
+ * the same profile (that is correct, not a collision).
+ *
+ * This card shows the METRIC surface below (the nine approved metrics +
+ * counts). It is NOT a scores card: combined CS Score and Total Impact
+ * Score are deferred and do not appear here.
  */
 
 export interface MultiLocationCardProps {
   currentEmployeeId: string;
   siblings: Array<{
     employeeId: string;
-    employeeCode: string;
     locationId: string;
+    employeeCode: string;
     locationName: string;
   }>;
   quarters: Array<{ id: string; label: string }>;
@@ -42,36 +61,39 @@ export function MultiLocationCard({
   perLocationQuarter,
 }: MultiLocationCardProps) {
   const [checked, setChecked] = React.useState<Record<string, boolean>>(() =>
-    Object.fromEntries(siblings.map((s) => [s.employeeId, true]))
+    initialChecked(siblings)
   );
-  const selectedIds = siblings
-    .filter((s) => checked[s.employeeId])
-    .map((s) => s.employeeId);
+  const selected = selectedSlices(siblings, checked);
+  const locNameBySlice = new Map(
+    siblings.map((s) => [sliceKey(s), s.locationName])
+  );
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">
-            Multi-location performance
+            Multi-location metrics
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            This person works at {siblings.length} sites. Rates below are
-            recomputed from combined counts — never averaged across sites.
+            This person has store records at {siblings.length} sites. Rates
+            below are recomputed from combined counts — never averaged across
+            sites. Individual metrics only: combined CS Score and Total
+            Impact Score are not shown here.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
           {siblings.map((s) =>
             s.employeeId === currentEmployeeId ? (
               <span
-                key={s.employeeId}
+                key={sliceKey(s)}
                 className="rounded-full bg-slate-900 text-white px-3 py-1"
               >
                 {s.locationName} ({s.employeeCode})
               </span>
             ) : (
               <Link
-                key={s.employeeId}
+                key={sliceKey(s)}
                 href={`/dashboard/employees/${s.employeeId}`}
                 className="rounded-full border border-slate-300 px-3 py-1 text-slate-700 hover:bg-slate-50"
               >
@@ -85,28 +107,33 @@ export function MultiLocationCard({
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <span className="text-slate-500">Combine:</span>
         {siblings.map((s) => (
-          <label key={s.employeeId} className="flex items-center gap-1.5">
+          <label key={sliceKey(s)} className="flex items-center gap-1.5">
             <input
               type="checkbox"
-              checked={checked[s.employeeId] ?? false}
+              checked={checked[sliceKey(s)] ?? false}
               onChange={(e) =>
-                setChecked((prev) => ({
-                  ...prev,
-                  [s.employeeId]: e.target.checked,
-                }))
+                setChecked((prev) =>
+                  toggleChecked(prev, sliceKey(s), e.target.checked)
+                )
               }
             />
-            {s.locationName}
+            {s.locationName} ({s.employeeCode})
           </label>
         ))}
       </div>
 
-      {selectedIds.length === 0 ? (
+      {selected.length === 0 ? (
         <p className="text-sm text-slate-500">
           Pick at least one site to combine.
         </p>
       ) : (
         <div className="overflow-x-auto">
+          <p className="text-xs text-slate-500 mb-2">
+            Combined from:{" "}
+            {selected
+              .map((s) => `${s.locationName} (${s.employeeCode})`)
+              .join(" + ")}
+          </p>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
@@ -127,14 +154,32 @@ export function MultiLocationCard({
             </thead>
             <tbody>
               {quarters.map((q) => {
-                const subset = perLocationQuarter.filter(
-                  (p) =>
-                    p.quarterId === q.id && selectedIds.includes(p.employeeId)
-                );
+                const subset = quarterSubset(perLocationQuarter, q.id, checked);
                 const c = combineQuarterMetrics(subset);
+                const floored = belowFloorSlices(
+                  perLocationQuarter,
+                  q.id,
+                  checked
+                );
                 return (
                   <tr key={q.id} className="border-b border-slate-100">
-                    <td className="py-2 pr-3 font-medium">{q.label}</td>
+                    <td className="py-2 pr-3 font-medium">
+                      {q.label}
+                      {floored.length > 0 && (
+                        <span
+                          className="text-xs text-amber-600 block"
+                          title="A quarter below a store's data floor is not measurable at that store — its cells contribute nothing; they are never counted as zero."
+                        >
+                          {floored
+                            .map(
+                              (f) =>
+                                locNameBySlice.get(sliceKey(f)) ?? "a store"
+                            )
+                            .join(", ")}{" "}
+                          below data floor
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 tabular-nums">
                       {fmtPct(c.attendance_pct)}
                       {c.scheduled_count > 0 && (
@@ -159,6 +204,11 @@ export function MultiLocationCard({
                         </span>
                       )}
                     </td>
+                    {/* Row 10 (packet): the task-list cell is an
+                        UNCONDITIONAL dash — at one selection and at many.
+                        The per-list count behind the mean is not stored, so
+                        any number here would be a different metric wearing
+                        the same label. Do not "fix" this. */}
                     <td className="py-2 pr-3 text-slate-400">—</td>
                     <td className="py-2 pr-3 tabular-nums">
                       {fmtRating(c.customer_service_rating)}

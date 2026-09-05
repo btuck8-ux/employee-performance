@@ -1,26 +1,41 @@
 /**
  * Server-side assembly for the employee-profile multi-location combined view
- * (2026-08-23 sprint §4-B). SERVER-ONLY — imports the Supabase client type
- * and runs queries; the pure combining math lives in multi-location-metrics.ts
- * so the client card can recombine subsets without a round-trip.
+ * (2026-08-23 sprint §4-B; REWORKED for the W6 composite identity, MASTER
+ * sprint 2026-09-05). SERVER-ONLY — imports the Supabase client type and
+ * runs queries; the pure combining math lives in multi-location-metrics.ts
+ * and the pure selection model in multi-location-selection.ts.
  *
- * Identity: a person's location set is the set of `employees` rows sharing
- * their NON-NULL seven_shifts_user_id (§4-B2). Null is never a join key —
- * the two null-id NOLA rows are single-location by definition. Names are
- * never matched (Ryan Griffin ≠ Connor Griffin).
+ * IDENTITY (the five CP3 defects, fixed here and in the card):
+ * The unit is a STORE SLICE — the composite (employeeId, locationId) —
+ * NOT an employee row. Slices come from two places:
+ *   - sibling employee rows sharing a NON-NULL seven_shifts_user_id
+ *     (§4-B2; null is never a join key), each contributing its CURRENT
+ *     location, and
+ *   - every DISTINCT performance_records.location_id those rows hold —
+ *     post-093 location_id is part of row identity, so one transferred
+ *     employee row legitimately holds history at several stores under one
+ *     employeeId. That is case (a), precisely what the old fewer-than-two-
+ *     employee-rows gate returned null for.
+ * The surface renders when the person has ≥ 2 slices; a genuinely
+ * single-location person still gets no card (§4-B1 preserved).
  *
- * The two stored-rate gaps (§4-B3): performance_records does not carry the
- * counts behind attendance_pct / on_time(_grace)_pct, so those are
- * RECOMPUTED per location per quarter via computeMetricsFromEntries — one
- * call per (employee-row, quarter), never pooled across locations (its
- * scheduledByDate map keys on the date alone, so pooling would silently
- * collapse same-day shifts at two stores, §4-B4). Each location keeps its
- * own scheduledScoredThrough cap = min(today, latest worked at THAT
- * location), matching the stored quarterly path exactly.
+ * THE FLOOR (defect 4): each slice's labor metrics are computed with that
+ * store's own metrics_start_date via computeMetricsFromEntries's
+ * metricsStartFloor — this surface must refuse below-line values exactly
+ * like the rest of the application. A quarter wholly below a store's floor
+ * is marked belowFloor so the card can attribute the hole (§11g), never
+ * render it as 0.
  *
- * Tattle + review means are recomputed from the attribution tables over
- * each sibling row so the (sum, n) parts carry the metric's true non-null
- * denominators (§4-B6 — see multi-location-metrics.ts header).
+ * Attribution tables carry location_id, so tattle/review means bucket per
+ * slice (a transferred row's two stores split correctly); survey counts and
+ * the task-list mean come from the (employee, quarter, location)-keyed
+ * performance_records row.
+ *
+ * RBAC: this module uses ONLY the caller's page-scoped client — the
+ * existing role-scoped read path. No admin/service client is created here.
+ *
+ * ⚠️ Scheduled follow-up (PR note): sibling enumeration is 7shifts-id
+ * based; the 09-07 identity migration changes that shape.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -33,17 +48,12 @@ import {
   meanPartsFromValues,
   type LocationQuarterMetrics,
 } from "./multi-location-metrics";
+import { quarterBelowFloor, type StoreSlice } from "./multi-location-selection";
 
-export interface SiblingLocation {
-  employeeId: string;
-  employeeCode: string;
-  locationId: string;
-  locationName: string;
-  /** Mig 056 non-puncher marker — each site's recompute honours its own
-   * row's flag so an excluded sibling contributes no denominators. */
+export interface SiblingSlice extends StoreSlice {
+  /** Mig 056 non-puncher marker — from the slice's EMPLOYEE row; each
+   * slice's recompute honours its own row's flag. */
   punchesTimeClock: boolean;
-  /** Effective date of the exclusion (§2a) — gated per quarter against the
-   * quarter's period_end so pre-since history keeps its real values. */
   punchesTimeClockSince: string | null;
 }
 
@@ -55,7 +65,7 @@ export interface MultiLocationQuarter {
 }
 
 export interface MultiLocationProfileData {
-  siblings: SiblingLocation[];
+  siblings: SiblingSlice[];
   quarters: MultiLocationQuarter[];
   perLocationQuarter: LocationQuarterMetrics[];
 }
@@ -70,9 +80,7 @@ function toNumOrNull(v: unknown): number | null {
   return typeof n === "number" && !Number.isNaN(n) ? n : null;
 }
 
-/** Page past PostgREST's 1000-row cap (Codex finding 3, 2026-08-23): a
- * long-tenured two-site person's window can exceed it, and a silently
- * truncated read would flow into the combiner as a wrong rate. */
+/** Page past PostgREST's 1000-row cap (Codex finding 3, 2026-08-23). */
 async function pagedRows<T>(
   build: (from: number, to: number) => PromiseLike<{
     data: unknown;
@@ -93,7 +101,7 @@ async function pagedRows<T>(
 }
 
 /**
- * Null when the person has fewer than two roster rows (single-location
+ * Null when the person has fewer than two store slices (single-location
  * profiles must not change, §4-B1) or no usable 7shifts id (§4-B2).
  */
 export async function fetchMultiLocationProfile(
@@ -106,36 +114,37 @@ export async function fetchMultiLocationProfile(
 
   const { data: siblingRows, error: siblingError } = await supabase
     .from("employees")
-    .select("id, employee_code, location_id, punches_time_clock, punches_time_clock_since, locations(id, name)")
+    .select(
+      "id, employee_code, location_id, punches_time_clock, punches_time_clock_since"
+    )
     .eq("seven_shifts_user_id", sevenShiftsUserId);
   if (siblingError)
     throw new Error(`multi-location siblings: ${siblingError.message}`);
-  const siblings: SiblingLocation[] = ((siblingRows ?? []) as NumLike[]).map(
-    (r) => ({
-      employeeId: String(r.id),
-      employeeCode: String(r.employee_code),
-      locationId: String(r.location_id),
-      locationName:
-        ((r.locations as { name?: string } | null)?.name as string) ?? "—",
-      punchesTimeClock: r.punches_time_clock !== false,
-      punchesTimeClockSince: (r.punches_time_clock_since as string | null) ?? null,
-    })
-  );
-  if (siblings.length < 2) return null;
+  type EmpRow = {
+    id: string;
+    employee_code: string;
+    location_id: string;
+    punches_time_clock: boolean | null;
+    punches_time_clock_since: string | null;
+  };
+  const empRows = ((siblingRows ?? []) as unknown as EmpRow[]);
+  if (empRows.length === 0) return null;
+  const empById = new Map(empRows.map((r) => [String(r.id), r]));
+  const rowIds = empRows.map((r) => String(r.id));
 
-  const siblingIds = siblings.map((s) => s.employeeId);
-
-  // Quarters = union across siblings' performance_records.
+  // performance_records with location_id (defect 2) — the historical
+  // location axis is what turns one transferred row into several slices.
   const { data: recordRows, error: recordError } = await supabase
     .from("performance_records")
     .select(
-      "employee_id, surveys_assigned, surveys_completed, avg_task_list_completion_pct, report_periods(id, label, period_start, period_end)"
+      "employee_id, location_id, surveys_assigned, surveys_completed, avg_task_list_completion_pct, report_periods(id, label, period_start, period_end)"
     )
-    .in("employee_id", siblingIds);
+    .in("employee_id", rowIds);
   if (recordError)
     throw new Error(`multi-location records: ${recordError.message}`);
   type RecordRow = {
     employee_id: string;
+    location_id: string | null;
     surveys_assigned: number | null;
     surveys_completed: number | null;
     avg_task_list_completion_pct: number | string | null;
@@ -149,6 +158,45 @@ export async function fetchMultiLocationProfile(
   const records = ((recordRows ?? []) as unknown as RecordRow[]).filter(
     (r) => r.report_periods !== null
   );
+
+  // Slice set = current locations ∪ historical record locations, per row.
+  const sliceKeys = new Set<string>();
+  const sliceList: Array<{ employeeId: string; locationId: string }> = [];
+  const addSlice = (employeeIdV: string, locationIdV: string | null) => {
+    if (!locationIdV) return;
+    const k = `${employeeIdV}::${locationIdV}`;
+    if (sliceKeys.has(k)) return;
+    sliceKeys.add(k);
+    sliceList.push({ employeeId: employeeIdV, locationId: locationIdV });
+  };
+  for (const r of empRows) addSlice(String(r.id), String(r.location_id));
+  for (const r of records) addSlice(String(r.employee_id), r.location_id);
+  if (sliceList.length < 2) return null;
+
+  // Location names for every slice location (the old embedded join only
+  // covered the row's current store).
+  const locationIds = [...new Set(sliceList.map((s) => s.locationId))];
+  const { data: locRows, error: locError } = await supabase
+    .from("locations")
+    .select("id, name")
+    .in("id", locationIds);
+  if (locError) throw new Error(`multi-location locations: ${locError.message}`);
+  const locNameById = new Map(
+    ((locRows ?? []) as NumLike[]).map((l) => [String(l.id), String(l.name)])
+  );
+
+  const siblings: SiblingSlice[] = sliceList.map((s) => {
+    const emp = empById.get(s.employeeId)!;
+    return {
+      employeeId: s.employeeId,
+      locationId: s.locationId,
+      employeeCode: String(emp.employee_code),
+      locationName: locNameById.get(s.locationId) ?? "—",
+      punchesTimeClock: emp.punches_time_clock !== false,
+      punchesTimeClockSince: emp.punches_time_clock_since ?? null,
+    };
+  });
+
   const quarters = [
     ...new Map(
       records.map((r) => [r.report_periods!.id, r.report_periods!])
@@ -165,11 +213,10 @@ export async function fetchMultiLocationProfile(
     quarters[0].period_end
   );
 
-  // THE FLIP (2026-08-25): each sibling's entries and cap ride
-  // flip-entries.ts — Toast punches + the pruned direct-feed schedule at
-  // Toast stores, time_entries at NOLA — matching computeMetricsForRange
-  // exactly. One flip-meta fetch per sibling location (they are different
-  // employee ids at different stores — the §4-B4 join detail).
+  // THE FLIP (2026-08-25): each slice's entries and cap ride flip-entries —
+  // fetched per (location, employee row), so a transferred row's history is
+  // read at BOTH its stores. One flip-meta fetch per location; the meta
+  // also carries the store's metrics_start floor (defect 4).
   const {
     fetchLocationFlipMeta,
     fetchEffectiveEntries,
@@ -177,19 +224,27 @@ export async function fetchMultiLocationProfile(
     fetchRemovedShiftEvidence,
   } = await import("./flip-entries");
   const todayIso = new Date().toISOString().slice(0, 10);
+  const metaByLocation = new Map<
+    string,
+    Awaited<ReturnType<typeof fetchLocationFlipMeta>>
+  >();
   const capByLocation = new Map<string, string>();
-  const entriesBySibling = new Map<string, TimeEntryRow[]>();
-  const removedBySibling = new Map<
+  for (const locId of locationIds) {
+    const meta = await fetchLocationFlipMeta(supabase, locId);
+    metaByLocation.set(locId, meta);
+    const latest = await latestEffectiveWorkedDate(supabase, locId, meta);
+    capByLocation.set(
+      locId,
+      latest !== null && latest < todayIso ? latest : todayIso
+    );
+  }
+  const entriesBySlice = new Map<string, TimeEntryRow[]>();
+  const removedBySlice = new Map<
     string,
     import("./performance-recompute").RemovedShiftEvidence
   >();
   for (const s of siblings) {
-    const meta = await fetchLocationFlipMeta(supabase, s.locationId);
-    const latest = await latestEffectiveWorkedDate(supabase, s.locationId, meta);
-    capByLocation.set(
-      s.locationId,
-      latest !== null && latest < todayIso ? latest : todayIso
-    );
+    const meta = metaByLocation.get(s.locationId)!;
     const byEmployee = await fetchEffectiveEntries(
       supabase,
       s.locationId,
@@ -197,7 +252,8 @@ export async function fetchMultiLocationProfile(
       { start: windowStart, end: windowEnd },
       meta
     );
-    entriesBySibling.set(s.employeeId, byEmployee.get(s.employeeId) ?? []);
+    const key = `${s.employeeId}::${s.locationId}`;
+    entriesBySlice.set(key, byEmployee.get(s.employeeId) ?? []);
     // Denominator spec rev 2 §3–§4: same evidence as the recompute entry
     // points — the combined profile and the store card must not disagree.
     const evidence = (
@@ -206,14 +262,15 @@ export async function fetchMultiLocationProfile(
         end: windowEnd,
       })
     ).get(s.employeeId);
-    if (evidence) removedBySibling.set(s.employeeId, evidence);
+    if (evidence) removedBySlice.set(key, evidence);
   }
 
-  // Tattle + review attributions per sibling across the whole window,
-  // bucketed per quarter below.
+  // Tattle + review attributions, bucketed per slice: both tables carry the
+  // survey's location_id, so a transferred row's two stores split correctly.
   type TattleRow = {
     employee_id: string;
     tattle_surveys: {
+      location_id: string;
       tattle_rating: number | string | null;
       food_quality_score: number | string | null;
       accuracy_score: number | string | null;
@@ -227,9 +284,9 @@ export async function fetchMultiLocationProfile(
         supabase
           .from("tattle_attributions")
           .select(
-            "employee_id, tattle_surveys!inner(tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, date_experienced)"
+            "employee_id, tattle_surveys!inner(location_id, tattle_rating, food_quality_score, accuracy_score, speed_of_service_score, date_experienced)"
           )
-          .in("employee_id", siblingIds)
+          .in("employee_id", rowIds)
           .gte("tattle_surveys.date_experienced", windowStart)
           .lte("tattle_surveys.date_experienced", windowEnd)
           .order("employee_id", { ascending: true })
@@ -240,15 +297,21 @@ export async function fetchMultiLocationProfile(
 
   type ReviewRow = {
     employee_id: string;
-    customer_reviews: { rating: number | string | null; review_date: string };
+    customer_reviews: {
+      location_id: string;
+      rating: number | string | null;
+      review_date: string;
+    };
   };
   const reviews = (
     await pagedRows<ReviewRow>(
       (from, to) =>
         supabase
           .from("review_attributions")
-          .select("employee_id, customer_reviews!inner(rating, review_date)")
-          .in("employee_id", siblingIds)
+          .select(
+            "employee_id, customer_reviews!inner(location_id, rating, review_date)"
+          )
+          .in("employee_id", rowIds)
           .gte("customer_reviews.review_date", windowStart)
           .lte("customer_reviews.review_date", windowEnd)
           .order("employee_id", { ascending: true })
@@ -257,14 +320,22 @@ export async function fetchMultiLocationProfile(
     )
   ).filter((r) => r.customer_reviews);
 
-  const recordBySiblingQuarter = new Map<string, RecordRow>();
+  // performance_records keyed on the FULL composite (defect 3): with the
+  // 093 location axis, one (employee, quarter) may hold several rows — one
+  // per location — and they must never collapse or drop.
+  const recordBySliceQuarter = new Map<string, RecordRow>();
   for (const r of records) {
-    recordBySiblingQuarter.set(`${r.employee_id}|${r.report_periods!.id}`, r);
+    recordBySliceQuarter.set(
+      `${r.employee_id}::${r.location_id}::${r.report_periods!.id}`,
+      r
+    );
   }
 
   const perLocationQuarter: LocationQuarterMetrics[] = [];
   for (const s of siblings) {
-    const entries = entriesBySibling.get(s.employeeId) ?? [];
+    const key = `${s.employeeId}::${s.locationId}`;
+    const entries = entriesBySlice.get(key) ?? [];
+    const meta = metaByLocation.get(s.locationId)!;
     for (const q of quarters) {
       const inQuarter = (d: string) =>
         d >= q.period_start && d <= q.period_end;
@@ -276,22 +347,30 @@ export async function fetchMultiLocationProfile(
           s.punchesTimeClockSince,
           q.period_end
         ),
-        removedShifts: removedBySibling.get(s.employeeId),
+        removedShifts: removedBySlice.get(key),
+        // THE DEMARCATION FLOOR (defect 4): this store's own line. Without
+        // it this surface published below-line values the rest of the app
+        // refuses to compute.
+        metricsStartFloor: meta.metricsStart,
       });
       const qTattles = tattles.filter(
         (t) =>
           t.employee_id === s.employeeId &&
+          t.tattle_surveys.location_id === s.locationId &&
           inQuarter(t.tattle_surveys.date_experienced.slice(0, 10))
       );
       const qReviews = reviews.filter(
         (r) =>
           r.employee_id === s.employeeId &&
+          r.customer_reviews.location_id === s.locationId &&
           inQuarter(r.customer_reviews.review_date.slice(0, 10))
       );
-      const record = recordBySiblingQuarter.get(`${s.employeeId}|${q.id}`);
+      const record = recordBySliceQuarter.get(`${key}::${q.id}`);
       perLocationQuarter.push({
         employeeId: s.employeeId,
+        locationId: s.locationId,
         quarterId: q.id,
+        belowFloor: quarterBelowFloor(q.period_end, meta.metricsStart),
         attendance: { num: shift.attended_count, den: shift.scheduled_count },
         onTime: { num: shift.on_time_count, den: shift.attended_count },
         onTimeGrace: {
