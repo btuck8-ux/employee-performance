@@ -118,6 +118,20 @@ export interface CoverageEntry {
   /** The requested-range slice that CANNOT be answered — explicit, never
    * an empty punch set. Null only when the whole range is answerable. */
   not_answerable: { from: string; to: string } | null;
+  /**
+   * W7, ADDITIVE and OPTIONAL — absent until `partial` runs exist. The
+   * latest window_end among PARTIAL runs newer than the last full success.
+   * ⚠️ It NEVER moves coverage_through / answerable: "observed punches
+   * exist" is a weaker claim than "absence of a punch is authoritative",
+   * and only full success grants the latter. A consumer that ignores this
+   * field keeps exactly today's (conservative) behaviour — an existing CP
+   * consumer that prunes on answerable prunes the same rows as before.
+   * Wire examples (W7 spec):
+   *   partial-only history      → answerable: null, partial_observed_through: "2026-09-04"
+   *   success then partial      → answerable.to: <success day>, partial_observed_through: "2026-09-06"
+   *   eventual successful retry → answerable.to advances, field disappears
+   */
+  partial_observed_through?: string;
 }
 
 /**

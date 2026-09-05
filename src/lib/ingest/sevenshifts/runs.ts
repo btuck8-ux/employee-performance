@@ -14,7 +14,59 @@ export type IngestSource =
   | "7shifts_shifts"
   | "toast_labor"
   | "auto_mint";
-export type IngestStatus = "running" | "success" | "empty" | "error";
+/**
+ * W7 (MASTER sprint): `partial` is a first-class terminal status — a run
+ * that durably wrote at least one row AND terminally failed at least one
+ * unit of its own work plan within the run. The rule distinguishing it:
+ *   error   = nothing trustworthy was completed (the run aborted);
+ *   empty   = the whole window was observed and held nothing to write;
+ *   success = the whole work plan completed (deliberate skips included);
+ *   partial = real rows landed AND part of the plan terminally failed.
+ * RULED, both-or-neither: partial ALERTS and does NOT advance
+ * lastSuccessfulWindowEnd. The forbidden combination is "doesn't alert but
+ * does advance the window."
+ *
+ * INERT until activation (W7 gate 5b): no producer emits `partial` unless
+ * INGEST_PARTIAL_STATUS_ENABLED === "1" — an explicit runtime flag, not a
+ * scheduling assumption. The DB constraint must be widened (mig 095, G4)
+ * BEFORE the flag is ever set; the type widening below causes no producer
+ * to emit anything.
+ */
+export type IngestStatus = "running" | "success" | "empty" | "error" | "partial";
+
+/** The single activation switch for the changed feed behaviour. */
+export function partialStatusEnabled(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return env.INGEST_PARTIAL_STATUS_ENABLED === "1";
+}
+
+/**
+ * The one policy point producers route a proposed terminal status through.
+ * Flag off (today): returns the proposed status byte-identically. Flag on:
+ * a run that upserted rows AND carries terminal in-run failures
+ * (recompute_failure_count > 0 in its detail) becomes `partial`. `error`
+ * and `empty` are never rewritten; a success with zero failures never is.
+ */
+export function applyPartialPolicy<
+  T extends {
+    status: IngestStatus;
+    rows_upserted: number;
+    detail: Record<string, unknown> | null;
+  },
+>(outcome: T, env: NodeJS.ProcessEnv = process.env): T {
+  if (!partialStatusEnabled(env)) return outcome;
+  if (outcome.status !== "success") return outcome;
+  const failures = outcome.detail?.recompute_failures;
+  const count = Number(
+    (outcome.detail?.recompute_failure_count as number | undefined) ??
+      (Array.isArray(failures) ? failures.length : 0)
+  );
+  if (outcome.rows_upserted > 0 && count > 0) {
+    return { ...outcome, status: "partial" };
+  }
+  return outcome;
+}
 
 export interface FinishRunInput {
   status: IngestStatus;

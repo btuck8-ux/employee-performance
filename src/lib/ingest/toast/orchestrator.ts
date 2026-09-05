@@ -30,6 +30,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   startRun,
   finishRun,
+  applyPartialPolicy,
   lastSuccessfulWindowEnd,
   type RunOutcome,
 } from "../sevenshifts/runs";
@@ -139,7 +140,14 @@ export async function runToastSalesIngest(
     }
 
     const runId = await startRun(supabase, "toast_sales", loc.id, start, windowEnd);
-    const outcome = await ingestToastSales(supabase, loc, start, windowEnd);
+    // W7: route the terminal status through the partial policy — INERT
+    // (byte-identical) until INGEST_PARTIAL_STATUS_ENABLED=1, which is only
+    // set after mig 095 widens the DB constraint (G4) and CP compatibility
+    // evidence is in. The FCCSU pattern — every row upserted, team
+    // recompute dead — is exactly the run this stops calling "success".
+    const outcome = applyPartialPolicy(
+      await ingestToastSales(supabase, loc, start, windowEnd)
+    );
     await finishRun(supabase, runId, outcome);
     outcomes.push(outcome);
   }
