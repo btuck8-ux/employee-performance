@@ -111,9 +111,11 @@ export const JUSTIFIED_EXCEPTIONS: ReadonlyArray<{
  * file-no-ledger-row findings (058/060/061/062/063), and those are the
  * ones that cost an outage.
  *
- * A declaration is checked for staleness both ways: a declared stem that
- * appears in the ledger (the gate was passed — remove the entry) and a
- * declared stem with no file on disk are HARD findings, never silent.
+ * Staleness is loud in both directions: a declared stem that appears in
+ * the ledger (the gate was passed — remove the entry) is a hard
+ * ambiguous_collision finding in every report; a declared stem with no
+ * file on disk fails the OFFLINE suite (the pure core only sees the file
+ * list it is handed, so the disk direction is asserted there).
  */
 export const GATE_PENDING_MIGRATIONS: ReadonlyArray<{
   fileStem: string;

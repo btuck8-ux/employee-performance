@@ -163,7 +163,7 @@ test("the exception does NOT excuse a missing file — absent 065 is applied_no_
 
 // ---- gate-pending declarations (CP3 review §4) ----
 
-test("gate-pending is a DECLARED LIST with a written reason per entry, and every entry exists on disk unapplied", () => {
+test("gate-pending is a DECLARED LIST with a written reason per entry, and every entry exists on disk (application status is the ledger's to say)", () => {
   assert.ok(GATE_PENDING_MIGRATIONS.length >= 1);
   for (const g of GATE_PENDING_MIGRATIONS) {
     assert.ok(g.reason.length > 40, `${g.fileStem}: reason must be written, not a stub`);
