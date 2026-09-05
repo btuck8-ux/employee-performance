@@ -203,6 +203,29 @@ test("scanner: Codex round-2 false-positive guards", () => {
   }
 });
 
+test("scanner: Codex CP2 blockers — quoted keys and interpolation nesting", () => {
+  for (const form of [
+    // quoted property names are ordinary syntax and must be inspected
+    `db.from("performance_records").update({ "location_id": loc })`,
+    `db.from("performance_records").update({ 'location_id': loc })`,
+    // an interpolation containing a string with a brace must not swallow
+    // the rest of the statement
+    'db.from("performance_records").eq("note", `value ${JSON.stringify({ tag: "{" })}`).update({ location_id: loc })',
+    // nested template inside an interpolation
+    'db.from("performance_records").eq("note", `a ${`b ${x}`} c`).update({ location_id: loc })',
+  ]) {
+    assert.ok(findTransferRewriteOffences(form).length >= 1, `must catch: ${form}`);
+  }
+  // …while a quoted key that ISN'T location_id, and location_id inside a
+  // template VALUE, stay clean.
+  for (const form of [
+    `db.from("performance_records").update({ "manager_feedback": text })`,
+    'db.from("performance_records").update({ note: `about location_id ${x}` })',
+  ]) {
+    assert.equal(findTransferRewriteOffences(form).length, 0, `must allow: ${form}`);
+  }
+});
+
 test("scanner allows today's legitimate writers' shapes (no false positive)", () => {
   for (const form of [
     `db.from("performance_records").update({ manager_feedback: text }).eq("id", performanceRecordId)`,

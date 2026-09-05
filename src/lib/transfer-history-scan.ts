@@ -28,6 +28,16 @@ export type ChainCall = { name: string; arg: string };
 /** Chars after which a `/` starts a regex literal, not division. */
 const REGEX_PRECEDER = /[=([{,;:!&|?+\-*%^~<>]/;
 
+/**
+ * State-stack tokenizer (Codex CP2 blocker: template interpolations must
+ * respect nested strings/comments/templates). Contexts:
+ *   code(braceDepth)  — normal JS/TS; a `}` at depth 0 with a template
+ *                       below on the stack ends that interpolation
+ *   template          — inside a `…` literal; `${` pushes a code context
+ * Everything lexically inside ANY template (text and interpolation code)
+ * is blanked in `masked`; comments are blanked in both views wherever they
+ * occur.
+ */
 function buildViews(src: string): { noComments: string; masked: string } {
   const nc = src.split("");
   const mk = src.split("");
@@ -35,13 +45,43 @@ function buildViews(src: string): { noComments: string; masked: string } {
     for (let k = from; k < to; k++) if (arr[k] !== "\n") arr[k] = " ";
   };
 
+  type Ctx = { type: "code"; braceDepth: number } | { type: "template" };
+  const stack: Ctx[] = [{ type: "code", braceDepth: 0 }];
+  const inTemplate = () => stack.some((c) => c.type === "template");
+
   let i = 0;
-  let lastCode = ""; // last significant char outside strings/comments
+  let lastCode = ""; // last significant char in code context
 
   while (i < src.length) {
+    const ctx = stack[stack.length - 1];
     const ch = src[i];
     const next = src[i + 1];
 
+    if (ctx.type === "template") {
+      if (ch === "\\") {
+        blank(mk, i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        blank(mk, i, i + 1); // the closing backtick's content side is done; keep quote
+        mk[i] = "`";
+        stack.pop();
+        i++;
+        continue;
+      }
+      if (ch === "$" && next === "{") {
+        blank(mk, i, i + 2);
+        stack.push({ type: "code", braceDepth: 0 });
+        i += 2;
+        continue;
+      }
+      blank(mk, i, i + 1);
+      i++;
+      continue;
+    }
+
+    // --- code context ---
     if (ch === "/" && next === "/") {
       const start = i;
       while (i < src.length && src[i] !== "\n") i++;
@@ -66,43 +106,18 @@ function buildViews(src: string): { noComments: string; masked: string } {
         i++;
       }
       i = Math.min(i + 1, src.length);
-      blank(mk, start + 1, i - 1); // keep the quotes, blank the content
+      // keep the quotes, blank the content; inside a template's
+      // interpolation the whole span is blanked anyway
+      blank(mk, start + 1, i - 1);
+      if (inTemplate()) blank(mk, start, i);
       lastCode = ch;
       continue;
     }
     if (ch === "`") {
-      // template literal: blank EVERYTHING to the matching close in masked,
-      // including interpolation code (structurally inert is the goal);
-      // noComments keeps it verbatim.
-      const start = i;
+      blank(mk, i, i + 1);
+      mk[i] = "`";
+      stack.push({ type: "template" });
       i++;
-      let depth = 0; // ${ } nesting inside this template
-      while (i < src.length) {
-        if (src[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (src[i] === "$" && src[i + 1] === "{") {
-          depth++;
-          i += 2;
-          continue;
-        }
-        if (depth > 0) {
-          if (src[i] === "{") depth++;
-          else if (src[i] === "}") depth--;
-          else if (src[i] === "`") {
-            // nested template inside interpolation — treat as plain char;
-            // masking everything makes precise nesting irrelevant
-          }
-          i++;
-          continue;
-        }
-        if (src[i] === "`") break;
-        i++;
-      }
-      i = Math.min(i + 1, src.length);
-      blank(mk, start + 1, i - 1);
-      lastCode = "`";
       continue;
     }
     if (ch === "/" && (lastCode === "" || REGEX_PRECEDER.test(lastCode))) {
@@ -121,6 +136,7 @@ function buildViews(src: string): { noComments: string; masked: string } {
         i++;
         while (i < src.length && /[a-z]/i.test(src[i])) i++; // flags
         blank(mk, start + 1, i);
+        if (inTemplate()) blank(mk, start, i);
         lastCode = "/";
         continue;
       }
@@ -128,6 +144,28 @@ function buildViews(src: string): { noComments: string; masked: string } {
       lastCode = "/";
       continue;
     }
+    if (ch === "{") {
+      ctx.braceDepth++;
+      if (inTemplate()) blank(mk, i, i + 1);
+      lastCode = ch;
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      if (ctx.braceDepth === 0 && stack.length > 1) {
+        // end of a template interpolation — back into the template
+        blank(mk, i, i + 1);
+        stack.pop();
+        i++;
+        continue;
+      }
+      if (ctx.braceDepth > 0) ctx.braceDepth--;
+      if (inTemplate()) blank(mk, i, i + 1);
+      lastCode = ch;
+      i++;
+      continue;
+    }
+    if (inTemplate()) blank(mk, i, i + 1);
     if (!/\s/.test(ch)) lastCode = ch;
     i++;
   }
@@ -164,15 +202,15 @@ function skipBalancedMasked(masked: string, open: number, openCh: string, closeC
  */
 export function performanceRecordsChains(
   src: string
-): Array<Array<ChainCall & { maskedArg: string }>> {
+): Array<Array<ChainCall & { rawArg: string; maskedArg: string }>> {
   const { noComments, masked } = buildViews(src);
-  const chains: Array<Array<ChainCall & { maskedArg: string }>> = [];
+  const chains: Array<Array<ChainCall & { rawArg: string; maskedArg: string }>> = [];
   // Discovery on noComments (comments can't hide the call; commented-out
   // code was blanked). The string content survives in noComments, so the
   // table name is visible; whitespace where comments were is tolerated.
   const fromRe = /\.\s*from\s*\(\s*["'`]performance_records["'`]\s*\)/g;
   for (const m of noComments.matchAll(fromRe)) {
-    const calls: Array<ChainCall & { maskedArg: string }> = [];
+    const calls: Array<ChainCall & { rawArg: string; maskedArg: string }> = [];
     let i = skipBalancedMasked(masked, noComments.indexOf("(", m.index), "(", ")");
     for (;;) {
       i = skipWs(masked, i);
@@ -190,6 +228,7 @@ export function performanceRecordsChains(
       calls.push({
         name: id[0],
         arg: noComments.slice(argStart, end - 1).trim(),
+        rawArg: noComments.slice(argStart, end - 1),
         maskedArg: masked.slice(argStart, end - 1),
       });
       i = end;
@@ -227,13 +266,35 @@ export function findTransferRewriteOffences(src: string): string[] {
         offences.push(
           "update payload spreads another object on a performance_records chain — uninspectable, not allowed"
         );
-      } else if (/[{,]\s*\[/.test(masked)) {
+        continue;
+      }
+      if (/[{,]\s*\[/.test(masked)) {
         offences.push(
           "update payload uses a computed key on a performance_records chain — uninspectable, not allowed"
         );
-      } else if (/\blocation_id\b/.test(masked)) {
+        continue;
+      }
+      if (/\blocation_id\b/.test(masked)) {
         offences.push(
           "update payload carries location_id — a transfer must never re-attribute history"
+        );
+        continue;
+      }
+      // Quoted property names (Codex CP2 blocker): masking blanks string
+      // contents, so { "location_id": x } is invisible in masked text. A
+      // string in KEY position ([{,] quote…quote :) is a property name —
+      // read its actual text from the offset-aligned unmasked view. String
+      // VALUES stay ignored.
+      let quotedKeyHit = false;
+      for (const km of masked.matchAll(/[{,]\s*(["'`])[^"'`]*\1(?=\s*:)/g)) {
+        const start = km.index + km[0].indexOf(km[1]);
+        const end = km.index + km[0].length;
+        const keyText = call.rawArg.slice(start + 1, end - 1);
+        if (/\blocation_id\b/.test(keyText)) quotedKeyHit = true;
+      }
+      if (quotedKeyHit) {
+        offences.push(
+          "update payload carries a quoted location_id key — a transfer must never re-attribute history"
         );
       }
     }

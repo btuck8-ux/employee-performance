@@ -99,12 +99,24 @@ test("the failure message carries the partner obligation verbatim", () => {
 type SendCall = { subject: string; body: string; label: string };
 
 function fakeClient(result: { data?: Array<{ label: string }>; error?: { message: string } }): AdminClient {
+  // Asserts the QUERY, not just the result path (Codex nit): the check must
+  // read report_periods.label where frozen = true or it isn't the check.
   return {
-    from: () => ({
-      select: () => ({
-        eq: async () => result,
-      }),
-    }),
+    from: (table: string) => {
+      assert.equal(table, "report_periods");
+      return {
+        select: (cols: string) => {
+          assert.equal(cols, "label");
+          return {
+            eq: async (col: string, val: unknown) => {
+              assert.equal(col, "frozen");
+              assert.equal(val, true);
+              return result;
+            },
+          };
+        },
+      };
+    },
   } as unknown as AdminClient;
 }
 
@@ -189,13 +201,24 @@ test("route: frozen drift is its own response field, never merged into the sweep
 });
 
 test("route: the frozen check is not gated on ingest activity", () => {
-  // No conditional between the sweep block and the frozen call reads
-  // sweptRuns/rows/ingest counts.
-  const between = routeSrc.slice(
-    routeSrc.indexOf("Detector 2"),
-    routeSrc.indexOf("runFrozenDriftCheck")
-  );
-  assert.doesNotMatch(between, /sweptRuns|rows\.length|ingest_runs/);
+  // No conditional between the sweep block and the frozen CALL reads
+  // sweptRuns/rows/ingest counts. Anchor the call search AFTER the marker
+  // so the import line cannot satisfy it (Codex should-fix: the previous
+  // form compared against an empty slice).
+  const start = routeSrc.indexOf("Detector 2");
+  const callIdx = routeSrc.indexOf("runFrozenDriftCheck(supabase)", start);
+  assert.ok(start > 0 && callIdx > start, "Detector 2 marker must precede the call");
+  const between = routeSrc.slice(start, callIdx);
+  assert.ok(between.length > 0, "slice must be non-empty");
+  assert.doesNotMatch(between, /sweptRuns|rows\.length|ingest_runs|if\s*\(\s*sweep/);
+});
+
+test("route: client construction failure alerts fatally and answers 500 (never an unreported throw)", () => {
+  const initIdx = routeSrc.indexOf("supabase = createAdminClient()");
+  const catchIdx = routeSrc.indexOf("client init fatal");
+  assert.ok(initIdx > 0 && catchIdx > initIdx, "createAdminClient must sit in its own guarded block");
+  assert.match(routeSrc.slice(catchIdx, catchIdx + 400), /sendFatalAlert/);
+  assert.match(routeSrc.slice(catchIdx, catchIdx + 400), /status: 500/);
 });
 
 // ---- secondary heuristic: the migration writer scan ----
@@ -214,6 +237,20 @@ test("reader forms do NOT count as writers", () => {
   assert.equal(sqlWritesFrozen(`case when rp.frozen then rp.period_start else greatest(...) end`), false);
   assert.equal(sqlWritesFrozen(`-- set frozen = true (comment only)`), false);
   assert.equal(sqlWritesFrozen(`create policy p on report_periods using (frozen = false);`), false);
+});
+
+test("writer scan: Codex CP2 hardening cases", () => {
+  // multi-column SET list — frozen not first
+  assert.equal(
+    sqlWritesFrozen(`update report_periods set label = label, frozen = false where quarter = 3;`),
+    true
+  );
+  // block-commented write is NOT a writer
+  assert.equal(sqlWritesFrozen(`/* update report_periods set frozen = true; */ select 1;`), false);
+  // another table's frozen column is NOT a report_periods writer
+  assert.equal(sqlWritesFrozen(`update other_table set frozen = true;`), false);
+  // schema-qualified + ONLY forms still caught
+  assert.equal(sqlWritesFrozen(`update only public.report_periods set frozen = true;`), true);
 });
 
 test("across ALL migrations, only 063 writes frozen (secondary heuristic; prod check stays authoritative)", () => {

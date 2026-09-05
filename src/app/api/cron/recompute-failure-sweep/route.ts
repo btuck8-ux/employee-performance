@@ -39,7 +39,21 @@ export async function GET(request: Request) {
   const denied = requireBearer(request, process.env.CRON_SECRET, "CRON_SECRET");
   if (denied) return denied;
 
-  const supabase = createAdminClient();
+  // Client construction stays inside the fatal-alert boundary (Codex CP2
+  // blocker): missing/invalid Supabase env must alert and answer 500, not
+  // throw past both detectors unreported.
+  let supabase: ReturnType<typeof createAdminClient>;
+  try {
+    supabase = createAdminClient();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[recompute-failure-sweep] client init fatal:", message);
+    await sendFatalAlert("/api/cron/recompute-failure-sweep", message);
+    return NextResponse.json(
+      { sweep: null, sweepError: message, frozenDrift: null },
+      { status: 500 }
+    );
+  }
 
   // Detector 1: recompute-failure ledger sweep. Its fatal path must not
   // stop the frozen check below, so the catch stays local.

@@ -173,18 +173,29 @@ export async function runFrozenDriftCheck(
 
 /**
  * Does this migration SQL contain a statement shape that can WRITE
- * report_periods.frozen? Covers the actual writer forms:
- *   update … set frozen = true / false
+ * report_periods.frozen? Covers the actual writer forms (Codex CP2
+ * hardening: scoped to report_periods, multi-column SET lists caught,
+ * line AND block comments stripped):
+ *   update report_periods set … frozen = … (anywhere in the SET list)
  *   a column definition with a default (frozen boolean … default true)
  *   insert into report_periods (… frozen …)
- * Reads (where frozen / case when rp.frozen / comments) do not count.
+ * Reads (where frozen / case when rp.frozen / comments / other tables'
+ * columns) do not count. Secondary heuristic only — the production check
+ * stays authoritative.
  */
 export function sqlWritesFrozen(sql: string): boolean {
-  const noComments = sql.replace(/--[^\n]*/g, "");
-  if (/\bset\s+frozen\s*=/i.test(noComments)) return true;
+  const noComments = sql
+    .replace(/--[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+  // update … report_periods … set <list>: frozen assigned anywhere in the
+  // list (statement-bounded by ';' or end-of-file).
+  for (const m of noComments.matchAll(
+    /\bupdate\s+(?:only\s+)?(?:public\s*\.\s*)?report_periods\b[\s\S]*?\bset\b([\s\S]*?)(?:;|$)/gi
+  )) {
+    if (/\bfrozen\s*=/.test(m[1])) return true;
+  }
   if (/\bfrozen\s+boolean[^,;)]*default/i.test(noComments)) return true;
   if (
-    /\binsert\s+into\s+(?:public\s*\.\s*)?report_periods\s*\(([^)]*)\)/i.test(noComments) &&
     /\binsert\s+into\s+(?:public\s*\.\s*)?report_periods\s*\([^)]*\bfrozen\b[^)]*\)/i.test(noComments)
   ) {
     return true;
