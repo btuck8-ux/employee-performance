@@ -166,6 +166,43 @@ test("scanner does NOT cross into another table's chain (no false positive)", ()
   }
 });
 
+test("scanner: Codex round-2 bypasses all caught", () => {
+  for (const form of [
+    // comment inside the from() call
+    `db.from(/* table */ "performance_records").update({ location_id: loc })`,
+    // nested template literal with a ')' inside an interpolation
+    "db.from(\"performance_records\").eq(\"note\", `outer ${`)`} tail`).update({ location_id: loc })",
+    // generic containing an arrow type — its '>' must not close the generic
+    `db.from("performance_records").update<{ f: () => string }>({ location_id: loc })`,
+    // '{'-prefixed but not a single object literal
+    `db.from("performance_records").update({} && payload)`,
+    // computed key that could resolve to location_id
+    `db.from("performance_records").update({ [key]: loc })`,
+    // regex argument containing ')' must not lose the chain
+    `db.from("performance_records").eq("x", y.replace(/\\)/g, "")).update({ location_id: z })`,
+  ]) {
+    assert.ok(findTransferRewriteOffences(form).length >= 1, `must catch: ${form}`);
+  }
+});
+
+test("scanner: Codex round-2 false-positive guards", () => {
+  for (const form of [
+    // commented-out code is not an offence
+    `// db.from("performance_records").update({ location_id: x })`,
+    `/* db.from("performance_records").update({ location_id: x }) */`,
+    // '...' inside a string value is not a spread
+    `db.from("performance_records").update({ tattle_summary: "Please wait..." })`,
+    // a leading comment inside the payload is not "non-literal"
+    `db.from("performance_records").update(/* note */ { manager_feedback: text })`,
+    // 'location_id' appearing only inside a string value is not an offence
+    `db.from("performance_records").update({ note: "location_id stays put" })`,
+    // escaped quotes and comments inside intermediate arguments
+    `db.from("performance_records").eq("note", "it\\'s (fine)").update({ manager_feedback: t /* why */ })`,
+  ]) {
+    assert.equal(findTransferRewriteOffences(form).length, 0, `must allow: ${form}`);
+  }
+});
+
 test("scanner allows today's legitimate writers' shapes (no false positive)", () => {
   for (const form of [
     `db.from("performance_records").update({ manager_feedback: text }).eq("id", performanceRecordId)`,
