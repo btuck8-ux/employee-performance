@@ -168,7 +168,7 @@ export function MultiLocationCard({
                       {floored.length > 0 && (
                         <span
                           className="text-xs text-amber-600 block"
-                          title="A quarter below a store's data floor is not measurable at that store — its cells contribute nothing; they are never counted as zero."
+                          title="A quarter below a store's data floor is not measurable at that store — its LABOR cells (attendance / on-time) contribute nothing there; survey and review figures can still contribute. Nothing is ever counted as zero."
                         >
                           {floored
                             .map(

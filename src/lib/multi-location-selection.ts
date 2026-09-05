@@ -90,3 +90,39 @@ export function belowFloorSlices(
     (p) => p.belowFloor
   );
 }
+
+/**
+ * The slice set from roster rows + historical performance-record locations
+ * (pure; the fetch uses this verbatim so the dedup is fixture-testable).
+ * Roster-current store and a record at the same store dedup to ONE slice.
+ */
+export function buildSliceList(
+  empRows: Array<{ id: string; location_id: string }>,
+  records: Array<{ employee_id: string; location_id: string | null }>
+): Array<{ employeeId: string; locationId: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ employeeId: string; locationId: string }> = [];
+  const add = (employeeId: string, locationId: string | null) => {
+    if (!locationId) return;
+    const k = `${employeeId}::${locationId}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ employeeId, locationId });
+  };
+  for (const r of empRows) add(String(r.id), String(r.location_id));
+  for (const r of records) add(String(r.employee_id), r.location_id);
+  return out;
+}
+
+/** The one attribution-bucketing predicate (pure; the fetch imports it):
+ * an attributed survey/review belongs to a slice iff it belongs to that
+ * slice's employee row AND was left at that slice's store. */
+export function attributionBelongsToSlice(
+  itemEmployeeId: string,
+  itemLocationId: string,
+  slice: { employeeId: string; locationId: string }
+): boolean {
+  return (
+    itemEmployeeId === slice.employeeId && itemLocationId === slice.locationId
+  );
+}

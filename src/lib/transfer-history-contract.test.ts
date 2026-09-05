@@ -146,7 +146,7 @@ test("SUPPLEMENTARY HEURISTIC (G2 3.1): any file mixing performance_records with
     ],
     [
       "src/app/dashboard/employees/[id]/generate-custom-range-actions.ts",
-      "reads performance_records for the PDF; its update targets locations (report branding), never performance_records",
+      "reads performance_records for the PDF; its update stamps locations.last_report_generated_at, never performance_records",
     ],
     [
       "src/app/dashboard/employees/[id]/generate-report-actions.ts",

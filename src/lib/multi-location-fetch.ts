@@ -48,7 +48,12 @@ import {
   meanPartsFromValues,
   type LocationQuarterMetrics,
 } from "./multi-location-metrics";
-import { quarterBelowFloor, type StoreSlice } from "./multi-location-selection";
+import {
+  quarterBelowFloor,
+  buildSliceList,
+  attributionBelongsToSlice,
+  type StoreSlice,
+} from "./multi-location-selection";
 
 export interface SiblingSlice extends StoreSlice {
   /** Mig 056 non-puncher marker — from the slice's EMPLOYEE row; each
@@ -159,18 +164,10 @@ export async function fetchMultiLocationProfile(
     (r) => r.report_periods !== null
   );
 
-  // Slice set = current locations ∪ historical record locations, per row.
-  const sliceKeys = new Set<string>();
-  const sliceList: Array<{ employeeId: string; locationId: string }> = [];
-  const addSlice = (employeeIdV: string, locationIdV: string | null) => {
-    if (!locationIdV) return;
-    const k = `${employeeIdV}::${locationIdV}`;
-    if (sliceKeys.has(k)) return;
-    sliceKeys.add(k);
-    sliceList.push({ employeeId: employeeIdV, locationId: locationIdV });
-  };
-  for (const r of empRows) addSlice(String(r.id), String(r.location_id));
-  for (const r of records) addSlice(String(r.employee_id), r.location_id);
+  // Slice set = current locations ∪ historical record locations, per row —
+  // buildSliceList is pure and fixture-tested (dedup incl. the
+  // roster-store-equals-record-store case).
+  const sliceList = buildSliceList(empRows, records);
   if (sliceList.length < 2) return null;
 
   // Location names for every slice location (the old embedded join only
@@ -289,7 +286,10 @@ export async function fetchMultiLocationProfile(
           .in("employee_id", rowIds)
           .gte("tattle_surveys.date_experienced", windowStart)
           .lte("tattle_surveys.date_experienced", windowEnd)
+          // TOTAL order (Codex CP3): employee_id alone leaves ties across
+          // page boundaries — offset paging can then skip or duplicate.
           .order("employee_id", { ascending: true })
+          .order("tattle_survey_id", { ascending: true })
           .range(from, to),
       "multi-location tattle"
     )
@@ -315,6 +315,7 @@ export async function fetchMultiLocationProfile(
           .gte("customer_reviews.review_date", windowStart)
           .lte("customer_reviews.review_date", windowEnd)
           .order("employee_id", { ascending: true })
+          .order("customer_review_id", { ascending: true })
           .range(from, to),
       "multi-location reviews"
     )
@@ -355,15 +356,19 @@ export async function fetchMultiLocationProfile(
       });
       const qTattles = tattles.filter(
         (t) =>
-          t.employee_id === s.employeeId &&
-          t.tattle_surveys.location_id === s.locationId &&
-          inQuarter(t.tattle_surveys.date_experienced.slice(0, 10))
+          attributionBelongsToSlice(
+            t.employee_id,
+            t.tattle_surveys.location_id,
+            s
+          ) && inQuarter(t.tattle_surveys.date_experienced.slice(0, 10))
       );
       const qReviews = reviews.filter(
         (r) =>
-          r.employee_id === s.employeeId &&
-          r.customer_reviews.location_id === s.locationId &&
-          inQuarter(r.customer_reviews.review_date.slice(0, 10))
+          attributionBelongsToSlice(
+            r.employee_id,
+            r.customer_reviews.location_id,
+            s
+          ) && inQuarter(r.customer_reviews.review_date.slice(0, 10))
       );
       const record = recordBySliceQuarter.get(`${key}::${q.id}`);
       perLocationQuarter.push({

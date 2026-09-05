@@ -17,6 +17,8 @@ import {
   quarterSubset,
   belowFloorSlices,
   quarterBelowFloor,
+  buildSliceList,
+  attributionBelongsToSlice,
 } from "./multi-location-selection.ts";
 import type { LocationQuarterMetrics } from "./multi-location-metrics.ts";
 
@@ -124,6 +126,80 @@ test("a below-floor slice is marked and surfaced, never zero", () => {
   assert.equal(floored[0].locationId, "FCCSU");
 });
 
+// ---- fetch-level fixtures (Codex CP3): slice dedup + case-(b) totals ----
+
+test("slice dedup: a record at the roster row's current store yields ONE slice, not two", () => {
+  const slices = buildSliceList(
+    [{ id: "E1", location_id: "HOU" }],
+    [
+      { employee_id: "E1", location_id: "HOU" }, // same store as roster — dedup
+      { employee_id: "E1", location_id: "FCOL" }, // transfer history — new slice
+      { employee_id: "E1", location_id: null }, // pre-093 nulls never mint slices
+    ]
+  );
+  assert.deepEqual(slices, [
+    { employeeId: "E1", locationId: "HOU" },
+    { employeeId: "E1", locationId: "FCOL" },
+  ]);
+  // single-location person: exactly one slice → the fetch returns null
+  assert.equal(
+    buildSliceList([{ id: "E2", location_id: "COS" }], [
+      { employee_id: "E2", location_id: "COS" },
+    ]).length,
+    1
+  );
+});
+
+test("case (b) attribution totals: per-slice buckets sum to the old employee-only totals", () => {
+  // Case (b): two sibling rows; every survey is left at its own row's store
+  // (structurally true pre-transfer). Bucketing by slice must not lose or
+  // double-count anything relative to bucketing by employee alone.
+  const slices = [
+    { employeeId: "E1", locationId: "HRANCH" },
+    { employeeId: "E2", locationId: "LONGM" },
+  ];
+  const surveys = [
+    { emp: "E1", loc: "HRANCH" },
+    { emp: "E1", loc: "HRANCH" },
+    { emp: "E2", loc: "LONGM" },
+  ];
+  const perSlice = slices.map(
+    (s) => surveys.filter((x) => attributionBelongsToSlice(x.emp, x.loc, s)).length
+  );
+  assert.deepEqual(perSlice, [2, 1]);
+  const byEmployeeOnly = ["E1", "E2"].map(
+    (e) => surveys.filter((x) => x.emp === e).length
+  );
+  assert.equal(
+    perSlice.reduce((a, b) => a + b, 0),
+    byEmployeeOnly.reduce((a, b) => a + b, 0)
+  );
+  // Case (a) split: one row, surveys at two stores — buckets split cleanly.
+  const aSlices = [
+    { employeeId: "E3", locationId: "OLD" },
+    { employeeId: "E3", locationId: "NEW" },
+  ];
+  const aSurveys = [
+    { emp: "E3", loc: "OLD" },
+    { emp: "E3", loc: "NEW" },
+    { emp: "E3", loc: "NEW" },
+  ];
+  assert.deepEqual(
+    aSlices.map((s) => aSurveys.filter((x) => attributionBelongsToSlice(x.emp, x.loc, s)).length),
+    [1, 2]
+  );
+});
+
+test("the fetch uses the tested helpers verbatim (no inline drift)", () => {
+  assert.match(fetchSrc, /buildSliceList\(empRows, records\)/);
+  assert.match(fetchSrc, /attributionBelongsToSlice\(/);
+});
+
+test("attribution paging carries tie-breakers past employee_id (Codex CP3)", () => {
+  assert.match(fetchSrc, /\.order\("tattle_survey_id", \{ ascending: true \}\)/);
+  assert.match(fetchSrc, /\.order\("customer_review_id", \{ ascending: true \}\)/);
+});
+
 // ---- contract pins: fetch layer (defects 1–4) ----
 
 const fetchSrc = read("src/lib/multi-location-fetch.ts");
@@ -153,8 +229,8 @@ test("RBAC path preserved: the fetch uses only the caller's client — no admin/
 });
 
 test("attribution buckets tattles/reviews per slice location", () => {
-  assert.match(fetchSrc, /t\.tattle_surveys\.location_id === s\.locationId/);
-  assert.match(fetchSrc, /r\.customer_reviews\.location_id === s\.locationId/);
+  assert.match(fetchSrc, /t\.tattle_surveys\.location_id,\s*\n\s*s/);
+  assert.match(fetchSrc, /r\.customer_reviews\.location_id,\s*\n\s*s/);
 });
 
 // ---- contract pins: the card (defect 5 + navigation exception + row 10) ----

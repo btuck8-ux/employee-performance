@@ -1,4 +1,5 @@
 import type { AdminClient } from "./crosswalk";
+import { countRecomputeFailures } from "../recompute-failure-count.ts";
 
 export type IngestSource =
   | "7shifts_time"
@@ -57,11 +58,12 @@ export function applyPartialPolicy<
 >(outcome: T, env: NodeJS.ProcessEnv = process.env): T {
   if (!partialStatusEnabled(env)) return outcome;
   if (outcome.status !== "success") return outcome;
-  const failures = outcome.detail?.recompute_failures;
-  const count = Number(
-    (outcome.detail?.recompute_failure_count as number | undefined) ??
-      (Array.isArray(failures) ? failures.length : 0)
-  );
+  // Counting rides the SHARED counter (recompute-failure-count.ts) — the
+  // same detail-not-error_text rule the sweep and alerts use, so the
+  // policy can never disagree with them on what counts as a failure
+  // (Codex CP3: an inline Number() conversion handled string counts
+  // differently from the counter).
+  const { count } = countRecomputeFailures(outcome.detail);
   if (outcome.rows_upserted > 0 && count > 0) {
     return { ...outcome, status: "partial" };
   }
